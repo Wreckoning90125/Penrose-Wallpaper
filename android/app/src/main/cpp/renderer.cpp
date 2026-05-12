@@ -137,7 +137,12 @@ bool Renderer::initInstance() {
     app.applicationVersion = VK_MAKE_API_VERSION(0, 0, 1, 0);
     app.pEngineName = "Penrose";
     app.engineVersion = VK_MAKE_API_VERSION(0, 0, 1, 0);
-    app.apiVersion = VK_API_VERSION_1_4;
+    // Negotiate 1.3 for now: NDK 29's bundled vulkan_core.h predates the
+    // Vulkan 1.4 spec, so VK_API_VERSION_1_4 / VkPhysicalDeviceVulkan14Features
+    // aren't declared in the sysroot headers. Everything we actually use
+    // (dynamicRendering, sync2) was promoted to 1.3 anyway. Bump this to
+    // VK_API_VERSION_1_4 once NDK 30+ lands with current Khronos headers.
+    app.apiVersion = VK_API_VERSION_1_3;
 
     const char* kInstanceExts[] = {
         VK_KHR_SURFACE_EXTENSION_NAME,
@@ -204,19 +209,14 @@ bool Renderer::initDeviceForSurface() {
     else msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
     LOGI("MSAA samples: %d", (int)msaaSamples_);
 
-    // Feature chain: Features2 -> Vulkan14Features -> Vulkan13Features.
-    // We currently only need 1.3-promoted features (dynamicRendering, sync2),
-    // but the 1.4 struct is chained in empty so any future feature flip
-    // (pushDescriptor, dynamicRenderingLocalRead, maintenance5/6, hostImageCopy,
-    // indexTypeUint8, etc.) is a one-line edit instead of a chain refactor.
-    VkPhysicalDeviceVulkan14Features v14{};
-    v14.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
-
+    // Feature chain: Features2 -> Vulkan13Features. The 1.4 hook is dropped
+    // until the NDK ships matching headers (see apiVersion comment above) —
+    // VkPhysicalDeviceVulkan14Features wasn't doing anything yet, it was
+    // pre-wired as a no-op anchor for future feature flips.
     VkPhysicalDeviceVulkan13Features v13{};
     v13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     v13.dynamicRendering = VK_TRUE;
     v13.synchronization2 = VK_TRUE;
-    v13.pNext = &v14;
 
     VkPhysicalDeviceFeatures2 feats{};
     feats.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;

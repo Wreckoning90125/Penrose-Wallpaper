@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Penrose</string>
+    <string name="wallpaper_name">Penrose · P3</string>
+    <string name="wallpaper_description">An aperiodic P3 Penrose tiling, rendered with Vulkan.</string>
+    <string name="launcher_no_picker">No live-wallpaper picker on this device. Opening settings.</string>
+</resources>

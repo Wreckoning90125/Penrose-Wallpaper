@@ -4,9 +4,16 @@
     <uses-feature
         android:name="android.software.live_wallpaper"
         android:required="true" />
+    <!-- Vulkan 1.3.0 encoded as (1 << 22) | (3 << 12) = 0x00403000. We
+         negotiate apiVersion 1.3 at runtime and only enable 1.3-promoted
+         features (dynamicRendering, sync2). Listing 1.4 here would hide the
+         wallpaper from system pickers on every shipping device that doesn't
+         report 1.4 support — i.e. essentially all of them in 2026. Bump to
+         0x00404000 alongside the renderer.cpp apiVersion when both the NDK
+         ships proper 1.4 headers and a meaningful share of devices report it. -->
     <uses-feature
         android:name="android.hardware.vulkan.version"
-        android:version="0x00404000"
+        android:version="0x00403000"
         android:required="true" />
     <uses-feature
         android:name="android.hardware.vulkan.level"

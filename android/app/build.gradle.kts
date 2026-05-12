@@ -56,8 +56,8 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_21
-        targetCompatibility = JavaVersion.VERSION_21
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     sourceSets {
@@ -88,10 +88,11 @@ android {
 }
 
 // AGP 9 removed the legacy `kotlinOptions { jvmTarget = "..." }` block in favour
-// of the kotlin-gradle-plugin's own DSL.
+// of the kotlin-gradle-plugin's own DSL. JDK 17 is AGP 9.2's documented default
+// and minimum, so target the same bytecode version.
 kotlin {
     compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 

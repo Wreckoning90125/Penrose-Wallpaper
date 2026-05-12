@@ -39,7 +39,12 @@ android {
             cmake {
                 arguments += listOf(
                     "-DANDROID_STL=c++_static",
-                    "-DANDROID_PLATFORM=android-36",
+                    // `latest` resolves to whatever max API the active NDK
+                    // supports — avoids the legacy toolchain's hardcoded
+                    // "android-36 is above the maximum supported version 35"
+                    // bail. minSdk/targetSdk in Gradle stay at 36 and only
+                    // affect the manifest, not the native toolchain.
+                    "-DANDROID_PLATFORM=latest",
                 )
                 cppFlags += "-std=c++20"
             }
@@ -178,18 +183,22 @@ abstract class CompileShadersTask @Inject constructor(
 
 val shaderSrcDir = layout.projectDirectory.dir("src/main/shaders")
 
-// Locate the NDK via environment vars instead of AGP internals. Both CI and
-// Android Studio set one of these; if not, we fall back to the canonical
-// `${ANDROID_SDK_ROOT}/ndk/${ndkVersion}` path.
+// Locate the NDK pinned in libs.versions.toml. We deliberately check the
+// version-pinned path under ${ANDROID_SDK_ROOT}/ndk/<version> *before* the
+// ANDROID_NDK_HOME / ANDROID_NDK_ROOT env vars, because the GitHub Actions
+// ubuntu-latest image preinstalls an older NDK (e.g. 27.x) and exports it
+// via those env vars. Without this ordering, glslc gets pulled from the wrong
+// NDK and rejects newer flags like `--target-env=vulkan1.4`.
 fun resolveNdkPath(): String {
-    System.getenv("ANDROID_NDK_HOME")?.let { if (File(it).isDirectory) return it }
-    System.getenv("ANDROID_NDK_ROOT")?.let { if (File(it).isDirectory) return it }
+    val pinned = libs.versions.ndk.get()
     val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
     if (sdkRoot != null) {
-        val candidate = File(sdkRoot, "ndk/${libs.versions.ndk.get()}")
+        val candidate = File(sdkRoot, "ndk/$pinned")
         if (candidate.isDirectory) return candidate.absolutePath
     }
-    error("Cannot locate Android NDK. Set ANDROID_NDK_HOME or install ndk;${libs.versions.ndk.get()} via sdkmanager.")
+    System.getenv("ANDROID_NDK_HOME")?.let { if (File(it).isDirectory) return it }
+    System.getenv("ANDROID_NDK_ROOT")?.let { if (File(it).isDirectory) return it }
+    error("Cannot locate Android NDK $pinned. Install via `sdkmanager ndk;$pinned` or set ANDROID_NDK_HOME.")
 }
 
 fun glslcExecutable(): String {

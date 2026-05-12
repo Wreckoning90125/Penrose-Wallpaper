@@ -52,13 +52,23 @@ jobs:
           gradle-version: "9.4.1"
           cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/claude/android-live-wallpaper-bciyO' }}
 
-      - name: Build debug APK
-        run: gradle --no-daemon --stacktrace assembleDebug
+      - name: Build release APK
+        # Signed with the committed debug keystore (app/debug.keystore). Not
+        # suitable for Play Store but installable directly on any device.
+        run: gradle --no-daemon --stacktrace assembleRelease
+
+      - name: Rename APK with commit SHA
+        run: |
+          src=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          dst="app/build/outputs/apk/release/penrose-${GITHUB_SHA:0:7}.apk"
+          mv "$src" "$dst"
+          echo "Built $dst ($(stat -c%s "$dst") bytes)"
 
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
-          name: penrose-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: penrose-${{ github.sha }}
+          path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+          retention-days: 30

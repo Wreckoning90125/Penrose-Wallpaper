@@ -23,9 +23,12 @@ misc.xml
 deploymentTargetDropDown.xml
 render.experimental.xml
 
-# Keystore files
+# Keystore files. The Android debug keystore at app/debug.keystore is
+# intentionally committed: its password is the universal "android" and it
+# only signs sideloadable builds, not Play Store releases.
 *.jks
 *.keystore
+!android/app/debug.keystore
 
 # Google Services (e.g. APIs or Firebase)
 google-services.json

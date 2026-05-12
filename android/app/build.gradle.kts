@@ -80,10 +80,34 @@ android {
         noCompress.add("spv")
     }
 
+    // A debug keystore is checked into the repo at app/debug.keystore. The
+    // standard Android debug keystore password ("android") is universal and
+    // not a security boundary — committing it just keeps the signing identity
+    // stable across CI runs so a re-installed APK doesn't trip Android's
+    // "uninstall first" guard. This is NOT suitable for Play Store releases.
+    signingConfigs {
+        // `debug` is an AGP-built-in config; override its file location and
+        // pin the well-known passwords so CI doesn't depend on ~/.android/.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
-        debug { isDebuggable = true }
+        debug {
+            isDebuggable = true
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
+            // Keep R8 off for now — we don't have keep-rules for the JNI
+            // surface yet and shrinking would silently rename `external fun`
+            // entry points, breaking the C++ lookup.
             isMinifyEnabled = false
+            isShrinkResources = false
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
     }

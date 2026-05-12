@@ -231,7 +231,12 @@ androidComponents {
                     include("**/*.vert", "**/*.frag", "**/*.comp")
                 }
             )
-            targetEnv.set("vulkan1.4")
+            // SPIR-V target env. NDK 29's bundled glslc/shaderc snapshot
+            // predates Vulkan 1.4 support, so the only accepted Vulkan values
+            // top out at vulkan1.3. The runtime still negotiates Vulkan 1.4 on
+            // the C++ side — this only gates which SPIR-V capabilities glslc
+            // will emit, and our shaders use nothing past 1.3-level features.
+            targetEnv.set("vulkan1.3")
             glslcPath.set(glslcExecutable())
         }
         variant.sources.assets?.addGeneratedSourceDirectory(

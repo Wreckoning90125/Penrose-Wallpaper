@@ -62,15 +62,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    sourceSets {
-        getByName("main") {
-            // Generated SPIR-V is staged under build/generated/shaders/shaders/*.spv;
-            // mounting the parent as an asset srcDir gives runtime paths of
-            // "shaders/tile.vert.spv" etc, which is what the C++ side opens.
-            assets.srcDirs(layout.buildDirectory.dir("generated/shaders"))
-        }
-    }
-
     packaging {
         // SPIR-V blobs ship as raw assets; do not let aapt try to compress them.
         jniLibs.useLegacyPackaging = false
@@ -163,7 +154,10 @@ abstract class CompileShadersTask @Inject constructor(
             error("glslc not found at $glslc — check ndkVersion in libs.versions.toml")
         }
         val root = sourceRoot.get().asFile
-        val out = outputDir.get().asFile
+        // AGP assigns outputDir via the Variant API's wiredWith hook and merges
+        // its contents into the APK's assets root. Nesting under "shaders/"
+        // keeps runtime paths like "shaders/tile.vert.spv" intact.
+        val out = File(outputDir.get().asFile, "shaders")
         out.mkdirs()
         sources.forEach { src ->
             val rel = src.relativeTo(root).path
@@ -183,7 +177,6 @@ abstract class CompileShadersTask @Inject constructor(
 }
 
 val shaderSrcDir = layout.projectDirectory.dir("src/main/shaders")
-val shaderOutDir = layout.buildDirectory.dir("generated/shaders/shaders")
 
 // Locate the NDK via environment vars instead of AGP internals. Both CI and
 // Android Studio set one of these; if not, we fall back to the canonical
@@ -199,19 +192,7 @@ fun resolveNdkPath(): String {
     error("Cannot locate Android NDK. Set ANDROID_NDK_HOME or install ndk;${libs.versions.ndk.get()} via sdkmanager.")
 }
 
-val compileShaders = tasks.register<CompileShadersTask>("compileShaders") {
-    group = "build"
-    description = "Compile GLSL shaders to SPIR-V via glslc."
-
-    sourceRoot.set(shaderSrcDir)
-    sources.from(
-        shaderSrcDir.asFileTree.matching {
-            include("**/*.vert", "**/*.frag", "**/*.comp")
-        }
-    )
-    outputDir.set(shaderOutDir)
-    targetEnv.set("vulkan1.4")
-
+fun glslcExecutable(): String {
     val osName = System.getProperty("os.name").lowercase()
     val hostTag = when {
         osName.contains("linux")   -> "linux-x86_64"
@@ -220,12 +201,33 @@ val compileShaders = tasks.register<CompileShadersTask>("compileShaders") {
         else -> error("Unsupported host OS: $osName")
     }
     val glslcName = if (osName.contains("windows")) "glslc.exe" else "glslc"
-    glslcPath.set(File(resolveNdkPath(), "shader-tools/$hostTag/$glslcName").absolutePath)
+    return File(resolveNdkPath(), "shader-tools/$hostTag/$glslcName").absolutePath
 }
 
-// Wire shader compile into the normal build graph so a plain `assembleDebug`
-// produces SPIR-V assets without any extra step.
-tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
-    .configureEach { dependsOn(compileShaders) }
-tasks.matching { it.name.startsWith("package") && it.name.endsWith("Assets") }
-    .configureEach { dependsOn(compileShaders) }
+// AGP 9 rejects Provider-typed entries on the legacy SourceSet.assets API. The
+// blessed replacement is the Variant API: register one task per variant and
+// let AGP wire its outputDir into the variant's asset sources. AGP assigns the
+// output directory itself (under build/intermediates/...) and adds it as a
+// generated asset srcDir, so merge/package tasks pick it up automatically.
+androidComponents {
+    onVariants { variant ->
+        val taskName = "compile${variant.name.replaceFirstChar { it.uppercase() }}Shaders"
+        val compileShaders = tasks.register<CompileShadersTask>(taskName) {
+            group = "build"
+            description = "Compile GLSL shaders to SPIR-V via glslc for ${variant.name}."
+
+            sourceRoot.set(shaderSrcDir)
+            sources.from(
+                shaderSrcDir.asFileTree.matching {
+                    include("**/*.vert", "**/*.frag", "**/*.comp")
+                }
+            )
+            targetEnv.set("vulkan1.4")
+            glslcPath.set(glslcExecutable())
+        }
+        variant.sources.assets?.addGeneratedSourceDirectory(
+            compileShaders,
+            CompileShadersTask::outputDir,
+        )
+    }
+}

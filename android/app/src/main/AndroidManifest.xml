@@ -39,6 +39,24 @@
                 android:resource="@xml/wallpaper" />
         </service>
 
+        <!-- Launcher shim. Tapping the app drawer icon fires
+             ACTION_CHANGE_LIVE_WALLPAPER pointed at our own service, which
+             jumps straight to the system live-wallpaper preview. Samsung
+             OneUI's "Wallpaper services" picker is reserved for Samsung-
+             signed services, so without this shim the wallpaper is
+             unreachable on Galaxy devices. Theme.NoDisplay so the shim never
+             paints a blank window. -->
+        <activity
+            android:name="com.penrose.wallpaper.LauncherActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name="com.penrose.wallpaper.SettingsActivity"
             android:exported="true"

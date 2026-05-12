@@ -1,39 +1,56 @@
 #include "renderer.h"
 
+#include "color.h"
 #include "log.h"
 #include "penrose.h"
 
-#include <android/asset_manager.h>
-#include <vulkan/vulkan.h>
-
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 
 namespace penrose {
 
-// -----------------------------------------------------------------------------
-// Vertex layout for the tile pipeline. Each tile triangle contributes 3 verts;
-// per-vertex color index is replicated, so the fragment shader can do a tiny
-// uniform-buffer lookup without any descriptor management beyond push consts.
-// -----------------------------------------------------------------------------
+// =============================================================================
+// Vertex layout, push constants, palette UBO
+// =============================================================================
 namespace {
 
-struct Vertex {
+struct FillVertex {
     float x, y;
-    uint32_t colorIdx;
+    uint32_t colorIdx;  // index into palette
 };
 
-// 16 bytes of push constants — model-view-projection + palette pointer.
-// Stays well under the 128-byte guaranteed minimum.
+struct BorderVertex {
+    float x, y;
+};
+
+// Push constants. The fill and border pipelines share this layout — the
+// `isBorder` flag selects which color to emit in the fragment shader.
+// Layout (std430-aligned via vec4 padding):
+//   vec4 viewRow0   // (cosR*s/w, -sinR*s/w, panX/w + 0.5, _padding)
+//   vec4 viewRow1   // (sinR*s/h,  cosR*s/h, panY/h + 0.5, _padding)
+// total = 32 bytes
 struct PushBlock {
-    float scaleX, scaleY;   // model→clip-space scale (uniform scale split per-axis for aspect fit)
-    float offsetX, offsetY; // model→clip-space translation
-    float palette[2][4];    // RGBA per tile type (L, S). Alpha unused.
+    float view0x, view0y, view0z, _pad0;
+    float view1x, view1y, view1z, _pad1;
+};
+static_assert(sizeof(PushBlock) == 32, "PushBlock layout");
+
+// Palette UBO. std140-compatible: each vec4 is 16-aligned. Layout:
+//   vec4 palette[kMaxColors]   // 10 colors, fill mode
+//   vec4 borderColor           // last 4 floats are color RGBA
+//   vec4 bgColor               // RGBA, alpha unused (cleared opaque)
+//   uvec4 flags                // x = isBorder switch read by frag shader
+struct PaletteUbo {
+    float palette[kMaxColors][4];
+    float borderColor[4];
+    float bgColor[4];
+    uint32_t flags[4]; // x = isBorder (set per draw via descriptor update is overkill — handled in frag shader via push const instead)
 };
 
-constexpr uint32_t kGenerations = 6;
 constexpr VkFormat kPreferredFormats[] = {
     VK_FORMAT_R8G8B8A8_SRGB,
     VK_FORMAT_B8G8R8A8_SRGB,
@@ -41,13 +58,41 @@ constexpr VkFormat kPreferredFormats[] = {
     VK_FORMAT_B8G8R8A8_UNORM,
 };
 
-// Hardcoded 2-color palette — gold L, dusk-purple S. Matches the spirit of
-// the HTML reference's default 2-color "type" mode. OKLCH → sRGB precomputed.
-constexpr float kColorL[4] = { 0.85f, 0.67f, 0.34f, 1.0f };
-constexpr float kColorS[4] = { 0.36f, 0.31f, 0.45f, 1.0f };
-constexpr float kClearColor[4] = { 0.043f, 0.043f, 0.063f, 1.0f }; // #0b0b10
+// =============================================================================
+// Geometry assembly — builds fill triangles and de-duplicated border edges.
+// =============================================================================
 
-} // namespace
+struct EdgeRec {
+    float p1x, p1y, p2x, p2y;
+    uint8_t t1, t2;
+    uint8_t k1, k2;
+    bool secondSet;
+};
+
+struct EdgeKey {
+    int32_t mx, my;
+    bool operator==(const EdgeKey& o) const { return mx == o.mx && my == o.my; }
+};
+struct EdgeKeyHash {
+    size_t operator()(const EdgeKey& k) const noexcept {
+        // Cantor pairing on signed → unsigned bits; good enough for ~64k tiles.
+        const uint64_t a = static_cast<uint32_t>(k.mx);
+        const uint64_t b = static_cast<uint32_t>(k.my);
+        return std::hash<uint64_t>{}(a * 0x9E3779B97F4A7C15ULL + b);
+    }
+};
+
+// hideSeam rule per family — same logic as web/penrose.js FAMILIES[*].hideSeam.
+inline bool hideSeam(Family fam, uint8_t k1, uint8_t k2) {
+    switch (fam) {
+        case Family::P3:    return k1 == (uint8_t)EdgeKind::Base && k2 == (uint8_t)EdgeKind::Base;
+        case Family::P2:    return k1 == (uint8_t)EdgeKind::Leg  && k2 == (uint8_t)EdgeKind::Leg;
+        case Family::Chair: return false;
+    }
+    return false;
+}
+
+} // anonymous namespace
 
 // =============================================================================
 // Lifecycle
@@ -58,8 +103,6 @@ Renderer::Renderer(AAssetManager* assets) : assets_(assets) {
         LOGE("Renderer: failed to create instance");
         return;
     }
-    // Physical device, logical device, pipeline are deferred until we have a
-    // surface — we need surface support for queue family selection.
 }
 
 Renderer::~Renderer() {
@@ -67,15 +110,13 @@ Renderer::~Renderer() {
     onSurfaceDestroyed();
 
     if (device_ != VK_NULL_HANDLE) {
-        if (vertexBuffer_)      vkDestroyBuffer(device_, vertexBuffer_, nullptr);
-        if (vertexMemory_)      vkFreeMemory(device_, vertexMemory_, nullptr);
-        if (indexBuffer_)       vkDestroyBuffer(device_, indexBuffer_, nullptr);
-        if (indexMemory_)       vkFreeMemory(device_, indexMemory_, nullptr);
-        if (pipeline_)          vkDestroyPipeline(device_, pipeline_, nullptr);
-        if (pipelineLayout_)    vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
-        if (vertShader_)        vkDestroyShaderModule(device_, vertShader_, nullptr);
-        if (fragShader_)        vkDestroyShaderModule(device_, fragShader_, nullptr);
-        if (commandPool_)       vkDestroyCommandPool(device_, commandPool_, nullptr);
+        if (fillVertBuf_)        vkDestroyBuffer(device_, fillVertBuf_, nullptr);
+        if (fillVertMem_)        vkFreeMemory(device_, fillVertMem_, nullptr);
+        if (borderVertBuf_)      vkDestroyBuffer(device_, borderVertBuf_, nullptr);
+        if (borderVertMem_)      vkFreeMemory(device_, borderVertMem_, nullptr);
+        destroyDescriptorObjects();
+        destroyPipelines();
+        if (commandPool_)        vkDestroyCommandPool(device_, commandPool_, nullptr);
         vkDestroyDevice(device_, nullptr);
         device_ = VK_NULL_HANDLE;
     }
@@ -86,7 +127,7 @@ Renderer::~Renderer() {
 }
 
 // =============================================================================
-// Instance
+// Instance / device
 // =============================================================================
 
 bool Renderer::initInstance() {
@@ -113,34 +154,6 @@ bool Renderer::initInstance() {
     return true;
 }
 
-// =============================================================================
-// Per-surface init
-// =============================================================================
-
-bool Renderer::onSurfaceCreated(ANativeWindow* window) {
-    if (!window) return false;
-    if (instance_ == VK_NULL_HANDLE) return false;
-
-    ANativeWindow_acquire(window);
-    window_ = window;
-
-    if (!createSurface(window)) return false;
-
-    if (!deviceReady_) {
-        if (!initDeviceForSurface()) return false;
-        if (!initPipeline()) return false;
-        if (!buildGeometry()) return false;
-        deviceReady_ = true;
-    }
-
-    int width = ANativeWindow_getWidth(window);
-    int height = ANativeWindow_getHeight(window);
-    if (!createSwapchain(width, height)) return false;
-    if (!createPerFrameResources()) return false;
-    swapchainReady_ = true;
-    return true;
-}
-
 bool Renderer::createSurface(ANativeWindow* window) {
     VkAndroidSurfaceCreateInfoKHR ci{};
     ci.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
@@ -156,8 +169,6 @@ bool Renderer::initDeviceForSurface() {
     std::vector<VkPhysicalDevice> devices(count);
     VK_CHECK(vkEnumeratePhysicalDevices(instance_, &count, devices.data()));
 
-    // Pick the first device that has a queue family supporting both graphics
-    // and presentation to our surface. On Android there's always exactly one.
     for (VkPhysicalDevice pd : devices) {
         uint32_t qCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(pd, &qCount, nullptr);
@@ -182,8 +193,17 @@ bool Renderer::initDeviceForSurface() {
 
     vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memProps_);
 
-    // Vulkan 1.4 ships dynamic rendering + sync2 as core; we still must
-    // enable them in the feature struct chain.
+    // Pick MSAA sample count. 4× is essentially free on tile GPUs and is what
+    // makes the borders look crisp at 1px widths.
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(physicalDevice_, &props);
+    const VkSampleCountFlags supported =
+        props.limits.framebufferColorSampleCounts;
+    if (supported & VK_SAMPLE_COUNT_4_BIT) msaaSamples_ = VK_SAMPLE_COUNT_4_BIT;
+    else if (supported & VK_SAMPLE_COUNT_2_BIT) msaaSamples_ = VK_SAMPLE_COUNT_2_BIT;
+    else msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
+    LOGI("MSAA samples: %d", (int)msaaSamples_);
+
     VkPhysicalDeviceVulkan13Features v13{};
     v13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     v13.dynamicRendering = VK_TRUE;
@@ -192,6 +212,9 @@ bool Renderer::initDeviceForSurface() {
     VkPhysicalDeviceFeatures2 feats{};
     feats.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     feats.pNext = &v13;
+    // Wide lines aren't universally supported; we don't rely on them and clamp
+    // to 1.0 in the pipeline state.
+    feats.features.wideLines = VK_FALSE;
 
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qci{};
@@ -223,7 +246,83 @@ bool Renderer::initDeviceForSurface() {
 }
 
 // =============================================================================
-// Pipeline
+// Descriptor objects
+// =============================================================================
+
+bool Renderer::createDescriptorObjects() {
+    paletteUboSize_ = sizeof(PaletteUbo);
+
+    if (!createBuffer(paletteUboSize_, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                      paletteUbo_, paletteUboMem_)) return false;
+    VK_CHECK(vkMapMemory(device_, paletteUboMem_, 0, paletteUboSize_, 0, &paletteUboMapped_));
+
+    VkDescriptorSetLayoutBinding b{};
+    b.binding = 0;
+    b.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    b.descriptorCount = 1;
+    b.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo dsl{};
+    dsl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dsl.bindingCount = 1;
+    dsl.pBindings = &b;
+    VK_CHECK(vkCreateDescriptorSetLayout(device_, &dsl, nullptr, &descSetLayout_));
+
+    VkDescriptorPoolSize ps{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 };
+    VkDescriptorPoolCreateInfo dpc{};
+    dpc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpc.maxSets = 1;
+    dpc.poolSizeCount = 1;
+    dpc.pPoolSizes = &ps;
+    VK_CHECK(vkCreateDescriptorPool(device_, &dpc, nullptr, &descPool_));
+
+    VkDescriptorSetAllocateInfo dsa{};
+    dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsa.descriptorPool = descPool_;
+    dsa.descriptorSetCount = 1;
+    dsa.pSetLayouts = &descSetLayout_;
+    VK_CHECK(vkAllocateDescriptorSets(device_, &dsa, &descSet_));
+
+    VkDescriptorBufferInfo dbi{ paletteUbo_, 0, paletteUboSize_ };
+    VkWriteDescriptorSet wds{};
+    wds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wds.dstSet = descSet_;
+    wds.dstBinding = 0;
+    wds.descriptorCount = 1;
+    wds.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    wds.pBufferInfo = &dbi;
+    vkUpdateDescriptorSets(device_, 1, &wds, 0, nullptr);
+
+    return true;
+}
+
+void Renderer::destroyDescriptorObjects() {
+    if (paletteUboMapped_) {
+        vkUnmapMemory(device_, paletteUboMem_);
+        paletteUboMapped_ = nullptr;
+    }
+    if (paletteUbo_) { vkDestroyBuffer(device_, paletteUbo_, nullptr); paletteUbo_ = VK_NULL_HANDLE; }
+    if (paletteUboMem_) { vkFreeMemory(device_, paletteUboMem_, nullptr); paletteUboMem_ = VK_NULL_HANDLE; }
+    if (descPool_) { vkDestroyDescriptorPool(device_, descPool_, nullptr); descPool_ = VK_NULL_HANDLE; }
+    if (descSetLayout_) { vkDestroyDescriptorSetLayout(device_, descSetLayout_, nullptr); descSetLayout_ = VK_NULL_HANDLE; }
+    descSet_ = VK_NULL_HANDLE;
+}
+
+void Renderer::destroyPipelines() {
+    if (fillPipeline_)   { vkDestroyPipeline(device_, fillPipeline_, nullptr);   fillPipeline_ = VK_NULL_HANDLE; }
+    if (borderPipeline_) { vkDestroyPipeline(device_, borderPipeline_, nullptr); borderPipeline_ = VK_NULL_HANDLE; }
+    if (pipelineLayout_) { vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr); pipelineLayout_ = VK_NULL_HANDLE; }
+    if (fillVert_)       { vkDestroyShaderModule(device_, fillVert_, nullptr); fillVert_ = VK_NULL_HANDLE; }
+    if (fillFrag_)       { vkDestroyShaderModule(device_, fillFrag_, nullptr); fillFrag_ = VK_NULL_HANDLE; }
+    if (borderVert_)     { vkDestroyShaderModule(device_, borderVert_, nullptr); borderVert_ = VK_NULL_HANDLE; }
+    if (borderFrag_)     { vkDestroyShaderModule(device_, borderFrag_, nullptr); borderFrag_ = VK_NULL_HANDLE; }
+    pipelinesBuilt_ = false;
+}
+
+// =============================================================================
+// Shaders + pipeline construction
 // =============================================================================
 
 bool Renderer::loadShader(const char* assetPath, VkShaderModule& outModule) {
@@ -248,103 +347,422 @@ bool Renderer::loadShader(const char* assetPath, VkShaderModule& outModule) {
 }
 
 bool Renderer::initPipeline() {
-    if (!loadShader("shaders/tile.vert.spv", vertShader_)) return false;
-    if (!loadShader("shaders/tile.frag.spv", fragShader_)) return false;
+    if (!loadShader("shaders/fill.vert.spv", fillVert_)) return false;
+    if (!loadShader("shaders/fill.frag.spv", fillFrag_)) return false;
+    if (!loadShader("shaders/border.vert.spv", borderVert_)) return false;
+    if (!loadShader("shaders/border.frag.spv", borderFrag_)) return false;
 
+    // Push constants are only read by the vertex shaders; the fragment shaders
+    // pull all per-frame state from the palette UBO. Limit the range to
+    // VERTEX_BIT so validation doesn't flag a stage mismatch.
     VkPushConstantRange pcRange{};
-    pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pcRange.offset = 0;
     pcRange.size = sizeof(PushBlock);
 
     VkPipelineLayoutCreateInfo plci{};
     plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plci.setLayoutCount = 1;
+    plci.pSetLayouts = &descSetLayout_;
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges = &pcRange;
     VK_CHECK(vkCreatePipelineLayout(device_, &plci, nullptr, &pipelineLayout_));
-
-    // The pipeline's color attachment format must match the swapchain. We
-    // don't know it yet, so defer building the pipeline until createSwapchain
-    // has run. initPipeline only owns shader + layout.
     return true;
 }
 
-bool Renderer::buildGeometry() {
-    // Generate P3 tiles and pack them into a vertex + index buffer.
-    auto tris = generateP3Sun(kGenerations);
-
-    std::vector<Vertex> verts;
-    std::vector<uint32_t> indices;
-    verts.reserve(tris.size() * 3);
-    indices.reserve(tris.size() * 3);
-
-    float minX = 1e9f, minY = 1e9f, maxX = -1e9f, maxY = -1e9f;
-    uint32_t base = 0;
-    for (const Tri& t : tris) {
-        const uint32_t cidx = t.type;
-        const float xs[3] = { t.ax, t.bx, t.cx };
-        const float ys[3] = { t.ay, t.by, t.cy };
-        for (int i = 0; i < 3; ++i) {
-            verts.push_back(Vertex{ xs[i], ys[i], cidx });
-            minX = std::min(minX, xs[i]); maxX = std::max(maxX, xs[i]);
-            minY = std::min(minY, ys[i]); maxY = std::max(maxY, ys[i]);
-        }
-        indices.push_back(base + 0);
-        indices.push_back(base + 1);
-        indices.push_back(base + 2);
-        base += 3;
+bool Renderer::buildPipelines() {
+    if (pipelinesBuilt_) {
+        if (fillPipeline_)   { vkDestroyPipeline(device_, fillPipeline_, nullptr);   fillPipeline_ = VK_NULL_HANDLE; }
+        if (borderPipeline_) { vkDestroyPipeline(device_, borderPipeline_, nullptr); borderPipeline_ = VK_NULL_HANDLE; }
     }
-    indexCount_ = static_cast<uint32_t>(indices.size());
-    geomMinX_ = minX; geomMaxX_ = maxX;
-    geomMinY_ = minY; geomMaxY_ = maxY;
-    LOGI("generated %zu tris (%u verts) gen=%u bounds [%.3f,%.3f]-[%.3f,%.3f]",
-         tris.size(), (unsigned)verts.size(), kGenerations, minX, minY, maxX, maxY);
 
-    const VkDeviceSize vbSize = sizeof(Vertex) * verts.size();
-    const VkDeviceSize ibSize = sizeof(uint32_t) * indices.size();
+    // Common rasterization/MSAA/colorblend
+    VkPipelineRasterizationStateCreateInfo rs{};
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
 
-    // Host-visible coherent buffers. The geometry is tiny (a few MB at most)
-    // and built once; not worth the staging-buffer dance.
-    if (!createBuffer(vbSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                      vertexBuffer_, vertexMemory_)) return false;
-    if (!createBuffer(ibSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                      indexBuffer_, indexMemory_)) return false;
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = msaaSamples_;
 
-    void* mapped = nullptr;
-    VK_CHECK(vkMapMemory(device_, vertexMemory_, 0, vbSize, 0, &mapped));
-    std::memcpy(mapped, verts.data(), vbSize);
-    vkUnmapMemory(device_, vertexMemory_);
+    VkPipelineColorBlendAttachmentState cba{};
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+                       | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    // Premultiplied alpha blending so border alpha < 1 looks right against fills.
+    cba.blendEnable = VK_TRUE;
+    cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.colorBlendOp = VK_BLEND_OP_ADD;
+    cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.alphaBlendOp = VK_BLEND_OP_ADD;
 
-    VK_CHECK(vkMapMemory(device_, indexMemory_, 0, ibSize, 0, &mapped));
-    std::memcpy(mapped, indices.data(), ibSize);
-    vkUnmapMemory(device_, indexMemory_);
+    VkPipelineColorBlendStateCreateInfo cb{};
+    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cba;
 
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkDynamicState dynStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dyn{};
+    dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn.dynamicStateCount = 2;
+    dyn.pDynamicStates = dynStates;
+
+    VkPipelineRenderingCreateInfo rendering{};
+    rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachmentFormats = &swapchainFormat_;
+
+    // ---- Fill pipeline ----------------------------------------------------
+    VkPipelineShaderStageCreateInfo fillStages[2]{};
+    fillStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fillStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    fillStages[0].module = fillVert_;
+    fillStages[0].pName = "main";
+    fillStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fillStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fillStages[1].module = fillFrag_;
+    fillStages[1].pName = "main";
+
+    VkVertexInputBindingDescription fillBinding{};
+    fillBinding.binding = 0;
+    fillBinding.stride = sizeof(FillVertex);
+    fillBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    VkVertexInputAttributeDescription fillAttrs[2]{};
+    fillAttrs[0].location = 0; fillAttrs[0].binding = 0;
+    fillAttrs[0].format = VK_FORMAT_R32G32_SFLOAT;
+    fillAttrs[0].offset = offsetof(FillVertex, x);
+    fillAttrs[1].location = 1; fillAttrs[1].binding = 0;
+    fillAttrs[1].format = VK_FORMAT_R32_UINT;
+    fillAttrs[1].offset = offsetof(FillVertex, colorIdx);
+
+    VkPipelineVertexInputStateCreateInfo fillVi{};
+    fillVi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    fillVi.vertexBindingDescriptionCount = 1;
+    fillVi.pVertexBindingDescriptions = &fillBinding;
+    fillVi.vertexAttributeDescriptionCount = 2;
+    fillVi.pVertexAttributeDescriptions = fillAttrs;
+
+    VkPipelineInputAssemblyStateCreateInfo triIA{};
+    triIA.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    triIA.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkGraphicsPipelineCreateInfo fillGpi{};
+    fillGpi.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    fillGpi.pNext = &rendering;
+    fillGpi.stageCount = 2;
+    fillGpi.pStages = fillStages;
+    fillGpi.pVertexInputState = &fillVi;
+    fillGpi.pInputAssemblyState = &triIA;
+    fillGpi.pViewportState = &vp;
+    fillGpi.pRasterizationState = &rs;
+    fillGpi.pMultisampleState = &ms;
+    fillGpi.pColorBlendState = &cb;
+    fillGpi.pDynamicState = &dyn;
+    fillGpi.layout = pipelineLayout_;
+    fillGpi.renderPass = VK_NULL_HANDLE;
+    VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &fillGpi, nullptr, &fillPipeline_));
+
+    // ---- Border pipeline --------------------------------------------------
+    VkPipelineShaderStageCreateInfo borderStages[2]{};
+    borderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    borderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    borderStages[0].module = borderVert_;
+    borderStages[0].pName = "main";
+    borderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    borderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    borderStages[1].module = borderFrag_;
+    borderStages[1].pName = "main";
+
+    VkVertexInputBindingDescription borderBinding{};
+    borderBinding.binding = 0;
+    borderBinding.stride = sizeof(BorderVertex);
+    borderBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    VkVertexInputAttributeDescription borderAttr{};
+    borderAttr.location = 0; borderAttr.binding = 0;
+    borderAttr.format = VK_FORMAT_R32G32_SFLOAT;
+    borderAttr.offset = 0;
+
+    VkPipelineVertexInputStateCreateInfo borderVi{};
+    borderVi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    borderVi.vertexBindingDescriptionCount = 1;
+    borderVi.pVertexBindingDescriptions = &borderBinding;
+    borderVi.vertexAttributeDescriptionCount = 1;
+    borderVi.pVertexAttributeDescriptions = &borderAttr;
+
+    VkPipelineInputAssemblyStateCreateInfo lineIA{};
+    lineIA.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    lineIA.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+
+    VkGraphicsPipelineCreateInfo borderGpi = fillGpi;
+    borderGpi.pStages = borderStages;
+    borderGpi.pVertexInputState = &borderVi;
+    borderGpi.pInputAssemblyState = &lineIA;
+    VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &borderGpi, nullptr, &borderPipeline_));
+
+    pipelinesBuilt_ = true;
     return true;
 }
 
 // =============================================================================
-// Swapchain
+// Geometry
+// =============================================================================
+
+bool Renderer::buildGeometry() {
+    // Generate tiles per current settings.
+    auto tiles = generate(settings_.family, settings_.seedIdx, settings_.generation);
+    if (tiles.empty()) { LOGE("buildGeometry: empty tile set"); return false; }
+
+    // Classify for color buckets.
+    Classification cls = classify(tiles, settings_.family, settings_.colorMode, settings_.colorCount);
+
+    // -------- Fill vertices ---------------------------------------------------
+    // Penrose tris -> 3 verts. Chair L -> fan from vert 0 = 4 triangles.
+    std::vector<FillVertex> fills;
+    fills.reserve(tiles.size() * 6);
+
+    float minX =  1e9f, minY =  1e9f;
+    float maxX = -1e9f, maxY = -1e9f;
+
+    for (size_t i = 0; i < tiles.size(); ++i) {
+        const Tile& t = tiles[i];
+        const uint32_t paletteIdx = static_cast<uint32_t>(
+            bucketToPaletteIdx(cls.bucket[i], cls.numBuckets, settings_.colorCount));
+        if (t.vcount == 3) {
+            for (int v = 0; v < 3; ++v) {
+                fills.push_back(FillVertex{ t.x[v], t.y[v], paletteIdx });
+                minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
+                minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
+            }
+        } else {
+            // 6-vert L-tromino fan from v0.
+            for (int v = 1; v + 1 < t.vcount; ++v) {
+                fills.push_back(FillVertex{ t.x[0],     t.y[0],     paletteIdx });
+                fills.push_back(FillVertex{ t.x[v],     t.y[v],     paletteIdx });
+                fills.push_back(FillVertex{ t.x[v + 1], t.y[v + 1], paletteIdx });
+            }
+            for (int v = 0; v < 6; ++v) {
+                minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
+                minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
+            }
+        }
+    }
+    fillVertexCount_ = static_cast<uint32_t>(fills.size());
+    geomMinX_ = minX; geomMaxX_ = maxX;
+    geomMinY_ = minY; geomMaxY_ = maxY;
+
+    // -------- Border vertices (dedup edges, honour hideSeam) -----------------
+    std::vector<BorderVertex> borders;
+    if (settings_.borderOn) {
+        std::vector<Edge> edges;
+        edges.reserve(tiles.size() * (settings_.family == Family::Chair ? 6 : 3));
+        for (const Tile& t : tiles) {
+            if (t.vcount == 3) edgesPenrose(t, edges);
+            else               edgesChair(t, edges);
+        }
+
+        std::unordered_map<EdgeKey, EdgeRec, EdgeKeyHash> edgeMap;
+        edgeMap.reserve(edges.size() / 2 + 16);
+        constexpr float kKeyScale = 1.0e5f;
+        for (const Edge& e : edges) {
+            const float mx = (e.p1x + e.p2x) * 0.5f;
+            const float my = (e.p1y + e.p2y) * 0.5f;
+            EdgeKey key{ static_cast<int32_t>(std::lround(mx * kKeyScale)),
+                         static_cast<int32_t>(std::lround(my * kKeyScale)) };
+            auto it = edgeMap.find(key);
+            if (it == edgeMap.end()) {
+                EdgeRec r{ e.p1x, e.p1y, e.p2x, e.p2y, e.tileType, 0, e.kind, 0, false };
+                edgeMap.emplace(key, r);
+            } else {
+                it->second.t2 = e.tileType;
+                it->second.k2 = e.kind;
+                it->second.secondSet = true;
+            }
+        }
+        borders.reserve(edgeMap.size() * 2);
+        for (const auto& kv : edgeMap) {
+            const EdgeRec& r = kv.second;
+            if (r.secondSet && r.t1 == r.t2 && hideSeam(settings_.family, r.k1, r.k2)) continue;
+            borders.push_back({ r.p1x, r.p1y });
+            borders.push_back({ r.p2x, r.p2y });
+        }
+    }
+    borderVertexCount_ = static_cast<uint32_t>(borders.size());
+
+    // -------- Upload to GPU --------------------------------------------------
+    // Recreate buffers if size changed. For simplicity, always free+reallocate;
+    // geometry rebuild is cold-path (settings change), not per-frame.
+    auto reallocBuffer = [&](VkBuffer& buf, VkDeviceMemory& mem, VkDeviceSize size) {
+        if (buf) { vkDestroyBuffer(device_, buf, nullptr); buf = VK_NULL_HANDLE; }
+        if (mem) { vkFreeMemory(device_, mem, nullptr); mem = VK_NULL_HANDLE; }
+        if (size == 0) return true;
+        return createBuffer(size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                            buf, mem);
+    };
+
+    const VkDeviceSize fillSize = sizeof(FillVertex) * fills.size();
+    const VkDeviceSize borderSize = sizeof(BorderVertex) * borders.size();
+    if (!reallocBuffer(fillVertBuf_, fillVertMem_, fillSize)) return false;
+    if (!reallocBuffer(borderVertBuf_, borderVertMem_, borderSize)) return false;
+
+    if (fillSize > 0) {
+        void* mapped = nullptr;
+        VK_CHECK(vkMapMemory(device_, fillVertMem_, 0, fillSize, 0, &mapped));
+        std::memcpy(mapped, fills.data(), fillSize);
+        vkUnmapMemory(device_, fillVertMem_);
+    }
+    if (borderSize > 0) {
+        void* mapped = nullptr;
+        VK_CHECK(vkMapMemory(device_, borderVertMem_, 0, borderSize, 0, &mapped));
+        std::memcpy(mapped, borders.data(), borderSize);
+        vkUnmapMemory(device_, borderVertMem_);
+    }
+
+    LOGI("geom: %zu tiles, %u fillVerts, %u borderVerts, bounds [%.3f,%.3f]-[%.3f,%.3f]",
+         tiles.size(), fillVertexCount_, borderVertexCount_,
+         geomMinX_, geomMinY_, geomMaxX_, geomMaxY_);
+    return true;
+}
+
+void Renderer::updatePaletteUbo() {
+    if (!paletteUboMapped_) return;
+    PresetResult ps = buildPreset(settings_.preset, settings_.colorCount);
+    PaletteUbo ubo{};
+    for (int i = 0; i < kMaxColors; ++i) {
+        SrgbRGBA c = oklchToSrgb(ps.colors[i]);
+        ubo.palette[i][0] = c.r;
+        ubo.palette[i][1] = c.g;
+        ubo.palette[i][2] = c.b;
+        ubo.palette[i][3] = c.a;
+    }
+    SrgbRGBA bc = oklchToSrgb(settings_.borderColor, settings_.borderAlpha);
+    ubo.borderColor[0] = bc.r; ubo.borderColor[1] = bc.g; ubo.borderColor[2] = bc.b; ubo.borderColor[3] = bc.a;
+
+    Oklch bgOk = (settings_.bgMode == BackgroundMode::Match) ? ps.colors[0] : settings_.bgColor;
+    SrgbRGBA bg = oklchToSrgb(bgOk);
+    ubo.bgColor[0] = bg.r; ubo.bgColor[1] = bg.g; ubo.bgColor[2] = bg.b; ubo.bgColor[3] = 1.0f;
+    ubo.flags[0] = 0;
+    std::memcpy(paletteUboMapped_, &ubo, sizeof(ubo));
+}
+
+// =============================================================================
+// Public lifecycle entry points
+// =============================================================================
+
+bool Renderer::onSurfaceCreated(ANativeWindow* window) {
+    if (!window || instance_ == VK_NULL_HANDLE) return false;
+    ANativeWindow_acquire(window);
+    window_ = window;
+    if (!createSurface(window)) return false;
+
+    if (!deviceReady_) {
+        if (!initDeviceForSurface()) return false;
+        if (!createDescriptorObjects()) return false;
+        if (!initPipeline()) return false;
+        deviceReady_ = true;
+    }
+
+    int w = ANativeWindow_getWidth(window);
+    int h = ANativeWindow_getHeight(window);
+    if (!createSwapchain(w, h)) return false;
+    if (!createMsaaTargets()) return false;
+    if (!buildPipelines()) return false;
+    if (!buildGeometry()) return false;
+    updatePaletteUbo();
+    if (!createPerFrameResources()) return false;
+    swapchainReady_ = true;
+    settingsDirty_ = false;
+    return true;
+}
+
+bool Renderer::onSurfaceChanged(int width, int height) {
+    if (!deviceReady_ || width <= 0 || height <= 0) return false;
+    if ((uint32_t)width == swapchainExtent_.width &&
+        (uint32_t)height == swapchainExtent_.height) return true;
+    vkDeviceWaitIdle(device_);
+    destroyPerFrameResources();
+    destroyMsaaTargets();
+    destroySwapchain();
+    if (!createSwapchain(width, height)) return false;
+    if (!createMsaaTargets()) return false;
+    if (!buildPipelines()) return false;
+    if (!createPerFrameResources()) return false;
+    swapchainReady_ = true;
+    return true;
+}
+
+void Renderer::onSurfaceDestroyed() {
+    if (device_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device_);
+    destroyPerFrameResources();
+    destroyMsaaTargets();
+    destroySwapchain();
+    if (surface_ != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(instance_, surface_, nullptr);
+        surface_ = VK_NULL_HANDLE;
+    }
+    if (window_) {
+        ANativeWindow_release(window_);
+        window_ = nullptr;
+    }
+    swapchainReady_ = false;
+}
+
+void Renderer::onVisibilityChanged(bool visible) { visible_ = visible; }
+
+void Renderer::onSettingsChanged(const Settings& s) {
+    const bool needGeom = geometryChanged(settings_, s) || classificationChanged(settings_, s)
+                       || s.borderOn != settings_.borderOn;
+    settings_ = s;
+    if (deviceReady_ && swapchainReady_) {
+        vkDeviceWaitIdle(device_);
+        if (needGeom) buildGeometry();
+        updatePaletteUbo();
+    } else {
+        settingsDirty_ = true;
+    }
+}
+
+// =============================================================================
+// Touch state
+// =============================================================================
+
+void Renderer::touchBegin(float, float) { /* state is updated incrementally via touchMove */ }
+void Renderer::touchMove(float x, float y, float prevX, float prevY) {
+    view_.panX += (x - prevX);
+    view_.panY += (y - prevY);
+}
+void Renderer::touchPinch(float, float, float scale, float rotDelta) {
+    view_.zoom = std::clamp(view_.zoom * scale, 0.25f, 8.0f);
+    view_.rotation += rotDelta;
+}
+void Renderer::touchEnd() {}
+void Renderer::resetView() { view_ = ViewState{}; }
+
+// =============================================================================
+// Swapchain / MSAA target
 // =============================================================================
 
 bool Renderer::createSwapchain(int width, int height) {
     VkSurfaceCapabilitiesKHR caps{};
     VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, surface_, &caps));
 
-    // Surface extent. currentExtent == 0xFFFFFFFF means we choose freely.
     VkExtent2D extent = caps.currentExtent;
     if (extent.width == UINT32_MAX) {
         extent.width  = std::clamp((uint32_t)width,  caps.minImageExtent.width,  caps.maxImageExtent.width);
         extent.height = std::clamp((uint32_t)height, caps.minImageExtent.height, caps.maxImageExtent.height);
     }
-    if (extent.width == 0 || extent.height == 0) {
-        LOGW("createSwapchain: zero extent, deferring");
-        return false;
-    }
+    if (extent.width == 0 || extent.height == 0) return false;
 
-    // Surface format.
     uint32_t fmtCount = 0;
     VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice_, surface_, &fmtCount, nullptr));
     std::vector<VkSurfaceFormatKHR> formats(fmtCount);
@@ -355,19 +773,13 @@ bool Renderer::createSwapchain(int width, int height) {
         bool found = false;
         for (const auto& f : formats) {
             if (f.format == pref && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-                chosen = f;
-                found = true;
-                break;
+                chosen = f; found = true; break;
             }
         }
         if (found) break;
     }
     swapchainFormat_ = chosen.format;
     swapchainExtent_ = extent;
-
-    // Present mode. FIFO is always available and matches the wallpaper's
-    // render-on-demand pattern (we only submit when the framework asks).
-    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
 
     uint32_t desiredImages = std::max(caps.minImageCount, 2u);
     if (caps.maxImageCount > 0) desiredImages = std::min(desiredImages, caps.maxImageCount);
@@ -385,16 +797,14 @@ bool Renderer::createSwapchain(int width, int height) {
     sci.preTransform = (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
         ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : caps.currentTransform;
     sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    sci.presentMode = presentMode;
+    sci.presentMode = VK_PRESENT_MODE_FIFO_KHR;
     sci.clipped = VK_TRUE;
-    sci.oldSwapchain = VK_NULL_HANDLE;
     VK_CHECK(vkCreateSwapchainKHR(device_, &sci, nullptr, &swapchain_));
 
     uint32_t imageCount = 0;
     VK_CHECK(vkGetSwapchainImagesKHR(device_, swapchain_, &imageCount, nullptr));
     swapchainImages_.resize(imageCount);
     VK_CHECK(vkGetSwapchainImagesKHR(device_, swapchain_, &imageCount, swapchainImages_.data()));
-
     swapchainViews_.resize(imageCount);
     for (uint32_t i = 0; i < imageCount; ++i) {
         VkImageViewCreateInfo vci{};
@@ -405,124 +815,81 @@ bool Renderer::createSwapchain(int width, int height) {
         vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
         VK_CHECK(vkCreateImageView(device_, &vci, nullptr, &swapchainViews_[i]));
     }
-
-    // Build the graphics pipeline now that we know the swapchain format.
-    if (pipeline_ != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device_, pipeline_, nullptr);
-        pipeline_ = VK_NULL_HANDLE;
-    }
-
-    VkPipelineShaderStageCreateInfo stages[2]{};
-    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = vertShader_;
-    stages[0].pName = "main";
-    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = fragShader_;
-    stages[1].pName = "main";
-
-    VkVertexInputBindingDescription binding{};
-    binding.binding = 0;
-    binding.stride = sizeof(Vertex);
-    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    VkVertexInputAttributeDescription attrs[2]{};
-    attrs[0].location = 0; attrs[0].binding = 0;
-    attrs[0].format = VK_FORMAT_R32G32_SFLOAT;
-    attrs[0].offset = offsetof(Vertex, x);
-    attrs[1].location = 1; attrs[1].binding = 0;
-    attrs[1].format = VK_FORMAT_R32_UINT;
-    attrs[1].offset = offsetof(Vertex, colorIdx);
-
-    VkPipelineVertexInputStateCreateInfo vi{};
-    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vi.vertexBindingDescriptionCount = 1;
-    vi.pVertexBindingDescriptions = &binding;
-    vi.vertexAttributeDescriptionCount = 2;
-    vi.pVertexAttributeDescriptions = attrs;
-
-    VkPipelineInputAssemblyStateCreateInfo ia{};
-    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkPipelineViewportStateCreateInfo vp{};
-    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    vp.viewportCount = 1;
-    vp.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo rs{};
-    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rs.polygonMode = VK_POLYGON_MODE_FILL;
-    rs.cullMode = VK_CULL_MODE_NONE;
-    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rs.lineWidth = 1.0f;
-
-    VkPipelineMultisampleStateCreateInfo ms{};
-    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineColorBlendAttachmentState cba{};
-    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
-                       | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    cba.blendEnable = VK_FALSE;
-
-    VkPipelineColorBlendStateCreateInfo cb{};
-    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    cb.attachmentCount = 1;
-    cb.pAttachments = &cba;
-
-    VkDynamicState dynStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-    VkPipelineDynamicStateCreateInfo dyn{};
-    dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dyn.dynamicStateCount = 2;
-    dyn.pDynamicStates = dynStates;
-
-    VkPipelineRenderingCreateInfo rendering{};
-    rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachmentFormats = &swapchainFormat_;
-
-    VkGraphicsPipelineCreateInfo gpi{};
-    gpi.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    gpi.pNext = &rendering;
-    gpi.stageCount = 2;
-    gpi.pStages = stages;
-    gpi.pVertexInputState = &vi;
-    gpi.pInputAssemblyState = &ia;
-    gpi.pViewportState = &vp;
-    gpi.pRasterizationState = &rs;
-    gpi.pMultisampleState = &ms;
-    gpi.pColorBlendState = &cb;
-    gpi.pDynamicState = &dyn;
-    gpi.layout = pipelineLayout_;
-    gpi.renderPass = VK_NULL_HANDLE;
-    gpi.subpass = 0;
-
-    VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipeline_));
     return true;
+}
+
+void Renderer::destroySwapchain() {
+    for (VkImageView v : swapchainViews_) if (v) vkDestroyImageView(device_, v, nullptr);
+    swapchainViews_.clear();
+    swapchainImages_.clear();
+    if (swapchain_) { vkDestroySwapchainKHR(device_, swapchain_, nullptr); swapchain_ = VK_NULL_HANDLE; }
+    swapchainExtent_ = { 0, 0 };
+}
+
+bool Renderer::createMsaaTargets() {
+    if (msaaSamples_ == VK_SAMPLE_COUNT_1_BIT) return true;
+
+    VkImageCreateInfo ici{};
+    ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = swapchainFormat_;
+    ici.extent = { swapchainExtent_.width, swapchainExtent_.height, 1 };
+    ici.mipLevels = 1;
+    ici.arrayLayers = 1;
+    ici.samples = msaaSamples_;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+    ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VK_CHECK(vkCreateImage(device_, &ici, nullptr, &msaaImage_));
+
+    VkMemoryRequirements req{};
+    vkGetImageMemoryRequirements(device_, msaaImage_, &req);
+    uint32_t typeIdx = findMemoryType(req.memoryTypeBits,
+                                      VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT);
+    if (typeIdx == UINT32_MAX) {
+        typeIdx = findMemoryType(req.memoryTypeBits,
+                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    }
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = typeIdx;
+    VK_CHECK(vkAllocateMemory(device_, &mai, nullptr, &msaaMemory_));
+    VK_CHECK(vkBindImageMemory(device_, msaaImage_, msaaMemory_, 0));
+
+    VkImageViewCreateInfo vci{};
+    vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vci.image = msaaImage_;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = swapchainFormat_;
+    vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    VK_CHECK(vkCreateImageView(device_, &vci, nullptr, &msaaView_));
+    return true;
+}
+
+void Renderer::destroyMsaaTargets() {
+    if (msaaView_)   { vkDestroyImageView(device_, msaaView_, nullptr); msaaView_ = VK_NULL_HANDLE; }
+    if (msaaImage_)  { vkDestroyImage(device_, msaaImage_, nullptr); msaaImage_ = VK_NULL_HANDLE; }
+    if (msaaMemory_) { vkFreeMemory(device_, msaaMemory_, nullptr); msaaMemory_ = VK_NULL_HANDLE; }
 }
 
 bool Renderer::createPerFrameResources() {
     frames_.resize(kFramesInFlight);
-
     VkCommandBufferAllocateInfo cbai{};
     cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cbai.commandPool = commandPool_;
     cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cbai.commandBufferCount = kFramesInFlight;
-
     std::array<VkCommandBuffer, kFramesInFlight> bufs{};
     VK_CHECK(vkAllocateCommandBuffers(device_, &cbai, bufs.data()));
 
     for (uint32_t i = 0; i < kFramesInFlight; ++i) {
         frames_[i].cmd = bufs[i];
-
         VkSemaphoreCreateInfo sci{};
         sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         VK_CHECK(vkCreateSemaphore(device_, &sci, nullptr, &frames_[i].imageAvailable));
         VK_CHECK(vkCreateSemaphore(device_, &sci, nullptr, &frames_[i].renderFinished));
-
         VkFenceCreateInfo fci{};
         fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
@@ -540,62 +907,10 @@ void Renderer::destroyPerFrameResources() {
     }
     if (commandPool_ != VK_NULL_HANDLE && !frames_.empty()) {
         std::vector<VkCommandBuffer> bufs;
-        bufs.reserve(frames_.size());
         for (auto& f : frames_) bufs.push_back(f.cmd);
         vkFreeCommandBuffers(device_, commandPool_, (uint32_t)bufs.size(), bufs.data());
     }
     frames_.clear();
-}
-
-void Renderer::destroySwapchain() {
-    for (VkImageView v : swapchainViews_) {
-        if (v) vkDestroyImageView(device_, v, nullptr);
-    }
-    swapchainViews_.clear();
-    swapchainImages_.clear();
-    if (swapchain_) {
-        vkDestroySwapchainKHR(device_, swapchain_, nullptr);
-        swapchain_ = VK_NULL_HANDLE;
-    }
-    swapchainExtent_ = { 0, 0 };
-}
-
-// =============================================================================
-// Surface lifecycle hooks
-// =============================================================================
-
-bool Renderer::onSurfaceChanged(int width, int height) {
-    if (!deviceReady_) return false;
-    if (width <= 0 || height <= 0) return false;
-    if ((uint32_t)width == swapchainExtent_.width && (uint32_t)height == swapchainExtent_.height) {
-        return true;
-    }
-    vkDeviceWaitIdle(device_);
-    destroyPerFrameResources();
-    destroySwapchain();
-    if (!createSwapchain(width, height)) return false;
-    if (!createPerFrameResources()) return false;
-    swapchainReady_ = true;
-    return true;
-}
-
-void Renderer::onSurfaceDestroyed() {
-    if (device_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device_);
-    destroyPerFrameResources();
-    destroySwapchain();
-    if (surface_ != VK_NULL_HANDLE) {
-        vkDestroySurfaceKHR(instance_, surface_, nullptr);
-        surface_ = VK_NULL_HANDLE;
-    }
-    if (window_) {
-        ANativeWindow_release(window_);
-        window_ = nullptr;
-    }
-    swapchainReady_ = false;
-}
-
-void Renderer::onVisibilityChanged(bool visible) {
-    visible_ = visible;
 }
 
 // =============================================================================
@@ -606,17 +921,20 @@ void Renderer::drawFrame() {
     if (!deviceReady_ || !swapchainReady_) return;
     if (!visible_) return;
 
-    FrameSync& f = frames_[currentFrame_];
+    if (settingsDirty_) {
+        vkDeviceWaitIdle(device_);
+        buildGeometry();
+        updatePaletteUbo();
+        settingsDirty_ = false;
+    }
 
+    FrameSync& f = frames_[currentFrame_];
     vkWaitForFences(device_, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
 
     uint32_t imageIndex = 0;
     VkResult acq = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
                                          f.imageAvailable, VK_NULL_HANDLE, &imageIndex);
-    if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
-        // Recreate on next surfaceChanged; nothing useful to draw now.
-        return;
-    }
+    if (acq == VK_ERROR_OUT_OF_DATE_KHR) return;
     if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
         LOGE("vkAcquireNextImageKHR -> %d", (int)acq);
         return;
@@ -629,34 +947,60 @@ void Renderer::drawFrame() {
     cbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(f.cmd, &cbi);
 
-    // Transition swapchain image UNDEFINED → COLOR_ATTACHMENT_OPTIMAL.
-    VkImageMemoryBarrier2 toColor{};
-    toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    toColor.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-    toColor.srcAccessMask = 0;
-    toColor.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    toColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    toColor.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    toColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    toColor.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toColor.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toColor.image = swapchainImages_[imageIndex];
-    toColor.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    // Layout transitions: swapchain image + MSAA image (if any) go to
+    // COLOR_ATTACHMENT_OPTIMAL. Both started as UNDEFINED, which is fine
+    // because the loadOp is CLEAR — we don't need the previous contents.
+    VkImageMemoryBarrier2 barriers[2]{};
+    auto fillBarrier = [&](VkImageMemoryBarrier2& b, VkImage img) {
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        b.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        b.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = img;
+        b.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    };
+    fillBarrier(barriers[0], swapchainImages_[imageIndex]);
+    uint32_t barrierCount = 1;
+    if (msaaSamples_ != VK_SAMPLE_COUNT_1_BIT) {
+        fillBarrier(barriers[1], msaaImage_);
+        barrierCount = 2;
+    }
 
     VkDependencyInfo dep{};
     dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dep.imageMemoryBarrierCount = 1;
-    dep.pImageMemoryBarriers = &toColor;
+    dep.imageMemoryBarrierCount = barrierCount;
+    dep.pImageMemoryBarriers = barriers;
     vkCmdPipelineBarrier2(f.cmd, &dep);
 
-    // Begin dynamic rendering.
+    // Clear from the palette's bgColor (uploaded to UBO; mirrored here from
+    // the same OKLCH conversion so the load-op clear matches what the shader
+    // sees in the UBO).
+    PresetResult ps = buildPreset(settings_.preset, settings_.colorCount);
+    Oklch bgOk = (settings_.bgMode == BackgroundMode::Match) ? ps.colors[0] : settings_.bgColor;
+    SrgbRGBA bg = oklchToSrgb(bgOk);
+
     VkRenderingAttachmentInfo color{};
     color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    color.imageView = swapchainViews_[imageIndex];
-    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    if (msaaSamples_ != VK_SAMPLE_COUNT_1_BIT) {
+        color.imageView = msaaView_;
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        color.resolveImageView = swapchainViews_[imageIndex];
+        color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    } else {
+        color.imageView = swapchainViews_[imageIndex];
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
     color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    std::memcpy(color.clearValue.color.float32, kClearColor, sizeof(kClearColor));
+    color.clearValue.color.float32[0] = bg.r;
+    color.clearValue.color.float32[1] = bg.g;
+    color.clearValue.color.float32[2] = bg.b;
+    color.clearValue.color.float32[3] = 1.0f;
 
     VkRenderingInfo ri{};
     ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -668,65 +1012,86 @@ void Renderer::drawFrame() {
     vkCmdBeginRendering(f.cmd, &ri);
 
     VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
+    viewport.x = 0; viewport.y = 0;
     viewport.width = (float)swapchainExtent_.width;
     viewport.height = (float)swapchainExtent_.height;
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
+    viewport.minDepth = 0; viewport.maxDepth = 1;
     vkCmdSetViewport(f.cmd, 0, 1, &viewport);
-
     VkRect2D scissor{ { 0, 0 }, swapchainExtent_ };
     vkCmdSetScissor(f.cmd, 0, 1, &scissor);
 
-    vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
-    VkDeviceSize vbOffset = 0;
-    vkCmdBindVertexBuffers(f.cmd, 0, 1, &vertexBuffer_, &vbOffset);
-    vkCmdBindIndexBuffer(f.cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
+    // Compute push-constant view matrix. Map model-space [-bbox..+bbox] into
+    // clip space [-1, +1] preserving aspect and applying pan/zoom/rotation.
+    const float gw = std::max(geomMaxX_ - geomMinX_, 1e-3f);
+    const float gh = std::max(geomMaxY_ - geomMinY_, 1e-3f);
+    const float surfW = (float)swapchainExtent_.width;
+    const float surfH = (float)swapchainExtent_.height;
+    const float aspect = surfW / surfH;
+    // base scale: fit shorter axis at 95% with aspect-correct stretch.
+    float baseScale = std::min(2.0f / gw, 2.0f / gh) * 0.95f;
+    float sX = (aspect >= 1.0f ? baseScale / aspect : baseScale) * view_.zoom;
+    float sY = (aspect >= 1.0f ? baseScale          : baseScale * aspect) * view_.zoom;
+    const float cosR = std::cos(view_.rotation);
+    const float sinR = std::sin(view_.rotation);
+    // Translation: convert pan in pixels to clip-space offset (-1..+1).
+    const float tX = (view_.panX / surfW) * 2.0f;
+    const float tY = (view_.panY / surfH) * 2.0f;
 
-    // Fit-to-screen: scale geometry's bounding box to [-1, 1] in clip space
-    // while preserving aspect. Geometry is centered around (0,0) so we just
-    // pick the smaller axis fit and zero translation.
+    // Affine model→clip. Model space coords are math-convention (y-up) but
+    // Vulkan clip-space y points down. We match the HTML reference's behavior:
+    // pass model coords through unflipped, which yields a vertically-mirrored
+    // image vs. math convention — fine, since the tilings used here are
+    // symmetric and the result is visually identical.
     PushBlock pc{};
-    const float gw = geomMaxX_ - geomMinX_;
-    const float gh = geomMaxY_ - geomMinY_;
-    const float aspect = (float)swapchainExtent_.width / (float)swapchainExtent_.height;
-    // Map [-gw/2, gw/2] → [-s, s] in NDC. Use the smaller of (2/gw, 2/gh)
-    // adjusted by aspect so the tiling never crops.
-    float s = std::min(2.0f / gw, 2.0f / gh) * 0.95f;
-    if (aspect >= 1.0f) {
-        pc.scaleX = s / aspect;
-        pc.scaleY = s;
-    } else {
-        pc.scaleX = s;
-        pc.scaleY = s * aspect;
-    }
-    pc.offsetX = 0.0f;
-    pc.offsetY = 0.0f;
-    std::memcpy(pc.palette[0], kColorL, sizeof(kColorL));
-    std::memcpy(pc.palette[1], kColorS, sizeof(kColorS));
+    pc.view0x =  cosR * sX; pc.view0y = -sinR * sY; pc.view0z = tX;
+    pc.view1x =  sinR * sX; pc.view1y =  cosR * sY; pc.view1z = tY;
 
-    vkCmdPushConstants(f.cmd, pipelineLayout_,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(pc), &pc);
-    vkCmdDrawIndexed(f.cmd, indexCount_, 1, 0, 0, 0);
+    vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            pipelineLayout_, 0, 1, &descSet_, 0, nullptr);
+
+    // ---- Fills ----
+    if (fillVertexCount_ > 0) {
+        vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fillPipeline_);
+        VkDeviceSize off = 0;
+        vkCmdBindVertexBuffers(f.cmd, 0, 1, &fillVertBuf_, &off);
+        vkCmdPushConstants(f.cmd, pipelineLayout_,
+                           VK_SHADER_STAGE_VERTEX_BIT,
+                           0, sizeof(pc), &pc);
+        vkCmdDraw(f.cmd, fillVertexCount_, 1, 0, 0);
+    }
+
+    // ---- Borders ----
+    if (settings_.borderOn && borderVertexCount_ > 0) {
+        vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, borderPipeline_);
+        VkDeviceSize off = 0;
+        vkCmdBindVertexBuffers(f.cmd, 0, 1, &borderVertBuf_, &off);
+        vkCmdPushConstants(f.cmd, pipelineLayout_,
+                           VK_SHADER_STAGE_VERTEX_BIT,
+                           0, sizeof(pc), &pc);
+        vkCmdDraw(f.cmd, borderVertexCount_, 1, 0, 0);
+    }
 
     vkCmdEndRendering(f.cmd);
 
-    // Transition COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR.
-    VkImageMemoryBarrier2 toPresent = toColor;
+    // Layout: COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR for swapchain image.
+    VkImageMemoryBarrier2 toPresent{};
+    toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     toPresent.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     toPresent.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
     toPresent.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
     toPresent.dstAccessMask = 0;
     toPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toPresent.image = swapchainImages_[imageIndex];
+    toPresent.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    dep.imageMemoryBarrierCount = 1;
     dep.pImageMemoryBarriers = &toPresent;
     vkCmdPipelineBarrier2(f.cmd, &dep);
 
     vkEndCommandBuffer(f.cmd);
 
-    // Submit with sync2.
     VkSemaphoreSubmitInfo waitInfo{};
     waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
     waitInfo.semaphore = f.imageAvailable;
@@ -749,7 +1114,6 @@ void Renderer::drawFrame() {
     submit.pSignalSemaphoreInfos = &signalInfo;
     submit.commandBufferInfoCount = 1;
     submit.pCommandBufferInfos = &cbInfo;
-
     vkQueueSubmit2(queue_, 1, &submit, f.inFlight);
 
     VkPresentInfoKHR present{};
@@ -760,12 +1124,9 @@ void Renderer::drawFrame() {
     present.pSwapchains = &swapchain_;
     present.pImageIndices = &imageIndex;
     VkResult pr = vkQueuePresentKHR(queue_, &present);
-    if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
-        // Will be picked up by next surfaceChanged.
-    } else if (pr != VK_SUCCESS) {
+    if (pr != VK_SUCCESS && pr != VK_ERROR_OUT_OF_DATE_KHR && pr != VK_SUBOPTIMAL_KHR) {
         LOGE("vkQueuePresentKHR -> %d", (int)pr);
     }
-
     currentFrame_ = (currentFrame_ + 1) % kFramesInFlight;
 }
 
@@ -795,13 +1156,11 @@ bool Renderer::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 
     VkMemoryRequirements req{};
     vkGetBufferMemoryRequirements(device_, buffer, &req);
-
     uint32_t typeIdx = findMemoryType(req.memoryTypeBits, props);
     if (typeIdx == UINT32_MAX) {
         LOGE("no memory type for props=0x%x typeBits=0x%x", props, req.memoryTypeBits);
         return false;
     }
-
     VkMemoryAllocateInfo mai{};
     mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     mai.allocationSize = req.size;

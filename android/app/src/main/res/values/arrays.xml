@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="family_entries">
+        <item>P3 (rhombi)</item>
+        <item>P2 (kites &amp; darts)</item>
+        <item>Chair (L-trominoes)</item>
+    </string-array>
+    <string-array name="family_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <!-- Seeds — only the P3 list is exposed via the same key; the C++ side
+         clamps out-of-range indices, so it's safe to leave one global list. -->
+    <string-array name="seed_p3_entries">
+        <item>Sun</item>
+        <item>Star</item>
+        <item>Cartwheel</item>
+        <item>Ace</item>
+    </string-array>
+    <string-array name="seed_p3_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+
+    <string-array name="preset_entries">
+        <item>B&amp;W</item>
+        <item>Greys</item>
+        <item>Prism</item>
+        <item>Paper</item>
+        <item>Gold</item>
+        <item>Rust</item>
+        <item>Plum</item>
+        <item>Cobalt</item>
+        <item>Sage</item>
+        <item>Spectra</item>
+        <item>Girih</item>
+    </string-array>
+    <string-array name="preset_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>7</item>
+        <item>8</item>
+        <item>9</item>
+        <item>10</item>
+    </string-array>
+
+    <string-array name="color_mode_entries">
+        <item>Type</item>
+        <item>Orient</item>
+        <item>Ring</item>
+    </string-array>
+    <string-array name="color_mode_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <string-array name="bg_mode_entries">
+        <item>Solid OKLCH</item>
+        <item>Match palette[0]</item>
+    </string-array>
+    <string-array name="bg_mode_values">
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+</resources>

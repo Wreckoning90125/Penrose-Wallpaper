@@ -1,5 +1,7 @@
 #pragma once
 
+#include "settings.h"
+
 #include <android/asset_manager.h>
 #include <android/native_window.h>
 #include <vulkan/vulkan.h>
@@ -16,6 +18,12 @@ struct FrameSync {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
 };
 
+struct ViewState {
+    float panX = 0.0f, panY = 0.0f; // pixels relative to surface center
+    float zoom = 1.0f;
+    float rotation = 0.0f;          // radians
+};
+
 class Renderer {
 public:
     explicit Renderer(AAssetManager* assets);
@@ -28,23 +36,37 @@ public:
     bool onSurfaceChanged(int width, int height);
     void onSurfaceDestroyed();
     void onVisibilityChanged(bool visible);
+
+    void onSettingsChanged(const Settings& s);
+
+    // Touch interactions. Coordinates are surface-relative pixels.
+    void touchBegin(float x, float y);
+    void touchMove(float x, float y, float prevX, float prevY);
+    void touchPinch(float midX, float midY, float scale, float rotDelta);
+    void touchEnd();
+    void resetView();
+
     void drawFrame();
 
 private:
-    // ---- One-time init (instance/device/etc) ---------------------------
     bool initInstance();
     bool initDeviceForSurface();
     bool initPipeline();
     bool buildGeometry();
+    void updatePaletteUbo();
 
-    // ---- Per-surface init / teardown -----------------------------------
     bool createSurface(ANativeWindow* window);
     bool createSwapchain(int width, int height);
     void destroySwapchain();
+    bool createMsaaTargets();
+    void destroyMsaaTargets();
     bool createPerFrameResources();
     void destroyPerFrameResources();
+    bool createDescriptorObjects();
+    void destroyDescriptorObjects();
+    bool buildPipelines();
+    void destroyPipelines();
 
-    // ---- Helpers -------------------------------------------------------
     bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                       VkMemoryPropertyFlags props,
                       VkBuffer& buffer, VkDeviceMemory& memory);
@@ -60,19 +82,38 @@ private:
     VkDevice device_ = VK_NULL_HANDLE;
     uint32_t graphicsQueueFamily_ = UINT32_MAX;
     VkQueue queue_ = VK_NULL_HANDLE;
+    VkSampleCountFlagBits msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
 
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
-    VkPipeline pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule vertShader_ = VK_NULL_HANDLE;
-    VkShaderModule fragShader_ = VK_NULL_HANDLE;
+    VkPipeline fillPipeline_ = VK_NULL_HANDLE;
+    VkPipeline borderPipeline_ = VK_NULL_HANDLE;
+    VkShaderModule fillVert_ = VK_NULL_HANDLE;
+    VkShaderModule fillFrag_ = VK_NULL_HANDLE;
+    VkShaderModule borderVert_ = VK_NULL_HANDLE;
+    VkShaderModule borderFrag_ = VK_NULL_HANDLE;
 
-    // Tile geometry — uploaded once, reused every frame.
-    VkBuffer vertexBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory vertexMemory_ = VK_NULL_HANDLE;
-    VkBuffer indexBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory indexMemory_ = VK_NULL_HANDLE;
-    uint32_t indexCount_ = 0;
+    // Descriptor objects for the palette UBO (set 0, binding 0).
+    VkDescriptorSetLayout descSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool descPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet descSet_ = VK_NULL_HANDLE;
+    VkBuffer paletteUbo_ = VK_NULL_HANDLE;
+    VkDeviceMemory paletteUboMem_ = VK_NULL_HANDLE;
+    void* paletteUboMapped_ = nullptr;
+    VkDeviceSize paletteUboSize_ = 0;
+
+    // Tile geometry — fills (one triangle per Penrose tri, 4 triangles per
+    // chair L-tromino) and borders (one VK_PRIMITIVE_TOPOLOGY_LINE_LIST entry
+    // per non-hidden edge).
+    VkBuffer fillVertBuf_ = VK_NULL_HANDLE;
+    VkDeviceMemory fillVertMem_ = VK_NULL_HANDLE;
+    uint32_t fillVertexCount_ = 0;
+    VkBuffer borderVertBuf_ = VK_NULL_HANDLE;
+    VkDeviceMemory borderVertMem_ = VK_NULL_HANDLE;
+    uint32_t borderVertexCount_ = 0;
+
+    // Bounding box of the un-transformed geometry (in model space). Used by
+    // the view fit-to-screen calculation.
     float geomMinX_ = -1.0f, geomMinY_ = -1.0f;
     float geomMaxX_ =  1.0f, geomMaxY_ =  1.0f;
 
@@ -84,12 +125,20 @@ private:
     VkExtent2D swapchainExtent_{0, 0};
     std::vector<VkImage> swapchainImages_;
     std::vector<VkImageView> swapchainViews_;
+    VkImage msaaImage_ = VK_NULL_HANDLE;
+    VkDeviceMemory msaaMemory_ = VK_NULL_HANDLE;
+    VkImageView msaaView_ = VK_NULL_HANDLE;
     std::vector<FrameSync> frames_;
     uint32_t currentFrame_ = 0;
+
+    Settings settings_{};
+    bool settingsDirty_ = true;
+    ViewState view_{};
 
     bool deviceReady_ = false;
     bool swapchainReady_ = false;
     bool visible_ = false;
+    bool pipelinesBuilt_ = false;
 
     static constexpr uint32_t kFramesInFlight = 2;
 };

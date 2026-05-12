@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Penrose" parent="Theme.AppCompat.DayNight">
+        <item name="colorPrimary">#D4A857</item>
+        <item name="colorAccent">#D4A857</item>
+        <!-- Required by PreferenceFragmentCompat so it can find its layouts. -->
+        <item name="preferenceTheme">@style/PreferenceThemeOverlay</item>
+    </style>
+</resources>

@@ -20,6 +20,7 @@ add_library(penrose SHARED
     jni_bridge.cpp
     renderer.cpp
     penrose.cpp
+    color.cpp
 )
 
 target_include_directories(penrose PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

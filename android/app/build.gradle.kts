@@ -99,7 +99,8 @@ kotlin {
 }
 
 dependencies {
-    // No runtime deps. Wallpaper service and JNI surface are stdlib-only.
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.preference:preference-ktx:1.2.1")
 }
 
 // -----------------------------------------------------------------------------
@@ -158,6 +159,20 @@ abstract class CompileShadersTask @Inject constructor(
 val shaderSrcDir = layout.projectDirectory.dir("src/main/shaders")
 val shaderOutDir = layout.buildDirectory.dir("generated/shaders/shaders")
 
+// Locate the NDK via environment vars instead of AGP internals. Both CI and
+// Android Studio set one of these; if not, we fall back to the canonical
+// `${ANDROID_SDK_ROOT}/ndk/${ndkVersion}` path.
+fun resolveNdkPath(): String {
+    System.getenv("ANDROID_NDK_HOME")?.let { if (File(it).isDirectory) return it }
+    System.getenv("ANDROID_NDK_ROOT")?.let { if (File(it).isDirectory) return it }
+    val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
+    if (sdkRoot != null) {
+        val candidate = File(sdkRoot, "ndk/${libs.versions.ndk.get()}")
+        if (candidate.isDirectory) return candidate.absolutePath
+    }
+    error("Cannot locate Android NDK. Set ANDROID_NDK_HOME or install ndk;${libs.versions.ndk.get()} via sdkmanager.")
+}
+
 val compileShaders = tasks.register<CompileShadersTask>("compileShaders") {
     group = "build"
     description = "Compile GLSL shaders to SPIR-V via glslc."
@@ -171,15 +186,15 @@ val compileShaders = tasks.register<CompileShadersTask>("compileShaders") {
     outputDir.set(shaderOutDir)
     targetEnv.set("vulkan1.4")
 
-    val ndkRoot = android.ndkDirectory
+    val osName = System.getProperty("os.name").lowercase()
     val hostTag = when {
-        org.gradle.internal.os.OperatingSystem.current().isLinux -> "linux-x86_64"
-        org.gradle.internal.os.OperatingSystem.current().isMacOsX -> "darwin-x86_64"
-        org.gradle.internal.os.OperatingSystem.current().isWindows -> "windows-x86_64"
-        else -> error("Unsupported host OS")
+        osName.contains("linux")   -> "linux-x86_64"
+        osName.contains("mac")     -> "darwin-x86_64"
+        osName.contains("windows") -> "windows-x86_64"
+        else -> error("Unsupported host OS: $osName")
     }
-    val glslcName = if (org.gradle.internal.os.OperatingSystem.current().isWindows) "glslc.exe" else "glslc"
-    glslcPath.set(File(ndkRoot, "shader-tools/$hostTag/$glslcName").absolutePath)
+    val glslcName = if (osName.contains("windows")) "glslc.exe" else "glslc"
+    glslcPath.set(File(resolveNdkPath(), "shader-tools/$hostTag/$glslcName").absolutePath)
 }
 
 // Wire shader compile into the normal build graph so a plain `assembleDebug`

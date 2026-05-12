@@ -4,38 +4,36 @@ import android.content.res.AssetManager
 import android.view.Surface
 
 /**
- * Thin JNI surface. Every entry point takes an opaque `nativePtr` returned by
- * [create] so the native side can hang multiple renderer instances off the
- * same library (one per WallpaperService.Engine).
- *
- * All methods are expected to be invoked from a single thread per renderer
- * (the WallpaperService's render Handler). The native side does not lock.
+ * Thin JNI surface. All calls operate on an opaque `nativePtr` and must be
+ * invoked from the same thread per renderer instance (the WallpaperService's
+ * render Handler). The native side does not lock.
  */
 internal object NativeBridge {
 
     init { System.loadLibrary("penrose") }
 
-    /** Creates a renderer. Returns 0L on failure. */
     external fun create(assets: AssetManager): Long
-
-    /** Releases the renderer. Must be called from the same thread that calls draw. */
     external fun destroy(nativePtr: Long)
 
-    /** New ANativeWindow available; renderer (re)creates instance/device/swapchain. */
     external fun surfaceCreated(nativePtr: Long, surface: Surface)
-
-    /** Surface geometry changed; renderer recreates the swapchain. */
     external fun surfaceChanged(nativePtr: Long, width: Int, height: Int)
+    external fun surfaceDestroyed(nativePtr: Long)
+    external fun visibilityChanged(nativePtr: Long, visible: Boolean)
+    external fun drawFrame(nativePtr: Long)
 
     /**
-     * Surface is going away. Renderer must wait for GPU idle and tear down
-     * everything that references the ANativeWindow before returning.
+     * Push the current Settings to the renderer. Encoded as two flat arrays:
+     *
+     *   ints   = [family, seedIdx, generation, preset, colorCount, colorMode,
+     *             borderOn (0/1), bgMode]
+     *   floats = [borderWidth, borderL, borderC, borderH, borderAlpha,
+     *             bgL, bgC, bgH]
+     *
+     * Both must match the layout the JNI bridge expects (jni_bridge.cpp).
      */
-    external fun surfaceDestroyed(nativePtr: Long)
+    external fun applySettings(nativePtr: Long, ints: IntArray, floats: FloatArray)
 
-    /** Visibility changes drive rendering on/off (battery-friendly). */
-    external fun visibilityChanged(nativePtr: Long, visible: Boolean)
-
-    /** Render exactly one frame. No-op if surface isn't ready. */
-    external fun drawFrame(nativePtr: Long)
+    external fun touchMove(nativePtr: Long, x: Float, y: Float, prevX: Float, prevY: Float)
+    external fun touchPinch(nativePtr: Long, midX: Float, midY: Float, scale: Float, rotDelta: Float)
+    external fun resetView(nativePtr: Long)
 }

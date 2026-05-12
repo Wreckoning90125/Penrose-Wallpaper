@@ -204,10 +204,19 @@ bool Renderer::initDeviceForSurface() {
     else msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
     LOGI("MSAA samples: %d", (int)msaaSamples_);
 
+    // Feature chain: Features2 -> Vulkan14Features -> Vulkan13Features.
+    // We currently only need 1.3-promoted features (dynamicRendering, sync2),
+    // but the 1.4 struct is chained in empty so any future feature flip
+    // (pushDescriptor, dynamicRenderingLocalRead, maintenance5/6, hostImageCopy,
+    // indexTypeUint8, etc.) is a one-line edit instead of a chain refactor.
+    VkPhysicalDeviceVulkan14Features v14{};
+    v14.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
+
     VkPhysicalDeviceVulkan13Features v13{};
     v13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     v13.dynamicRendering = VK_TRUE;
     v13.synchronization2 = VK_TRUE;
+    v13.pNext = &v14;
 
     VkPhysicalDeviceFeatures2 feats{};
     feats.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;

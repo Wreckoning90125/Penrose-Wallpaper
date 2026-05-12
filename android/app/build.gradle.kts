@@ -13,8 +13,10 @@ import java.io.File
 import javax.inject.Inject
 
 plugins {
+    // AGP 9 ships Kotlin support built-in; the org.jetbrains.kotlin.android
+    // plugin is no longer applied separately. See:
+    // https://developer.android.com/build/migrate-to-built-in-kotlin
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
 }
 
 android {
@@ -99,8 +101,8 @@ kotlin {
 }
 
 dependencies {
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.preference:preference-ktx:1.2.1")
+    implementation(libs.androidx.appcompat)
+    implementation(libs.androidx.preference.ktx)
 }
 
 // -----------------------------------------------------------------------------

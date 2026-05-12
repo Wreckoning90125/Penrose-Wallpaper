@@ -1,4 +1,16 @@
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
+import org.gradle.process.ExecOperations
 import java.io.File
+import javax.inject.Inject
 
 plugins {
     alias(libs.plugins.android.application)
@@ -44,12 +56,8 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     sourceSets {
@@ -79,6 +87,14 @@ android {
     }
 }
 
+// AGP 9 removed the legacy `kotlinOptions { jvmTarget = "..." }` block in favour
+// of the kotlin-gradle-plugin's own DSL.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+    }
+}
+
 dependencies {
     // No runtime deps. Wallpaper service and JNI surface are stdlib-only.
 }
@@ -86,45 +102,47 @@ dependencies {
 // -----------------------------------------------------------------------------
 // SPIR-V compilation. We invoke glslc from the NDK shader-tools to convert
 // src/main/shaders/*.{vert,frag} into assets/shaders/*.spv at build time.
-// The wallpaper loads them from AssetManager at startup, so a clean build is
-// all that's needed to pick up shader edits.
+// Implemented as a proper typed task so the configuration cache (default-on
+// in Gradle 9) accepts it: no Project references at execution time, all
+// process invocation goes through the injected ExecOperations.
 // -----------------------------------------------------------------------------
-val shaderSrcDir = layout.projectDirectory.dir("src/main/shaders")
-val shaderOutDir = layout.buildDirectory.dir("generated/shaders/shaders")
+abstract class CompileShadersTask @Inject constructor(
+    private val execOps: ExecOperations
+) : DefaultTask() {
 
-val compileShaders by tasks.registering {
-    group = "build"
-    description = "Compile GLSL shaders to SPIR-V via glslc."
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sources: ConfigurableFileCollection
 
-    val inputs = shaderSrcDir.asFileTree.matching {
-        include("**/*.vert", "**/*.frag", "**/*.comp")
-    }
-    this.inputs.files(inputs)
-    this.outputs.dir(shaderOutDir)
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
 
-    doLast {
-        val ndkRoot = android.ndkDirectory
-        val hostTag = when {
-            org.gradle.internal.os.OperatingSystem.current().isLinux -> "linux-x86_64"
-            org.gradle.internal.os.OperatingSystem.current().isMacOsX -> "darwin-x86_64"
-            org.gradle.internal.os.OperatingSystem.current().isWindows -> "windows-x86_64"
-            else -> error("Unsupported host OS")
-        }
-        val glslcName = if (org.gradle.internal.os.OperatingSystem.current().isWindows) "glslc.exe" else "glslc"
-        val glslc = File(ndkRoot, "shader-tools/$hostTag/$glslcName")
+    @get:Internal
+    abstract val sourceRoot: DirectoryProperty
+
+    @get:Internal
+    abstract val glslcPath: Property<String>
+
+    @get:Internal
+    abstract val targetEnv: Property<String>
+
+    @TaskAction
+    fun run() {
+        val glslc = File(glslcPath.get())
         if (!glslc.exists()) {
             error("glslc not found at $glslc — check ndkVersion in libs.versions.toml")
         }
-        val out = shaderOutDir.get().asFile
+        val root = sourceRoot.get().asFile
+        val out = outputDir.get().asFile
         out.mkdirs()
-        inputs.forEach { src ->
-            val rel = src.relativeTo(shaderSrcDir.asFile).path
+        sources.forEach { src ->
+            val rel = src.relativeTo(root).path
             val dst = File(out, "$rel.spv")
             dst.parentFile.mkdirs()
-            exec {
+            execOps.exec {
                 commandLine(
                     glslc.absolutePath,
-                    "--target-env=vulkan1.4",
+                    "--target-env=${targetEnv.get()}",
                     "-O",
                     "-o", dst.absolutePath,
                     src.absolutePath,
@@ -132,6 +150,33 @@ val compileShaders by tasks.registering {
             }
         }
     }
+}
+
+val shaderSrcDir = layout.projectDirectory.dir("src/main/shaders")
+val shaderOutDir = layout.buildDirectory.dir("generated/shaders/shaders")
+
+val compileShaders = tasks.register<CompileShadersTask>("compileShaders") {
+    group = "build"
+    description = "Compile GLSL shaders to SPIR-V via glslc."
+
+    sourceRoot.set(shaderSrcDir)
+    sources.from(
+        shaderSrcDir.asFileTree.matching {
+            include("**/*.vert", "**/*.frag", "**/*.comp")
+        }
+    )
+    outputDir.set(shaderOutDir)
+    targetEnv.set("vulkan1.4")
+
+    val ndkRoot = android.ndkDirectory
+    val hostTag = when {
+        org.gradle.internal.os.OperatingSystem.current().isLinux -> "linux-x86_64"
+        org.gradle.internal.os.OperatingSystem.current().isMacOsX -> "darwin-x86_64"
+        org.gradle.internal.os.OperatingSystem.current().isWindows -> "windows-x86_64"
+        else -> error("Unsupported host OS")
+    }
+    val glslcName = if (org.gradle.internal.os.OperatingSystem.current().isWindows) "glslc.exe" else "glslc"
+    glslcPath.set(File(ndkRoot, "shader-tools/$hostTag/$glslcName").absolutePath)
 }
 
 // Wire shader compile into the normal build graph so a plain `assembleDebug`

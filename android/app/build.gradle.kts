@@ -88,8 +88,10 @@ android {
 }
 
 // AGP 9 removed the legacy `kotlinOptions { jvmTarget = "..." }` block in favour
-// of the kotlin-gradle-plugin's own DSL. JDK 17 is AGP 9.2's documented default
-// and minimum, so target the same bytecode version.
+// of the kotlin-gradle-plugin's own DSL. The bytecode target stays at 17 — that's
+// where Android's runtime support stops without desugaring tricks. Gradle itself
+// runs on JDK 25 (latest LTS) per the CI workflow; only the *emitted* bytecode
+// is pinned here.
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)

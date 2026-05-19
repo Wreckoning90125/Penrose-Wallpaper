@@ -4,4 +4,33 @@
     <string name="wallpaper_name">Penrose · P3</string>
     <string name="wallpaper_description">An aperiodic P3 Penrose tiling, rendered with Vulkan.</string>
     <string name="launcher_no_picker">No live-wallpaper picker on this device. Opening settings.</string>
+
+    <string name="motion_category">Motion</string>
+    <string name="ripple_amount_title">Ripple</string>
+    <string name="ripple_amount_summary">Quasicrystal wave modulation, % of full amplitude</string>
+    <string name="ripple_mode_title">Source</string>
+    <string name="ripple_mode_summary">%s</string>
+    <string name="ripple_speed_title">Speed</string>
+    <string name="ripple_kind_title">Kind</string>
+    <string name="ripple_kind_summary">%s</string>
+    <string name="pan_mode_title">Pan</string>
+    <string name="pan_mode_summary">%s</string>
+
+    <string name="brightness_title">Brightness</string>
+    <string name="depth_title">Depth (parallax)</string>
+    <string name="depth_summary">Per-tile gradient amplitude (P3/P2)</string>
+    <string name="custom_palette_title">Custom palette</string>
+
+    <string name="audio_category">Audio</string>
+    <string name="audio_file_title">Audio file</string>
+    <string name="audio_file_summary">Plays in the background; feeds the analyzer for the modulation matrix.</string>
+    <string name="audio_file_none">No file selected (tap to choose)</string>
+    <string name="audio_file_stop_title">Stop audio</string>
+    <string name="audio_file_stop_summary">Release the audio service.</string>
+
+    <string name="preset_load_title">Load preset…</string>
+    <string name="preset_load_summary">Writes a built-in graph + slider set into the current settings. Edit freely afterward.</string>
+
+    <string name="apply_wallpaper_title">Apply as wallpaper…</string>
+    <string name="apply_wallpaper_summary">Opens the system live-wallpaper preview.</string>
 </resources>

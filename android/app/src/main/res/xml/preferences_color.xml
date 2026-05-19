@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <Preference
+        android:key="nav_back"
+        android:title="← Back"
+        android:summary="" />
+
+    <PreferenceCategory android:title="Color">
+        <ListPreference
+            android:key="preset"
+            android:title="Palette preset"
+            android:summary="%s"
+            android:entries="@array/preset_entries"
+            android:entryValues="@array/preset_values"
+            android:defaultValue="4" />
+        <ListPreference
+            android:key="color_mode"
+            android:title="Mode"
+            android:summary="%s"
+            android:entries="@array/color_mode_entries"
+            android:entryValues="@array/color_mode_values"
+            android:defaultValue="0" />
+        <SeekBarPreference
+            android:key="color_count"
+            android:title="Colors"
+            android:min="2" android:max="10" android:defaultValue="2"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="brightness"
+            android:title="@string/brightness_title"
+            android:min="0" android:max="200" android:defaultValue="100"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="depth_amount"
+            android:title="@string/depth_title"
+            android:summary="@string/depth_summary"
+            android:min="0" android:max="100" android:defaultValue="30"
+            app:showSeekBarValue="true" />
+        <Preference
+            android:key="nav_custom_palette"
+            android:title="@string/custom_palette_title"
+            android:summary="Edit the 10 OKLCH slots used by the Custom preset" />
+    </PreferenceCategory>
+</PreferenceScreen>

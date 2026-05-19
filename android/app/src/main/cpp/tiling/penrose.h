@@ -27,15 +27,15 @@ struct Tile {
 enum class Family : int { P3 = 0, P2 = 1, Chair = 2 };
 
 // Per-family edge classification used by the border seam-hiding rule.
-//   For Penrose: 0 = "leg" (the two equal-length sides), 1 = "base".
-//   For Chair: always 0 ("edge") — no internal seams to hide.
-enum class EdgeKind : uint8_t { Leg = 0, Base = 1, Edge = 0 };
+//   For Penrose: Leg = the two equal-length sides, Base = the third.
+//   For Chair: ChairEdge — no internal seams to hide.
+enum class EdgeKind : uint8_t { Leg = 0, Base = 1, ChairEdge = 2 };
 
 struct Edge {
     float p1x, p1y;
     float p2x, p2y;
-    uint8_t kind;
-    uint8_t tileType; // tile that produced this edge (for hideSeam)
+    EdgeKind kind;
+    uint8_t  tileType; // tile that produced this edge (for hideSeam)
 };
 
 // =============================================================================

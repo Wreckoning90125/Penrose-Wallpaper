@@ -2,126 +2,49 @@
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
-    <PreferenceCategory android:title="Tiling">
-        <ListPreference
-            android:key="family"
-            android:title="Family"
-            android:summary="%s"
-            android:entries="@array/family_entries"
-            android:entryValues="@array/family_values"
-            android:defaultValue="0" />
-        <ListPreference
-            android:key="seed"
-            android:title="Seed"
-            android:summary="Symmetry of the starting patch"
-            android:entries="@array/seed_p3_entries"
-            android:entryValues="@array/seed_p3_values"
-            android:defaultValue="0" />
-        <SeekBarPreference
-            android:key="generation"
-            android:title="Generation"
-            android:summary="More generations = more tiles"
-            android:min="0"
-            android:max="8"
-            android:defaultValue="6"
-            app:showSeekBarValue="true" />
+    <PreferenceCategory android:title="Actions">
+        <Preference
+            android:key="action_apply_wallpaper"
+            android:title="@string/apply_wallpaper_title"
+            android:summary="@string/apply_wallpaper_summary" />
+        <Preference
+            android:key="action_full_screen"
+            android:title="Full screen"
+            android:summary="Open the live wallpaper full-bleed in the app. Tap to dismiss." />
+        <Preference
+            android:key="action_node_editor"
+            android:title="Node editor"
+            android:summary="Open the full-screen modulation graph (ImGui). Add / connect / delete any source, operator, or target." />
+        <Preference
+            android:key="action_load_preset"
+            android:title="@string/preset_load_title"
+            android:summary="@string/preset_load_summary" />
     </PreferenceCategory>
 
-    <PreferenceCategory android:title="Color">
-        <ListPreference
-            android:key="preset"
-            android:title="Preset"
-            android:summary="%s"
-            android:entries="@array/preset_entries"
-            android:entryValues="@array/preset_values"
-            android:defaultValue="4" />
-        <ListPreference
-            android:key="color_mode"
-            android:title="Mode"
-            android:summary="%s"
-            android:entries="@array/color_mode_entries"
-            android:entryValues="@array/color_mode_values"
-            android:defaultValue="0" />
-        <SeekBarPreference
-            android:key="color_count"
-            android:title="Colors"
-            android:min="2"
-            android:max="10"
-            android:defaultValue="2"
-            app:showSeekBarValue="true" />
-    </PreferenceCategory>
-
-    <PreferenceCategory android:title="Borders">
-        <SwitchPreferenceCompat
-            android:key="border_on"
-            android:title="Show borders"
-            android:defaultValue="true" />
-        <SeekBarPreference
-            android:key="border_width"
-            android:title="Width"
-            android:summary="0..6, hundredths"
-            android:min="0"
-            android:max="600"
-            android:defaultValue="80"
-            app:showSeekBarValue="true" />
-        <SeekBarPreference
-            android:key="border_a"
-            android:title="Alpha"
-            android:min="0"
-            android:max="100"
-            android:defaultValue="35"
-            app:showSeekBarValue="true" />
-        <SeekBarPreference
-            android:key="border_l"
-            android:title="Lightness (OKLCH L ×100)"
-            android:min="0"
-            android:max="100"
-            android:defaultValue="95"
-            app:showSeekBarValue="true" />
-        <SeekBarPreference
-            android:key="border_c"
-            android:title="Chroma (OKLCH C ×100)"
-            android:min="0"
-            android:max="37"
-            android:defaultValue="0"
-            app:showSeekBarValue="true" />
-        <SeekBarPreference
-            android:key="border_h"
-            android:title="Hue (degrees)"
-            android:min="0"
-            android:max="359"
-            android:defaultValue="0"
-            app:showSeekBarValue="true" />
-    </PreferenceCategory>
-
-    <PreferenceCategory android:title="Background">
-        <ListPreference
-            android:key="bg_mode"
-            android:title="Mode"
-            android:summary="%s"
-            android:entries="@array/bg_mode_entries"
-            android:entryValues="@array/bg_mode_values"
-            android:defaultValue="0" />
-        <SeekBarPreference
-            android:key="bg_l"
-            android:title="Lightness (OKLCH L ×100)"
-            android:min="0"
-            android:max="100"
-            android:defaultValue="4"
-            app:showSeekBarValue="true" />
-        <SeekBarPreference
-            android:key="bg_c"
-            android:title="Chroma (OKLCH C ×100)"
-            android:min="0"
-            android:max="37"
-            android:defaultValue="0"
-            app:showSeekBarValue="true" />
-        <SeekBarPreference
-            android:key="bg_h"
-            android:title="Hue (degrees)"
-            android:min="0"
-            android:max="359"
-            android:defaultValue="280"
-            app:showSeekBarValue="true" />
+    <PreferenceCategory android:title="Adjust">
+        <Preference
+            android:key="nav_tiling"
+            android:title="Tiling"
+            android:summary="Family, seed, generation, pan mode" />
+        <Preference
+            android:key="nav_color"
+            android:title="Color"
+            android:summary="Palette, brightness, depth, custom slots" />
+        <Preference
+            android:key="nav_borders"
+            android:title="Borders"
+            android:summary="Width, OKLCH color, alpha" />
+        <Preference
+            android:key="nav_motion"
+            android:title="Motion"
+            android:summary="Ripple amplitude, speed, kind, mode" />
+        <Preference
+            android:key="nav_background"
+            android:title="Background"
+            android:summary="Mode + OKLCH color" />
+        <Preference
+            android:key="nav_audio"
+            android:title="@string/audio_category"
+            android:summary="@string/audio_file_summary" />
     </PreferenceCategory>
 </PreferenceScreen>

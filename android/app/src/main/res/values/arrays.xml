@@ -11,8 +11,8 @@
         <item>2</item>
     </string-array>
 
-    <!-- Seeds — only the P3 list is exposed via the same key; the C++ side
-         clamps out-of-range indices, so it's safe to leave one global list. -->
+    <!-- Seeds per family — SettingsFragment swaps these into the seed
+         ListPreference whenever the family changes. -->
     <string-array name="seed_p3_entries">
         <item>Sun</item>
         <item>Star</item>
@@ -24,6 +24,26 @@
         <item>1</item>
         <item>2</item>
         <item>3</item>
+    </string-array>
+
+    <string-array name="seed_p2_entries">
+        <item>Sun</item>
+        <item>Star</item>
+    </string-array>
+    <string-array name="seed_p2_values">
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+
+    <string-array name="seed_chair_entries">
+        <item>Pinwheel</item>
+        <item>Small</item>
+        <item>Large</item>
+    </string-array>
+    <string-array name="seed_chair_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
     </string-array>
 
     <string-array name="preset_entries">
@@ -38,6 +58,7 @@
         <item>Sage</item>
         <item>Spectra</item>
         <item>Girih</item>
+        <item>Custom</item>
     </string-array>
     <string-array name="preset_values">
         <item>0</item>
@@ -51,6 +72,7 @@
         <item>8</item>
         <item>9</item>
         <item>10</item>
+        <item>11</item>
     </string-array>
 
     <string-array name="color_mode_entries">
@@ -72,4 +94,36 @@
         <item>0</item>
         <item>1</item>
     </string-array>
+
+    <string-array name="ripple_mode_entries">
+        <item>Time</item>
+        <item>Page scroll</item>
+        <item>Time + page scroll</item>
+    </string-array>
+    <string-array name="ripple_mode_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <string-array name="pan_mode_entries">
+        <item>Locked</item>
+        <item>Generative</item>
+    </string-array>
+    <string-array name="pan_mode_values">
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+
+    <string-array name="ripple_kind_entries">
+        <item>Color</item>
+        <item>Displacement</item>
+        <item>Both</item>
+    </string-array>
+    <string-array name="ripple_kind_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
 </resources>

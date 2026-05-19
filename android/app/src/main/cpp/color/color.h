@@ -1,6 +1,6 @@
 #pragma once
 
-#include "penrose.h"
+#include "tiling/penrose.h"
 
 #include <array>
 #include <cstdint>
@@ -11,17 +11,37 @@ namespace penrose {
 // =============================================================================
 // Color types
 // =============================================================================
-// All colors live in OKLCH (Björn Ottosson, 2020) and are converted to sRGB at
-// the boundary before being uploaded to the UBO. OKLCH gives us perceptually
-// uniform interpolation, which is what makes evenStops(...) read as a smooth
-// gradient instead of muddy in the middle.
+// Palette colors are authored in OKLCH (Björn Ottosson, 2020) for
+// perceptually uniform interpolation and converted to the swapchain's
+// working space at upload time. `oklchToShaderColor` selects the conversion
+// based on the active swapchain:
+//
+//   * sRGB swapchain (`VK_FORMAT_*_SRGB`): write linear sRGB; the hardware
+//     applies the sRGB encode on store.
+//   * DisplayP3 swapchain (`A2B10G10R10_UNORM_PACK32` +
+//     `DISPLAY_P3_NONLINEAR_EXT`): matrix-transform linear sRGB into linear
+//     DisplayP3 (both D65, no chromatic adaptation) and apply the sRGB
+//     piecewise EOTF (which is DisplayP3-nonlinear's transfer curve too).
+//
+// Colors outside the sRGB triangle but inside P3 survive through to the
+// shader on the wide-gamut path.
 
 struct Oklch { float L, C, H; };
-struct LinearRGB { float r, g, b, a; }; // linear-light, pre-multiplied alpha = 1
-struct SrgbRGBA { float r, g, b, a; };  // gamma-encoded sRGB, what the GPU wants
+struct LinearRGB { float r, g, b; };
+struct ShaderColor { float r, g, b, a; }; // value the UBO/shader sees
 
-// Convert OKLCH to gamma-encoded sRGB (clamped to [0, 1]).
-SrgbRGBA oklchToSrgb(Oklch c, float alpha = 1.0f);
+// OKLCH → linear sRGB (unclipped: returned components may exceed [0,1] when
+// the OKLCH point is outside the sRGB gamut).
+LinearRGB oklchToLinearSrgb(Oklch c);
+
+// Linear sRGB (D65) → linear DisplayP3 (D65). No chromatic adaptation needed.
+LinearRGB linearSrgbToLinearP3(LinearRGB s);
+
+// Choose the right encode for the current swapchain colorspace. `linearOutput`
+// is true when the swapchain format applies gamma in hardware (any _SRGB
+// format); false when the shader is expected to write already-encoded values
+// (the 10-bit P3 _UNORM_PACK32 path).
+ShaderColor oklchToShaderColor(Oklch c, float alpha, bool wideGamutP3, bool linearOutput);
 
 // =============================================================================
 // Palette presets
@@ -43,6 +63,7 @@ enum class Preset : int {
     Sage,
     Spectra,
     Girih,
+    Custom,
     Count_
 };
 
@@ -53,7 +74,10 @@ struct PresetResult {
     Oklch bg;
 };
 
-PresetResult buildPreset(Preset p, int k);
+// Build the palette for `p`. When `p == Preset::Custom`, `customSource`
+// supplies the user-authored OKLCH slots (kMaxColors entries; only the
+// first `k` are read). For every other preset, `customSource` is ignored.
+PresetResult buildPreset(Preset p, int k, const Oklch* customSource = nullptr);
 
 // =============================================================================
 // Color modes — assign each tile a bucket index, then map to a palette slot.

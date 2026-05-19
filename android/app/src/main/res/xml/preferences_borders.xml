@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <Preference
+        android:key="nav_back"
+        android:title="← Back"
+        android:summary="" />
+
+    <PreferenceCategory android:title="Borders">
+        <SwitchPreferenceCompat
+            android:key="border_on"
+            android:title="Show borders"
+            android:defaultValue="true" />
+        <SeekBarPreference
+            android:key="border_width"
+            android:title="Width"
+            android:summary="0..6, hundredths"
+            android:min="0" android:max="600" android:defaultValue="80"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="border_a"
+            android:title="Alpha"
+            android:min="0" android:max="100" android:defaultValue="35"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="border_l"
+            android:title="Lightness (OKLCH L ×100)"
+            android:min="0" android:max="100" android:defaultValue="95"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="border_c"
+            android:title="Chroma (OKLCH C ×100)"
+            android:min="0" android:max="37" android:defaultValue="0"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="border_h"
+            android:title="Hue (degrees)"
+            android:min="0" android:max="359" android:defaultValue="0"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+</PreferenceScreen>

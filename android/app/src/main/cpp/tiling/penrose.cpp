@@ -1,4 +1,4 @@
-#include "penrose.h"
+#include "tiling/penrose.h"
 
 #include <cmath>
 #include <utility>
@@ -291,12 +291,12 @@ void edgesPenrose(const Tile& t, std::vector<Edge>& out) {
     // A-B (leg), B-C (leg), A-C (base).
     Edge e{};
     e.tileType = t.type;
-    e.kind = static_cast<uint8_t>(EdgeKind::Leg);
+    e.kind = EdgeKind::Leg;
     e.p1x = t.x[0]; e.p1y = t.y[0]; e.p2x = t.x[1]; e.p2y = t.y[1];
     out.push_back(e);
     e.p1x = t.x[1]; e.p1y = t.y[1]; e.p2x = t.x[2]; e.p2y = t.y[2];
     out.push_back(e);
-    e.kind = static_cast<uint8_t>(EdgeKind::Base);
+    e.kind = EdgeKind::Base;
     e.p1x = t.x[0]; e.p1y = t.y[0]; e.p2x = t.x[2]; e.p2y = t.y[2];
     out.push_back(e);
 }
@@ -304,7 +304,7 @@ void edgesPenrose(const Tile& t, std::vector<Edge>& out) {
 void edgesChair(const Tile& t, std::vector<Edge>& out) {
     Edge e{};
     e.tileType = t.type;
-    e.kind = static_cast<uint8_t>(EdgeKind::Edge);
+    e.kind = EdgeKind::ChairEdge;
     for (int i = 0; i < 6; ++i) {
         const int j = (i + 1) % 6;
         e.p1x = t.x[i]; e.p1y = t.y[i];

@@ -1,0 +1,5 @@
+{
+  "id": "ambient_drift",
+  "name": "Ambient drift",
+  "description": "Empty graph; the wallpaper rides on the user's sliders alone. Useful starting point for non-reactive looks."
+}

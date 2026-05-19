@@ -1,9 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Penrose" parent="Theme.AppCompat.DayNight">
+    <!-- Host activity theme. Edge-to-edge so the SurfaceView preview fills
+         the whole screen behind the bottom sheet. -->
+    <style name="Theme.Penrose" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="colorPrimary">#D4A857</item>
         <item name="colorAccent">#D4A857</item>
-        <!-- Required by PreferenceFragmentCompat so it can find its layouts. -->
         <item name="preferenceTheme">@style/PreferenceThemeOverlay</item>
+    </style>
+
+    <!-- Bottom-sheet dialog theme. Dark glass surface with rounded top
+         corners; background blur is applied imperatively in
+         SettingsBottomSheetDialogFragment.onStart so the live preview
+         underneath shows as frosted glass on API 31+. -->
+    <style name="Theme.Penrose.BottomSheet" parent="ThemeOverlay.Material3.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/Widget.Penrose.BottomSheet</item>
+        <item name="preferenceTheme">@style/PreferenceThemeOverlay</item>
+    </style>
+
+    <style name="Widget.Penrose.BottomSheet" parent="Widget.Material3.BottomSheet">
+        <item name="shapeAppearance">@style/ShapeAppearance.Penrose.BottomSheet</item>
+        <item name="backgroundTint">#8C1C1C1C</item>
+    </style>
+
+    <style name="ShapeAppearance.Penrose.BottomSheet" parent="ShapeAppearance.Material3.Corner.ExtraLarge">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSizeTopLeft">24dp</item>
+        <item name="cornerSizeTopRight">24dp</item>
+        <item name="cornerSizeBottomLeft">0dp</item>
+        <item name="cornerSizeBottomRight">0dp</item>
     </style>
 </resources>

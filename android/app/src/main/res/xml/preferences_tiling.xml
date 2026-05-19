@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <Preference
+        android:key="nav_back"
+        android:title="← Back"
+        android:summary="" />
+
+    <PreferenceCategory android:title="Tiling">
+        <ListPreference
+            android:key="family"
+            android:title="Family"
+            android:summary="%s"
+            android:entries="@array/family_entries"
+            android:entryValues="@array/family_values"
+            android:defaultValue="0" />
+        <ListPreference
+            android:key="seed"
+            android:title="Seed"
+            android:summary="Symmetry of the starting patch"
+            android:entries="@array/seed_p3_entries"
+            android:entryValues="@array/seed_p3_values"
+            android:defaultValue="0" />
+        <SeekBarPreference
+            android:key="generation"
+            android:title="Generation"
+            android:summary="More generations = more tiles"
+            android:min="0" android:max="8" android:defaultValue="6"
+            app:showSeekBarValue="true" />
+        <ListPreference
+            android:key="pan_mode"
+            android:title="@string/pan_mode_title"
+            android:summary="@string/pan_mode_summary"
+            android:entries="@array/pan_mode_entries"
+            android:entryValues="@array/pan_mode_values"
+            android:defaultValue="0" />
+    </PreferenceCategory>
+</PreferenceScreen>

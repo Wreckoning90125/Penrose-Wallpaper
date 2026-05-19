@@ -1,0 +1,20 @@
+{
+  "id": "beat_strobe",
+  "name": "Beat strobe",
+  "description": "Beat envelope adds brightness flashes and ripple amplitude pulses on top of the slider baselines.",
+  "graph": {
+    "nodes": [
+      { "uid": 1, "kind":  8, "x": -400, "y":   0, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 2, "kind": 21, "x":  400, "y":   0, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 3, "kind": 19, "x":  400, "y":  80, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 4, "kind": 18, "x":    0, "y":   0, "p0": 1.0, "p1": 0, "p2": 0 },
+      { "uid": 5, "kind": 18, "x":    0, "y":  80, "p0": 0.8, "p1": 0, "p2": 0 }
+    ],
+    "links": [
+      { "src": 1, "srcPin": "out", "dst": 4, "dstPin": "x"  },
+      { "src": 4, "srcPin": "out", "dst": 2, "dstPin": "in" },
+      { "src": 1, "srcPin": "out", "dst": 5, "dstPin": "x"  },
+      { "src": 5, "srcPin": "out", "dst": 3, "dstPin": "in" }
+    ]
+  }
+}

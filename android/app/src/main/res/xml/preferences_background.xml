@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <Preference
+        android:key="nav_back"
+        android:title="← Back"
+        android:summary="" />
+
+    <PreferenceCategory android:title="Background">
+        <ListPreference
+            android:key="bg_mode"
+            android:title="Mode"
+            android:summary="%s"
+            android:entries="@array/bg_mode_entries"
+            android:entryValues="@array/bg_mode_values"
+            android:defaultValue="0" />
+        <SeekBarPreference
+            android:key="bg_l"
+            android:title="Lightness (OKLCH L ×100)"
+            android:min="0" android:max="100" android:defaultValue="4"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="bg_c"
+            android:title="Chroma (OKLCH C ×100)"
+            android:min="0" android:max="37" android:defaultValue="0"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="bg_h"
+            android:title="Hue (degrees)"
+            android:min="0" android:max="359" android:defaultValue="280"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+</PreferenceScreen>

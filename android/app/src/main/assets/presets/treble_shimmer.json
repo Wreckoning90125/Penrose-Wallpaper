@@ -1,0 +1,26 @@
+{
+  "id": "treble_shimmer",
+  "name": "Treble shimmer",
+  "description": "Presence adds ripple amplitude, brilliance adds speed, air lifts brightness. Layered on top of the slider baselines.",
+  "graph": {
+    "nodes": [
+      { "uid": 1, "kind":  5, "x": -400, "y": -100, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 2, "kind":  6, "x": -400, "y":  -20, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 3, "kind":  7, "x": -400, "y":   60, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 4, "kind": 19, "x":  400, "y":    0, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 5, "kind": 20, "x":  400, "y":   80, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 6, "kind": 21, "x":  400, "y":  160, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 7, "kind": 18, "x":    0, "y": -100, "p0": 1.3, "p1": 0, "p2": 0 },
+      { "uid": 8, "kind": 18, "x":    0, "y":  -20, "p0": 1.8, "p1": 0, "p2": 0 },
+      { "uid": 9, "kind": 18, "x":    0, "y":   60, "p0": 0.9, "p1": 0, "p2": 0 }
+    ],
+    "links": [
+      { "src": 1, "srcPin": "out", "dst": 7, "dstPin": "x"  },
+      { "src": 7, "srcPin": "out", "dst": 4, "dstPin": "in" },
+      { "src": 2, "srcPin": "out", "dst": 8, "dstPin": "x"  },
+      { "src": 8, "srcPin": "out", "dst": 5, "dstPin": "in" },
+      { "src": 3, "srcPin": "out", "dst": 9, "dstPin": "x"  },
+      { "src": 9, "srcPin": "out", "dst": 6, "dstPin": "in" }
+    ]
+  }
+}

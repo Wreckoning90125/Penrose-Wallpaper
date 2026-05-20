@@ -259,6 +259,7 @@ void Renderer::considerGrowth() {
     const int maxGen = (settings_.family == Family::Chair)       ? kMaxGenChair :
                        (settings_.family == Family::P2)          ? kMaxGenP2 :
                        (settings_.family == Family::Dodecagonal) ? kMaxGenDodeca :
+                       (settings_.family == Family::Pinwheel)    ? kMaxGenPinwheel :
                                                                    kMaxGenP3;
     while (panAccumPx_ >= threshold && effectiveGeneration_ < maxGen) {
         panAccumPx_ -= threshold;

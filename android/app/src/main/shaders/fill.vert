@@ -51,13 +51,15 @@ float wavePhi(vec2 p, float omegaT, float pagePhase, float fam) {
             phi += cos(dot(p, e) * 6.0 + omegaT + pagePhase);
         }
         return phi * 0.25;
-    } else {                    // Dodecagonal — 12-fold
+    } else if (fam < 3.5) {     // Dodecagonal — 12-fold
         for (int j = 0; j < 12; ++j) {
             float a = float(j) * PI_OVER_6;
             vec2  e = vec2(cos(a), sin(a));
             phi += cos(dot(p, e) * 6.0 + omegaT + pagePhase);
         }
         return phi * (1.0 / 12.0);
+    } else {                    // Pinwheel — isotropic radial wave
+        return cos(length(p) * 6.0 + omegaT + pagePhase);
     }
 }
 
@@ -80,13 +82,17 @@ vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float fam) {
             grad += -sin(dot(p, e) * 6.0 + omegaT + pagePhase) * (6.0 * e);
         }
         return grad * 0.25;
-    } else {                    // Dodecagonal — 12-fold
+    } else if (fam < 3.5) {     // Dodecagonal — 12-fold
         for (int j = 0; j < 12; ++j) {
             float a = float(j) * PI_OVER_6;
             vec2  e = vec2(cos(a), sin(a));
             grad += -sin(dot(p, e) * 6.0 + omegaT + pagePhase) * (6.0 * e);
         }
         return grad * (1.0 / 12.0);
+    } else {                    // Pinwheel — radial wave, no preferred axis
+        float r = length(p);
+        if (r < 1e-4) return vec2(0.0);
+        return -sin(r * 6.0 + omegaT + pagePhase) * 6.0 * (p / r);
     }
 }
 

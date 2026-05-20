@@ -21,7 +21,7 @@ baseline.
 
 1. All tiling docs live in `docs/tilings/`.
 2. One file per **symmetry family** (5-fold, 7-fold, 8-fold, 12-fold,
-   periodic). A family file may document several distinct *systems*.
+   pinwheel, periodic). A family file may document several distinct *systems*.
 3. Within a file, **every distinct tiling system is one `##` section** that
    follows the Document Template below — verbatim, every section present, in
    order. A system with nothing to say under a heading writes `None.` or
@@ -122,6 +122,7 @@ These terms have a fixed meaning across all documents here. Use them exactly.
 | [`octagonal.md`](octagonal.md) | 8-fold | Ammann–Beenker tiling; Keplerian octagonal tessellation |
 | [`dodecagonal.md`](dodecagonal.md) | 12-fold | Socolar (butterfly) tiling; Stampfli 12-star / square-triangle; de Bruijn rhomb-square; ship tiling; Keplerian dodecagonal recurrence |
 | [`heptagonal.md`](heptagonal.md) | 7-fold | Keplerian & Dürer-type heptagon attempts; rhomb dualization tilings; Harriss substitution; Danzer sevenfold tiling |
+| [`pinwheel.md`](pinwheel.md) | none (∞ orientations) | Conway–Radin pinwheel tiling; Sadun generalisation |
 | [`periodic-reference.md`](periodic-reference.md) | periodic | Cairo tiling; conventional periodic tilings and the 17 wallpaper groups (contrast baseline) |
 
 ## Conventions
@@ -132,10 +133,11 @@ These terms have a fixed meaning across all documents here. Use them exactly.
   describe, or link to a source.
 - **Renderer mapping is mandatory.** Every system says, explicitly, whether
   it is implemented in the renderer and what a `Family` entry would cost. The
-  app currently implements four families — P3 and P2 (see
+  app currently implements five families — P3 and P2 (see
   `pentagonal-penrose.md`), the Chair L-tromino tiling (a 4-fold substitution
-  not covered by the source PDFs; documented as a renderer note only), and the
-  de Bruijn rhomb-square dodecagonal tiling (see `dodecagonal.md`).
+  not covered by the source PDFs; documented as a renderer note only), the
+  de Bruijn rhomb-square dodecagonal tiling (see `dodecagonal.md`), and the
+  Conway–Radin pinwheel (see `pinwheel.md`).
 - **Primary source.** Most of this material is synthesised from John Savard's
   tiling series at `http://www.quadibloc.com/math` (page IDs are cited per
   system), cross-checked against the primary academic literature each page

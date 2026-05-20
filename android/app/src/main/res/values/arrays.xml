@@ -5,12 +5,14 @@
         <item>P2 (kites &amp; darts)</item>
         <item>Chair (L-trominoes)</item>
         <item>Dodecagonal (rhomb&#8211;square)</item>
+        <item>Pinwheel (right triangles)</item>
     </string-array>
     <string-array name="family_values">
         <item>0</item>
         <item>1</item>
         <item>2</item>
         <item>3</item>
+        <item>4</item>
     </string-array>
 
     <!-- Seeds per family — SettingsFragment swaps these into the seed
@@ -54,6 +56,17 @@
         <item>Quasi</item>
     </string-array>
     <string-array name="seed_dodeca_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <string-array name="seed_pinwheel_entries">
+        <item>Square</item>
+        <item>Triangle</item>
+        <item>Rectangle</item>
+    </string-array>
+    <string-array name="seed_pinwheel_values">
         <item>0</item>
         <item>1</item>
         <item>2</item>

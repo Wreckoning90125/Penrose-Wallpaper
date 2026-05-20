@@ -59,6 +59,7 @@ inline bool hideSeam(Family fam, EdgeKind k1, EdgeKind k2) {
         case Family::P2:          return k1 == EdgeKind::Leg  && k2 == EdgeKind::Leg;
         case Family::Chair:       return false;
         case Family::Dodecagonal: return false;
+        case Family::Pinwheel:    return false;
     }
     return false;
 }

@@ -429,6 +429,102 @@ std::vector<Tile> generateDodecagonal(int seedIdx, int generations) {
 }
 
 // =============================================================================
+// Pinwheel — Conway / Radin 1:2:sqrt(5) substitution
+// =============================================================================
+// Every tile is a 1:2:sqrt(5) right triangle stored as [S, L, M]: the small
+// (~26.57 deg), right (90 deg) and medium (~63.43 deg) angled corners, in that
+// vertex order. One deflation replaces a tile by five sub-tiles at 1/sqrt(5)
+// scale; the substitution turns by atan(1/2) — an irrational multiple of pi —
+// so orientations never repeat. The five children are Radin's component
+// triangles of the canonical level-1 triangle T1 = [(-2,1),(2,-1),(3,1)], each
+// carried onto the parent by the unique affine map T1 -> [S,L,M], which
+// reproduces reflected tiles without special handling.
+
+namespace {
+
+// The five components of T1, each as canonical (S, L, M) corners.
+struct PinChild { float s[2], l[2], m[2]; };
+constexpr PinChild kPinChildren[5] = {
+    { { -2.0f, 1.0f }, {  0.0f, 1.0f }, {  0.0f,  0.0f } },  // A
+    { {  2.0f, 1.0f }, {  0.0f, 1.0f }, {  0.0f,  0.0f } },  // B
+    { {  0.0f, 0.0f }, {  2.0f, 0.0f }, {  2.0f,  1.0f } },  // C
+    { {  0.0f, 0.0f }, {  2.0f, 0.0f }, {  2.0f, -1.0f } },  // D
+    { {  2.0f,-1.0f }, {  2.0f, 1.0f }, {  3.0f,  1.0f } },  // E
+};
+
+// Build a pinwheel tile from its S, L, M corners. type encodes chirality:
+// 0 when [S,L,M] winds the same way as the canonical prototile (positive
+// cross product), 1 when it is the mirror image.
+inline Tile mkPin(float sx, float sy, float lx, float ly, float mx, float my) {
+    Tile t{};
+    t.vcount = 3;
+    const float cross = (lx - sx) * (my - sy) - (ly - sy) * (mx - sx);
+    t.type = static_cast<uint8_t>(cross < 0.0f ? 1 : 0);
+    t.x[0] = sx; t.y[0] = sy;
+    t.x[1] = lx; t.y[1] = ly;
+    t.x[2] = mx; t.y[2] = my;
+    return t;
+}
+
+} // namespace
+
+std::vector<Tile> subdividePinwheel(const std::vector<Tile>& in) {
+    std::vector<Tile> out;
+    out.reserve(in.size() * 5);
+    for (const Tile& t : in) {
+        const float sx = t.x[0], sy = t.y[0];   // S = v0
+        const float lx = t.x[1], ly = t.y[1];   // L = v1
+        const float mx = t.x[2], my = t.y[2];   // M = v2
+        // Affine image of canonical T1 = [(-2,1),(2,-1),(3,1)] onto [S,L,M]:
+        //   P(px,py) = S + (px+2)*c1 + (py-1)*c2,
+        // with c1 = (M-S)/5 and c2 = 2*(M-S)/5 - (L-S)/2. This sends
+        // (-2,1)->S, (2,-1)->L, (3,1)->M, so it carries the five canonical
+        // children exactly onto the parent triangle.
+        const float ux = lx - sx, uy = ly - sy;             // L - S
+        const float wx = mx - sx, wy = my - sy;             // M - S
+        const float c1x = wx * 0.2f,             c1y = wy * 0.2f;
+        const float c2x = wx * 0.4f - ux * 0.5f, c2y = wy * 0.4f - uy * 0.5f;
+        for (const PinChild& ch : kPinChildren) {
+            const float* corner[3] = { ch.s, ch.l, ch.m };
+            float p[6];
+            for (int k = 0; k < 3; ++k) {
+                const float a = corner[k][0] + 2.0f;
+                const float b = corner[k][1] - 1.0f;
+                p[2 * k]     = sx + a * c1x + b * c2x;
+                p[2 * k + 1] = sy + a * c1y + b * c2y;
+            }
+            out.push_back(mkPin(p[0], p[1], p[2], p[3], p[4], p[5]));
+        }
+    }
+    return out;
+}
+
+std::vector<Tile> seedPinwheel(SeedPinwheel seed) {
+    std::vector<Tile> out;
+    // A 1:2:sqrt(5) triangle pair fills a w-by-(w/2) rectangle; the two
+    // halves are mirror images — exactly the chirality pair the substitution
+    // propagates. (lox, loy) is the rectangle's lower-left corner.
+    auto rect = [&out](float lox, float loy, float w) {
+        const float h = w * 0.5f;
+        out.push_back(mkPin(lox,     loy,     lox + w, loy,     lox + w, loy + h));
+        out.push_back(mkPin(lox + w, loy + h, lox,     loy + h, lox,     loy));
+    };
+    switch (seed) {
+        case SeedPinwheel::Square:        // 1.6 x 1.6 square — 4 tiles
+            rect(-0.8f,  0.0f, 1.6f);
+            rect(-0.8f, -0.8f, 1.6f);
+            break;
+        case SeedPinwheel::Triangle:      // one centred triangle
+            out.push_back(mkPin(-0.8f, -0.4f, 0.8f, -0.4f, 0.8f, 0.4f));
+            break;
+        case SeedPinwheel::Rectangle:     // one 2:1 rectangle — 2 tiles
+            rect(-0.8f, -0.4f, 1.6f);
+            break;
+    }
+    return out;
+}
+
+// =============================================================================
 // Family-erased generate()
 // =============================================================================
 
@@ -461,6 +557,14 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
         }
         case Family::Dodecagonal: {
             tiles = generateDodecagonal(seedIdx, generations);
+            break;
+        }
+        case Family::Pinwheel: {
+            int s = seedIdx;
+            if (s < 0 || s > 2) s = 0;
+            tiles = seedPinwheel(static_cast<SeedPinwheel>(s));
+            int cap = generations < 0 ? 0 : (generations > kMaxGenPinwheel ? kMaxGenPinwheel : generations);
+            for (int g = 0; g < cap; ++g) tiles = subdividePinwheel(tiles);
             break;
         }
     }

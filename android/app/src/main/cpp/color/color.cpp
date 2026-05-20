@@ -259,7 +259,11 @@ Classification classify(const std::vector<Tile>& tiles,
                 c.bucket[i] = static_cast<uint8_t>(tiles[i].type % ob);
         } else {
             // Bin the direction of edge v[angA] -> v[angB] into `ob` slots.
-            const double denom = 2.0 * kPi / ob;
+            // A de Bruijn rhomb edge is undirected — its angle only spans
+            // [0,pi) — so when orientHalfTurn is set, fold mod pi so every
+            // slot is reachable instead of just the lower half.
+            const double span  = cs.orientHalfTurn ? kPi : 2.0 * kPi;
+            const double denom = span / ob;
             for (size_t i = 0; i < n; ++i) {
                 const Tile& t = tiles[i];
                 const float dx = t.x[cs.angB] - t.x[cs.angA];
@@ -267,6 +271,7 @@ Classification classify(const std::vector<Tile>& tiles,
                 double ang = std::atan2(static_cast<double>(dy),
                                         static_cast<double>(dx));
                 if (ang < 0.0) ang += 2.0 * kPi;
+                if (cs.orientHalfTurn && ang >= kPi) ang -= kPi;
                 int bin = static_cast<int>(std::floor((ang + denom * 0.5) / denom));
                 bin = ((bin % ob) + ob) % ob;
                 c.bucket[i] = static_cast<uint8_t>(bin);

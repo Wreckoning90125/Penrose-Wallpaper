@@ -335,18 +335,31 @@ std::vector<Tile> generateMultigrid(int gridCount, int seedIdx, int generations)
         diry[k] = std::sin(a);
     }
 
-    // Grid offsets: an arithmetic progression with an irrational common
-    // difference (sqrt(2) - 1). For any N this is non-singular — no three grid
-    // lines ever concurrent — so the de Bruijn dual is a clean, gap-free,
-    // overlap-free rhombic tiling. `seedIdx` shifts the whole progression to a
-    // different patch of the same tiling.
+    // Grid offsets. `seedIdx` picks one of three regimes.
+    const int si = (seedIdx >= 0 && seedIdx < 3) ? seedIdx : 0;
     std::vector<double> gamma(N);
     {
-        const double phase[3] = { 0.0, 0.1701, 0.4327 };
-        const int si = (seedIdx >= 0 && seedIdx < 3) ? seedIdx : 0;
-        const double base = 0.5 + phase[si];
-        for (int k = 0; k < N; ++k)
-            gamma[k] = std::fmod(base + k * 0.4142135623730951, 1.0);
+        if (si == 0) {
+            // Seed 0 (Rosette / Star): every offset is the same constant 1/2.
+            // Equal offsets make the multigrid invariant under rotation by
+            // pi/N, so the de Bruijn dual is exactly 2N-fold symmetric about
+            // its centre. It is still non-singular: the only rational
+            // concurrences are the {0,2,4,...} / {1,3,5,...} family triples
+            // (whose grid directions sum to zero), and those are ruled out
+            // because the alternating offset sum is 1/2 — not an integer — so
+            // the per-intersection enumeration below stays gap- and
+            // overlap-free without any singular-centre special case.
+            for (int k = 0; k < N; ++k) gamma[k] = 0.5;
+        } else {
+            // Seeds 1-2 (Drift, Quasi): an arithmetic progression with an
+            // irrational common difference (sqrt(2) - 1). Non-singular for any
+            // N and quasiperiodic — no exact rotation centre; the phase term
+            // shifts the patch to a different region of the same tiling.
+            const double phase[2] = { 0.1701, 0.4327 };
+            const double base = 0.5 + phase[si - 1];
+            for (int k = 0; k < N; ++k)
+                gamma[k] = std::fmod(base + k * 0.4142135623730951, 1.0);
+        }
     }
 
     int gen = generations < 0 ? 0 : generations;
@@ -360,6 +373,15 @@ std::vector<Tile> generateMultigrid(int gridCount, int seedIdx, int generations)
     // out to that radius (for N = 6 this is the original 3*(B-1)).
     const double keepLin = 0.5 * N * (B - 1);
     const double keepR2 = keepLin * keepLin;
+
+    // Seed 0 is 2N-fold symmetric, but the de Bruijn dual of a constant-offset
+    // grid centres that symmetry on P = (-1, -cot(pi/2N)) — not the origin
+    // (rotating a dual cell yields R(.) - 2*dir[0], a rotation about P). Shift
+    // every rhomb by -P so the rosette sits at the origin and the radial
+    // centroid crop below stays symmetric. Seeds 1-2 are quasiperiodic, with
+    // no rotation centre, so they take no shift.
+    const double shiftx = (si == 0) ? 1.0 : 0.0;
+    const double shifty = (si == 0) ? 1.0 / std::tan(kPi / (2.0 * N)) : 0.0;
 
     std::vector<Tile> out;
     double maxR2 = 0.0;
@@ -388,8 +410,10 @@ std::vector<Tile> generateMultigrid(int gridCount, int seedIdx, int generations)
                     }
                     // Rhomb corner v0 takes K_j = r-1, K_k = s-1; the other
                     // three corners step K_j and/or K_k up by one.
-                    const double v0x = basex + (r - 1) * dirx[j] + (s - 1) * dirx[k];
-                    const double v0y = basey + (r - 1) * diry[j] + (s - 1) * diry[k];
+                    const double v0x = basex + (r - 1) * dirx[j]
+                                             + (s - 1) * dirx[k] + shiftx;
+                    const double v0y = basey + (r - 1) * diry[j]
+                                             + (s - 1) * diry[k] + shifty;
                     const double cx[4] = {
                         v0x, v0x + dirx[j], v0x + dirx[j] + dirx[k], v0x + dirx[k] };
                     const double cy[4] = {
@@ -530,21 +554,24 @@ std::vector<Tile> seedPinwheel(SeedPinwheel seed) {
 
 const FamilyInfo kFamilyInfo[kFamilyCount] = {
     // maxGen, deflationRate,        waveSym, hideSeam, depthParallax,
-    //   cls{ typeBuckets, orientBuckets, orientFromType, angA, angB, ringChebyshev }
+    //   cls{ typeBuckets, orientBuckets, orientFromType, angA, angB,
+    //        orientHalfTurn, ringChebyshev }
+    // The de Bruijn rhomb families bin orientation mod pi (orientHalfTurn) and
+    // so need only N orientBuckets, not 2N — a rhomb edge is undirected.
     /* P3            */ { 8, 0.6180339887498949f,  5, 1, true,
-                          { 2, 10, false, 0, 2, false } },
+                          { 2, 10, false, 0, 2, false, false } },
     /* P2            */ { 8, 0.6180339887498949f,  5, 2, true,
-                          { 2, 10, false, 0, 2, false } },
+                          { 2, 10, false, 0, 2, false, false } },
     /* Chair         */ { 7, 0.5f,                 4, 0, false,
-                          { 4,  4, true,  0, 0, true  } },
+                          { 4,  4, true,  0, 0, false, true  } },
     /* Dodecagonal   */ { 8, 0.6180339887498949f, 12, 0, false,
-                          { 3, 12, false, 0, 1, false } },
+                          { 3,  6, false, 0, 1, true,  false } },
     /* Pinwheel      */ { 6, 0.4472135954999579f,  0, 0, true,
-                          { 2, 10, false, 0, 2, false } },
+                          { 2, 10, false, 0, 2, false, false } },
     /* AmmannBeenker */ { 8, 0.6180339887498949f,  8, 0, false,
-                          { 2,  8, false, 0, 1, false } },
+                          { 2,  4, false, 0, 1, true,  false } },
     /* Heptagonal    */ { 8, 0.6180339887498949f, 14, 0, false,
-                          { 3, 14, false, 0, 1, false } },
+                          { 3,  7, false, 0, 1, true,  false } },
 };
 
 // =============================================================================

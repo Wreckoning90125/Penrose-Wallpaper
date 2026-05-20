@@ -134,9 +134,12 @@ bool Renderer::buildGeometry() {
     std::vector<uint32_t>     borderIndices;
     if (settings_.borderOn) {
         std::vector<Edge> edges;
-        const int edgesPerTile = (settings_.family == Family::Chair)       ? 6
-                               : (settings_.family == Family::Dodecagonal) ? 4
-                                                                           : 3;
+        const Family fam = settings_.family;
+        const int edgesPerTile =
+            (fam == Family::Chair)          ? 6 :
+            (fam == Family::Dodecagonal  ||
+             fam == Family::AmmannBeenker ||
+             fam == Family::Heptagonal)     ? 4 : 3;
         edges.reserve(tiles.size() * edgesPerTile);
         for (const Tile& t : tiles) {
             if (t.vcount == 3) edgesPenrose(t, edges);

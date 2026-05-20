@@ -120,6 +120,9 @@ struct ClassSpec {
     bool    orientFromType; // true: orient slot is the tile `type` field;
                             // false: bin the angle of edge v[angA] -> v[angB]
     uint8_t angA, angB;     // vertex indices for the orientation edge
+    bool    orientHalfTurn; // true: the orientation edge is undirected — its
+                            // angle only spans [0,pi) (de Bruijn rhomb edges),
+                            // so bin mod pi to reach every orientBuckets slot
     bool    ringChebyshev;  // ColorMode::Ring   — true box metric, false radial
 };
 

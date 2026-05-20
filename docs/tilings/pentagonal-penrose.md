@@ -1,11 +1,12 @@
 # Pentagonal tilings — the Penrose family
 
-The three Penrose tilings (P1, P2, P3) plus the two structures that overlay
-them (Ammann bars, decapods). All have 5-fold character and golden-ratio
-geometry; all are genuinely aperiodic. P2 and P3 are the renderer's two
-implemented pentagonal families.
+The three Penrose tilings (P1, P2, P3), the two structures that overlay them
+(Ammann bars, decapods), and the Gummelt single-decagon covering equivalent
+to P3. All have 5-fold character and golden-ratio geometry; all are genuinely
+aperiodic. P2 and P3 are the renderer's two implemented pentagonal families.
 
-Source: `quadibloc.com/math/penrose.htm` and linked pages.
+Source: `quadibloc.com/math/penrose.htm` and linked pages; the Gummelt
+covering is from the primary literature (Savard's series has no page on it).
 
 ---
 
@@ -316,3 +317,101 @@ guards against it.
 ### References
 J. H. Conway; Martin Gardner, *Scientific American*, Jan 1977; quadibloc
 `penrose.htm`.
+
+---
+
+## Gummelt decagon covering
+
+**Summary.** A single marked decagon that, allowed to overlap copies of
+itself under one overlap rule, forces a structure equivalent to the Penrose
+P3 rhomb tiling — the first proof that *one* prototile suffices to force the
+quasiperiodic plane, and a model for how quasicrystals grow from a single
+repeating atomic cluster.
+
+| Property         | Value |
+|------------------|-------|
+| Symmetry order   | 10-fold (decagon prototile; resolves to 5-fold P3) |
+| Symmetry type    | statistical |
+| Aperiodic        | yes |
+| Prototiles       | 1 — one marked (decorated) regular decagon |
+| Construction     | covering — overlapping marked decagons |
+| Inflation factor | φ |
+| Attribution      | Petra Gummelt; Penrose-equivalence by P. J. Steinhardt & H.-C. Jeong |
+
+### Prototiles
+One regular decagon, edge length equal to the Penrose rhomb edge, carrying a
+fixed decoration — Gummelt's marking, a set of shaded regions (rendered as
+two colours in Egan's applet). Equivalently the decagon is inscribed with a
+large Penrose **fat rhomb**, or with a **Jack** (a star of four darts, two
+clockwise and two counter-clockwise, one pair overlapping). The shaded
+regions *are* the overlap rule; the decagon is otherwise unmarked.
+
+### Construction
+A *covering*, not a tiling: copies of the one marked decagon are laid down so
+that they may overlap. The overlap rule — two decagons may overlap only where
+their shaded regions coincide (shaded-on-shaded), equivalently only over an
+area at least a specified hexagonal region — admits exactly two overlap
+types, a small **A-overlap** and a large **B-overlap**. An infinite
+arrangement obeying the rule is a *Gummelt covering*. The covering is
+self-similar: an inflation step replaces each decagon by five smaller
+decagons (edge 1/φ), and iterating it generates the covering.
+
+### Matching rules
+The overlap rule is itself the matching rule, enforced by *region overlap*
+rather than edge arrows. Gummelt showed exactly **nine** local "surrounding"
+configurations of a decagon occur in a valid covering (Jeong's type-1 … type-9
+decagons); these map onto the **eleven** Penrose-arrow-legal ways of
+surrounding a fat rhomb, which completes the equivalence with the P3 matching
+rules. Steinhardt & Jeong further showed the rule can be *discarded
+altogether*: maximising the density of a chosen tile cluster (their cluster
+**C** — 9 fat + 4 thin rhombi, density 1/(3φ+1)) yields the Penrose tiling,
+since P3 uniquely maximises that density.
+
+### Symmetry & aperiodicity
+A Gummelt covering is structurally equivalent to a Penrose P3 tiling:
+inscribe each decagon with its fat rhomb / Jack and the covering resolves
+into P3, the thin rhombs automatically filling the gaps. It is therefore
+aperiodic and statistically 10-fold symmetric in exactly the sense P3 is.
+Gummelt's theorem — the marked decagon plus overlap rule admits only
+quasiperiodic coverings — is the first proof that a *single* prototile can
+force quasiperiodicity.
+
+### Variants & relations
+- Direct equivalence with **P3** (above); by a change of inscribed marking,
+  with **P2**.
+- **Quasi-unit-cell (QUC)** reading: the decagon is an overlapping unit cell —
+  like a crystal unit cell, but neighbours overlap and share material. Jeong
+  (2003) proved every decagonal-QUC model equals a rhombus-Penrose-tile model
+  with fourfold-deflated super-tiles.
+- Relaxing the overlap rule yields **random tilings** (Gummelt & Bandt).
+- 3-D generalisation: decagonal prisms / overlapping polytopes, used to model
+  real decagonal quasicrystals such as Al–Ni–Co.
+
+### History & decoration
+Petra Gummelt (1996, *Geometriae Dedicata*) introduced the overlapping-decagon
+covering with an elaborate proof. Steinhardt & Jeong (1996, *Nature*) gave a
+simpler Penrose-equivalence proof and the density-maximisation principle,
+arguing it explains *why* quasicrystals form: if the decagon represents an
+energetically preferred atomic cluster, free-energy minimisation maximises
+its density and so forces quasiperiodicity. The quasi-unit-cell picture was
+later tested experimentally against Al–Ni–Co decagonal quasicrystals.
+
+### Renderer mapping
+Not implemented, and not a natural `Family`: a covering is not a tiling — the
+decagons overlap — so it does not fit the renderer's disjoint-tile-list
+model. Because the covering resolves exactly to P3, the cheapest faithful
+realisation is a **decoration mode on `Family::P3`** — generate the P3 tiling
+as now, then overlay one decagon per fat rhomb — rather than a new generator.
+
+### References
+- P. Gummelt, "Penrose tilings as coverings of congruent decagons,"
+  *Geometriae Dedicata* 62 (1996) 1–17.
+- P. J. Steinhardt & H.-C. Jeong, "A simpler approach to Penrose tiling with
+  implications for quasicrystal formation," *Nature* 382 (1996) 431–433.
+- H.-C. Jeong & P. J. Steinhardt, "Constructing Penrose-like tilings from a
+  single prototile…," *Phys. Rev. B* 55 (1997) 3520–3532.
+- H.-C. Jeong, "Inflation rule for Gummelt coverings with decorated
+  decagons…," arXiv:cond-mat/0304690 (2003).
+- E. A. Lord & S. Ranganathan, "The Gummelt decagon as a 'quasi-unit cell',"
+  *Acta Cryst. A* 57 (2001) 531–539.
+- G. Egan, "Gummelt" applet, `gregegan.net/APPLETS/06/06.html`.

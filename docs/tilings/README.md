@@ -45,7 +45,7 @@ no reordering.
 | Symmetry type   | exact-global / single-centre / statistical / periodic / none |
 | Aperiodic       | yes / no / not-forced |
 | Prototiles      | <count> — <names> |
-| Construction    | substitution / matching-rule / dualization / cut-and-project / direct |
+| Construction    | substitution / matching-rule / dualization / cut-and-project / covering / direct |
 | Inflation factor| <value> or n/a |
 | Attribution     | <people / sources> |
 
@@ -103,13 +103,19 @@ These terms have a fixed meaning across all documents here. Use them exactly.
   superimpose periodic line/tile grids and take the dual.
 - **Construction — cut-and-project**: slice a higher-dimensional periodic
   lattice through an irrational hyperplane (the "acceptance domain").
+- **Construction — covering**: the plane is *covered* by overlapping copies
+  of a single marked prototile, constrained by an overlap rule (which marked
+  regions of two copies may coincide). Unlike a tiling, copies overlap and do
+  not partition the plane; resolving the marked prototile into ordinary tiles
+  recovers an equivalent tiling. Gummelt's decagon covering of the Penrose
+  tiling is the canonical case.
 - φ denotes the golden ratio (1 + √5) / 2.
 
 ## Index
 
 | File | Symmetry | Systems documented |
 |------|----------|--------------------|
-| [`pentagonal-penrose.md`](pentagonal-penrose.md) | 5-fold | Penrose P1 (six-tile), P2 (kite & dart), P3 (rhomb); Ammann bars; decapods |
+| [`pentagonal-penrose.md`](pentagonal-penrose.md) | 5-fold | Penrose P1 (six-tile), P2 (kite & dart), P3 (rhomb); Ammann bars; decapods; Gummelt decagon covering |
 | [`pentagonal-keplerian.md`](pentagonal-keplerian.md) | 5-fold | Keplerian pentagon/star/boat tilings; boat-eliminated tiling; "pentagons and stars alone" |
 | [`pentagonal-binary.md`](pentagonal-binary.md) | 5-fold | Binary tiling; Mikulla–Roth tiling; Robinson & Tübingen triangle tilings; HBS (hexagon-boat-star) tiling |
 | [`pentagonal-islamic.md`](pentagonal-islamic.md) | 5-fold | Islamic decorated-rhomb tiling; Darb-e-Imam girih recurrence |

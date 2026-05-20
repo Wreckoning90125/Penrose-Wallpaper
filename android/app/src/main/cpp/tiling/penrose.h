@@ -33,6 +33,10 @@ struct Tile {
 
 enum class Family : int { P3 = 0, P2 = 1, Chair = 2, Dodecagonal = 3, Pinwheel = 4 };
 
+// Number of Family enumerators. The JNI layer validates the incoming family
+// index against this; keep it in step with the enum above.
+constexpr int kFamilyCount = 5;
+
 // Per-family edge classification used by the border seam-hiding rule.
 //   For Penrose: Leg = the two equal-length sides, Base = the third.
 //   For Chair / Dodecagonal: ChairEdge — no internal seams to hide.

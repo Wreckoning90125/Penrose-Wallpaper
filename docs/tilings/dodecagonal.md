@@ -222,7 +222,7 @@ discovery of quasiperiodicity earlier.
 
 ### Renderer mapping
 Implemented — `Family::Dodecagonal`, the renderer's fourth family, generated
-by `generateDodecagonal` (`tiling/penrose.cpp`). It is the documented
+by `generateMultigrid(6, …)` (`tiling/penrose.cpp`). It is the documented
 fallback: a clean 12-fold *substitution* stayed elusive, so dualization is the
 engine that shipped. A six-direction de Bruijn multigrid is enumerated
 intersection by intersection, bypassing the substitution machinery entirely —

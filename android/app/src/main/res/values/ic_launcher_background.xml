@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Adaptive-icon background. Solid dark plum so the gold rhombi
+         pop against the launcher mask. Same hue as the wallpaper's
+         default Match background. -->
+    <color name="ic_launcher_background">#0B0B10</color>
+</resources>

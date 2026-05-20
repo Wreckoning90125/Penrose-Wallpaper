@@ -1,0 +1,34 @@
+{
+  "id": "spectrum_wave",
+  "name": "Spectrum wave",
+  "description": "Four bands add to four wallpaper outputs: bass -> depth, mid -> brightness, high-mid -> ripple amplitude, presence -> ripple speed. Combined ripple kind (color + displacement).",
+  "settings": {
+    "ripple_kind": "2"
+  },
+  "graph": {
+    "nodes": [
+      { "uid":  1, "kind":  1, "x": -400, "y": -120, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid":  2, "kind":  3, "x": -400, "y":  -40, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid":  3, "kind":  4, "x": -400, "y":   40, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid":  4, "kind":  5, "x": -400, "y":  120, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid":  5, "kind": 19, "x":  400, "y":    0, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid":  6, "kind": 20, "x":  400, "y":   80, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid":  7, "kind": 21, "x":  400, "y":  160, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid":  8, "kind": 22, "x":  400, "y":  240, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid":  9, "kind": 18, "x":    0, "y":   40, "p0": 1.4, "p1": 0, "p2": 0 },
+      { "uid": 10, "kind": 18, "x":    0, "y":  120, "p0": 1.6, "p1": 0, "p2": 0 },
+      { "uid": 11, "kind": 18, "x":    0, "y":  -40, "p0": 1.2, "p1": 0, "p2": 0 },
+      { "uid": 12, "kind": 18, "x":    0, "y": -120, "p0": 1.0, "p1": 0, "p2": 0 }
+    ],
+    "links": [
+      { "src":  3, "srcPin": "out", "dst":  9, "dstPin": "x"  },
+      { "src":  9, "srcPin": "out", "dst":  5, "dstPin": "in" },
+      { "src":  4, "srcPin": "out", "dst": 10, "dstPin": "x"  },
+      { "src": 10, "srcPin": "out", "dst":  6, "dstPin": "in" },
+      { "src":  2, "srcPin": "out", "dst": 11, "dstPin": "x"  },
+      { "src": 11, "srcPin": "out", "dst":  7, "dstPin": "in" },
+      { "src":  1, "srcPin": "out", "dst": 12, "dstPin": "x"  },
+      { "src": 12, "srcPin": "out", "dst":  8, "dstPin": "in" }
+    ]
+  }
+}

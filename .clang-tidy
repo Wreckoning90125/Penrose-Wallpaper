@@ -1,0 +1,23 @@
+# Project-root clang-tidy config. Only kicks in when the build is invoked
+# with -DPENROSE_TIDY=ON (see android/app/src/main/cpp/CMakeLists.txt).
+#
+# HeaderFilterRegex restricts diagnostics to our own source tree —
+# vendored ImGui / ImNodeFlow / crude_json live under
+# android/app/.cxx/.../_deps and we don't want their lint output drowning
+# real findings.
+HeaderFilterRegex: '^(?!.*(_deps|imgui|ImNodeFlow|imnodeflow|imgui_node_editor|crude_json|/sysroot/|/ndk/)).*$'
+
+Checks: >
+  bugprone-*,
+  concurrency-*,
+  cppcoreguidelines-pro-type-static-cast-downcast,
+  performance-*,
+  readability-misleading-indentation,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions
+
+WarningsAsErrors: ''
+
+CheckOptions:
+  - key: performance-unnecessary-value-param.AllowedTypes
+    value: 'ImVec2;VkExtent2D'

@@ -52,6 +52,34 @@ jobs:
           gradle-version: "9.4.1"
           cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/claude/android-live-wallpaper-bciyO' }}
 
+      # Android Lint — Google's curated static analysis for Kotlin /
+      # manifest / resources. Promoted to a gating step so regressions
+      # (exported flags, FGS permissions, deprecated APIs) fail the PR
+      # rather than biting at install time. SARIF feeds GitHub code
+      # scanning on the next step; HTML report is uploaded as an
+      # artifact for direct browsing.
+      - name: Android Lint
+        run: gradle --no-daemon --stacktrace lintRelease
+
+      - name: Upload Lint HTML report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: lint-report-${{ github.sha }}
+          path: android/app/build/reports/lint-results-release.html
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Lint SARIF to GitHub code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@4f3212b61783c3c68e8309a0f18a699764811cda  # v3.27.5
+        with:
+          sarif_file: android/app/build/reports/lint-results-release.sarif
+          category: android-lint
+        # SARIF upload needs `Security events: write` repo permission;
+        # warn-only so PRs from forks still succeed.
+        continue-on-error: true
+
       - name: Build release APK
         # Signed with the committed debug keystore (app/debug.keystore). Not
         # suitable for Play Store but installable directly on any device.
@@ -72,3 +100,60 @@ jobs:
           path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 30
+
+  # Parallel job: UBSan-instrumented debug APK. Cheap (a few percent
+  # overhead) and catches signed-overflow, null-deref, shift-out-of-range
+  # and function-pointer-cast mismatches the moment they happen on a
+  # device. Independent of the release job so a sanitizer trip here
+  # doesn't block APK delivery — install this APK on the test device
+  # to reproduce crashes under instrumented libclang_rt.
+  sanitized-debug:
+    name: assembleDebug (UBSan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: android
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9  # v4.8.0
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407  # v3.2.2
+        with:
+          packages: ""
+
+      - name: Install required SDK packages
+        run: |
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "platform-tools" \
+            "cmake;3.22.1" \
+            "ndk;29.0.14206865"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1  # v4.4.4
+        with:
+          gradle-version: "9.4.1"
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/claude/android-live-wallpaper-bciyO' }}
+
+      - name: Build UBSan-instrumented debug APK
+        run: gradle --no-daemon --stacktrace -PpenroseSanitize=undefined assembleDebug
+
+      - name: Upload sanitized debug APK
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: penrose-debug-ubsan-${{ github.sha }}
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+          retention-days: 14

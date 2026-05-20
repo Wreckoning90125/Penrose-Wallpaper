@@ -1,26 +1,29 @@
 package com.penrose.wallpaper
 
+import android.app.WallpaperManager
 import android.content.Context
 import android.content.SharedPreferences
-import android.os.Handler
-import android.os.HandlerThread
 import android.service.wallpaper.WallpaperService
 import android.util.Log
+import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.SurfaceHolder
-import kotlin.math.hypot
+import android.view.WindowManager
 import kotlin.math.atan2
+import kotlin.math.hypot
 
 /**
  * Live wallpaper entry point. One Engine per visible surface (preview + home).
  *
- * Threading:
- *   - Framework callbacks (onCreate/surfaceCreated/onTouchEvent/etc.) arrive on
- *     the main thread.
- *   - Vulkan work runs on a dedicated HandlerThread per Engine. Touch and
- *     visibility changes are dispatched there via `renderHandler.post {}`.
- *   - SharedPreferences listener fires on the main thread; we post the
- *     applySettings call to the render thread.
+ * Threading model:
+ *   - Framework callbacks (onCreate / surfaceCreated / onTouchEvent /
+ *     onOffsetsChanged / etc.) arrive on the main thread.
+ *   - Every NativeBridge call is funnelled through [session]
+ *     ([RendererSession]) — a single-thread coroutine dispatcher
+ *     that privately owns the renderer's `nativePtr`. Main-thread
+ *     code never reads the pointer; it only describes intent.
+ *   - SharedPreferences listener fires on the main thread; we
+ *     submit the applySettings call to the dispatcher.
  */
 class PenroseWallpaperService : WallpaperService() {
 
@@ -28,74 +31,139 @@ class PenroseWallpaperService : WallpaperService() {
 
     private inner class PenroseEngine
         : Engine(),
-          SharedPreferences.OnSharedPreferenceChangeListener {
+          SharedPreferences.OnSharedPreferenceChangeListener,
+          Choreographer.FrameCallback {
 
-        private val renderThread = HandlerThread("PenroseRender").apply { start() }
-        private val renderHandler = Handler(renderThread.looper)
+        private val session = RendererSession("PenroseRender")
 
-        private var nativePtr: Long = 0L
         private var visible = false
 
         private val prefs: SharedPreferences =
             getSharedPreferences(Settings.PREFS_NAME, Context.MODE_PRIVATE)
+
+        private var rippleAmount = 0f
+        private var rippleMode = 0
+
+        private val choreographer: Choreographer by lazy { Choreographer.getInstance() }
+        private var frameCallbackPosted = false
+        private var startFrameNanos = 0L
 
         // ---- Gesture state (main thread only) ---------------------------
         private var p0Id = -1; private var p0x = 0f; private var p0y = 0f
         private var p1Id = -1; private var p1x = 0f; private var p1y = 0f
         private var pinchDist = 0f
         private var pinchAngle = 0f
+        // Pinch / pan gestures update the renderer immediately; on touch
+        // release we read the live view back and persist it to prefs so the
+        // next session opens at the same zoom / rotation.
+        private var gestureTouched = false
+        // True from ACTION_DOWN through ACTION_UP/CANCEL. Arms the
+        // Choreographer so the renderer pulls touch state at vsync rate
+        // instead of fielding per-event drawFrame posts that would queue
+        // behind FIFO present.
+        private var gestureActive = false
 
         // -----------------------------------------------------------------
 
         override fun onCreate(surfaceHolder: SurfaceHolder) {
             super.onCreate(surfaceHolder)
-            setOffsetNotificationsEnabled(false)
+            setOffsetNotificationsEnabled(true)
             setTouchEventsEnabled(true)
             prefs.registerOnSharedPreferenceChangeListener(this)
 
-            renderHandler.post {
-                nativePtr = NativeBridge.create(assets)
-                if (nativePtr == 0L) {
-                    Log.e(TAG, "native renderer failed to initialise")
-                    return@post
-                }
-                pushSettingsNow()
+            val (screenW, screenH) = currentScreenSize()
+            try {
+                WallpaperManager.getInstance(this@PenroseWallpaperService)
+                    .suggestDesiredDimensions(screenW, screenH)
+            } catch (e: Exception) {
+                Log.w(TAG, "suggestDesiredDimensions failed", e)
             }
+
+            session.start(assets, resources.displayMetrics.density, TAG)
+            // Push initial settings immediately so the very first
+            // surfaceCreated draw lands on populated state. Reading
+            // prefs + arming Choreographer happens on main; the JNI
+            // applySettings is submitted to the render dispatcher.
+            pushSettingsFromPrefs()
+        }
+
+        private fun currentScreenSize(): Pair<Int, Int> {
+            val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            val bounds = wm.currentWindowMetrics.bounds
+            return bounds.width() to bounds.height()
         }
 
         override fun onSurfaceCreated(holder: SurfaceHolder) {
             super.onSurfaceCreated(holder)
             val surface = holder.surface
-            renderHandler.post {
-                if (nativePtr != 0L) NativeBridge.surfaceCreated(nativePtr, surface)
+            session.submit { ptr ->
+                NativeBridge.surfaceCreated(ptr, surface)
+                // Pick up whatever modulation graph the in-app editor /
+                // a preset has written. Wallpaper service never edits
+                // the graph itself, so this is read-only — no
+                // corresponding save path on destroy.
+                loadGraphFromDisk(ptr)
+            }
+        }
+
+        /**
+         * Render-thread only. Reads filesDir/modulation_graph.json into
+         * the active Renderer's Graph via the JNI bridge.
+         */
+        private fun loadGraphFromDisk(ptr: Long) {
+            val f = java.io.File(filesDir, "modulation_graph.json")
+            if (!f.exists()) return
+            try {
+                val json = f.readText()
+                NativeBridge.graphLoad(ptr, json)
+            } catch (e: Exception) {
+                Log.w(TAG, "graph load failed", e)
             }
         }
 
         override fun onSurfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
             super.onSurfaceChanged(holder, format, width, height)
-            renderHandler.post {
-                if (nativePtr != 0L) {
-                    NativeBridge.surfaceChanged(nativePtr, width, height)
-                    if (visible) NativeBridge.drawFrame(nativePtr)
-                }
+            // Re-query the screen window every time the surface resizes so the
+            // fit-to-screen math sees the current orientation. Rotation fires
+            // onSurfaceChanged with the new surface dims; the WindowManager
+            // bounds already reflect the post-rotation configuration by then.
+            // Drawing unconditionally here keeps the wallpaper buffer in sync
+            // with the surface — important on the lockscreen, where the engine
+            // may not be visible but the system still presents the buffer.
+            val (screenW, screenH) = currentScreenSize()
+            session.submit { ptr ->
+                NativeBridge.surfaceChanged(ptr, width, height)
+                NativeBridge.surfaceGeometry(ptr, width, height, screenW, screenH)
+                NativeBridge.drawFrame(ptr)
             }
         }
 
         override fun onSurfaceDestroyed(holder: SurfaceHolder) {
             super.onSurfaceDestroyed(holder)
-            renderHandler.runWithBarrier {
-                if (nativePtr != 0L) NativeBridge.surfaceDestroyed(nativePtr)
+            disarmChoreographer()
+            session.submitBlocking { ptr ->
+                NativeBridge.surfaceDestroyed(ptr)
             }
         }
 
         override fun onVisibilityChanged(isVisible: Boolean) {
             super.onVisibilityChanged(isVisible)
             visible = isVisible
-            renderHandler.post {
-                if (nativePtr != 0L) {
-                    NativeBridge.visibilityChanged(nativePtr, isVisible)
-                    if (isVisible) NativeBridge.drawFrame(nativePtr)
-                }
+            if (isVisible) {
+                session.submit { ptr -> NativeBridge.drawFrame(ptr) }
+            }
+            updateChoreographer()
+        }
+
+        override fun onOffsetsChanged(
+            xOffset: Float, yOffset: Float,
+            xOffsetStep: Float, yOffsetStep: Float,
+            xPixelOffset: Int, yPixelOffset: Int,
+        ) {
+            val shouldDraw = visible && rippleMode == RIPPLE_MODE_PAGE
+            session.submit { ptr ->
+                NativeBridge.setPageOffset(ptr, xOffset)
+                if (shouldDraw) NativeBridge.drawFrame(ptr)
             }
         }
 
@@ -105,6 +173,8 @@ class PenroseWallpaperService : WallpaperService() {
                 MotionEvent.ACTION_DOWN -> {
                     p0Id = event.getPointerId(0)
                     p0x = event.x; p0y = event.y
+                    gestureActive = true
+                    updateChoreographer()
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     if (p1Id == -1) {
@@ -125,28 +195,27 @@ class PenroseWallpaperService : WallpaperService() {
                         val newAngle = atan2(ny1 - ny0, nx1 - nx0)
                         val scale = newDist / pinchDist
                         val rotDelta = newAngle - pinchAngle
-                        val midX = (nx0 + nx1) * 0.5f
-                        val midY = (ny0 + ny1) * 0.5f
-                        renderHandler.post {
-                            if (nativePtr != 0L) {
-                                NativeBridge.touchPinch(nativePtr, midX, midY, scale, rotDelta)
-                                if (visible) NativeBridge.drawFrame(nativePtr)
-                            }
+                        // Update state only; the Choreographer drives drawFrame
+                        // at vsync. Posting drawFrame per touch event would
+                        // queue redundant renders behind FIFO present and lag
+                        // the gesture by frame-count × vsync interval.
+                        session.submit { ptr ->
+                            NativeBridge.touchPinch(ptr, scale, rotDelta)
                         }
                         pinchDist = newDist
                         pinchAngle = newAngle
                         p0x = nx0; p0y = ny0
                         p1x = nx1; p1y = ny1
+                        gestureTouched = true
                     } else if (i0 >= 0) {
                         val nx = event.getX(i0); val ny = event.getY(i0)
-                        val px = p0x; val py = p0y
-                        renderHandler.post {
-                            if (nativePtr != 0L) {
-                                NativeBridge.touchMove(nativePtr, nx, ny, px, py)
-                                if (visible) NativeBridge.drawFrame(nativePtr)
-                            }
+                        val dx = nx - p0x
+                        val dy = ny - p0y
+                        session.submit { ptr ->
+                            NativeBridge.touchMove(ptr, dx, dy)
                         }
                         p0x = nx; p0y = ny
+                        gestureTouched = true
                     }
                 }
                 MotionEvent.ACTION_POINTER_UP -> {
@@ -154,55 +223,121 @@ class PenroseWallpaperService : WallpaperService() {
                     val id = event.getPointerId(ix)
                     if (id == p1Id) { p1Id = -1 }
                     else if (id == p0Id) {
-                        // promote pointer 1 to pointer 0
                         p0Id = p1Id; p0x = p1x; p0y = p1y
                         p1Id = -1
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     p0Id = -1; p1Id = -1
+                    gestureActive = false
+                    updateChoreographer()
+                    if (gestureTouched) {
+                        gestureTouched = false
+                        commitViewToPrefs()
+                    }
                 }
+            }
+        }
+
+        /**
+         * Read the renderer's live view back and persist it. The
+         * SharedPreferences listener will fire and re-push settings on the
+         * render thread; the values are already in `view_` so the round-trip
+         * is a no-op visually.
+         */
+        private fun commitViewToPrefs() {
+            session.submit { ptr ->
+                val out = FloatArray(4)
+                NativeBridge.readView(ptr, out)
+                Settings.saveView(prefs, out[0], out[1], out[2], out[3])
             }
         }
 
         override fun onDestroy() {
+            disarmChoreographer()
             prefs.unregisterOnSharedPreferenceChangeListener(this)
-            renderHandler.runWithBarrier {
-                if (nativePtr != 0L) {
-                    NativeBridge.destroy(nativePtr)
-                    nativePtr = 0L
-                }
-            }
-            renderThread.quitSafely()
+            session.shutdown()
             super.onDestroy()
         }
 
         override fun onSharedPreferenceChanged(sp: SharedPreferences?, key: String?) {
-            renderHandler.post {
-                if (nativePtr != 0L) {
-                    pushSettingsNow()
-                    if (visible) NativeBridge.drawFrame(nativePtr)
-                }
+            // Preset-apply bumps the `_graph_revision` long; sliders /
+            // dropdowns don't. Only reload the JSON on the revision
+            // bump — otherwise every slider drag (60 Hz) would do a
+            // full graph teardown + rebuild on the render thread.
+            val isGraphChange = key == Settings.KEY_GRAPH_REVISION
+            pushSettingsFromPrefs()
+            if (isGraphChange) {
+                session.submit { ptr -> loadGraphFromDisk(ptr) }
+            }
+            if (visible) {
+                session.submit { ptr -> NativeBridge.drawFrame(ptr) }
             }
         }
 
-        private fun pushSettingsNow() {
+        /**
+         * Main thread: read prefs, mirror ripple state to fields used by
+         * [updateChoreographer], submit the JNI applySettings call to
+         * the render dispatcher, and update Choreographer arming. Split
+         * across threads on purpose — Choreographer requires a Looper,
+         * the dispatcher thread has none.
+         */
+        private fun pushSettingsFromPrefs() {
             val s = Settings.load(prefs)
+            rippleAmount = s.rippleAmount
+            rippleMode = s.rippleMode
             val (ints, floats) = s.toNative()
-            NativeBridge.applySettings(nativePtr, ints, floats)
-        }
-    }
-
-    private fun Handler.runWithBarrier(block: () -> Unit) {
-        val lock = Object()
-        var done = false
-        post {
-            try { block() } finally {
-                synchronized(lock) { done = true; lock.notifyAll() }
+            session.submit { ptr ->
+                NativeBridge.applySettings(ptr, ints, floats)
             }
+            updateChoreographer()
         }
-        synchronized(lock) { while (!done) lock.wait() }
+
+        // ----------- Choreographer-driven render loop ---------------------
+
+        private fun updateChoreographer() {
+            // Arm whenever the wallpaper needs a per-frame eval: an
+            // active gesture, the time-term of the ripple, or audio
+            // playback (the C++ graph eval is cheap, but skipping it
+            // entirely while everything is quiet keeps the wallpaper
+            // from burning vsyncs on a static image).
+            val rippleWantsLoop = rippleAmount > 0f &&
+                (rippleMode == RIPPLE_MODE_TIME || rippleMode == RIPPLE_MODE_TIME_PAGE)
+            val wantLoop = visible && (gestureActive || rippleWantsLoop)
+            if (wantLoop) armChoreographer() else disarmChoreographer()
+        }
+
+        private fun armChoreographer() {
+            if (frameCallbackPosted) return
+            frameCallbackPosted = true
+            startFrameNanos = 0L
+            choreographer.postFrameCallback(this)
+        }
+
+        private fun disarmChoreographer() {
+            if (!frameCallbackPosted) return
+            frameCallbackPosted = false
+            choreographer.removeFrameCallback(this)
+        }
+
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!frameCallbackPosted) return
+            if (startFrameNanos == 0L) startFrameNanos = frameTimeNanos
+            val tSeconds = (frameTimeNanos - startFrameNanos) / 1_000_000_000f
+            val drawing = visible
+            session.submit { ptr ->
+                if (!drawing) return@submit
+                NativeBridge.tick(ptr, tSeconds)
+                NativeBridge.drawFrame(ptr)
+            }
+            if (frameCallbackPosted) choreographer.postFrameCallback(this)
+        }
     }
 
-    private companion object { const val TAG = "PenroseWallpaper" }
+    private companion object {
+        const val TAG = "PenroseWallpaper"
+        const val RIPPLE_MODE_TIME = 0
+        const val RIPPLE_MODE_PAGE = 1
+        const val RIPPLE_MODE_TIME_PAGE = 2
+    }
 }

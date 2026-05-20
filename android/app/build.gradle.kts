@@ -55,6 +55,38 @@ android {
         buildConfig = false
     }
 
+    // Android Lint runs Google's curated set of manifest / resource /
+    // Kotlin checks (FGS permission audits, exported-without-filter,
+    // accessibility, deprecation, security). Promoted to CI gate so
+    // ERROR-severity regressions land as PR failures. Warnings still
+    // get reported (HTML + SARIF artifacts uploaded by the workflow)
+    // but don't gate — every project has a long tail of advisory
+    // warnings (OldTargetApi against the current SDK, unused string
+    // resources from preset assets, etc.) and we'd rather see them
+    // in code-scanning than block CI on them.
+    //
+    // No `baseline` file: Lint's baseline workflow CREATES the file
+    // on first run and ABORTS the build asking you to re-run, which
+    // is fine for desktop but breaks every clean CI. If we ever want
+    // baselining, generate it locally with
+    //     gradle lintRelease -Dlint.baselines.continue=true
+    // and check the resulting `lint-baseline.xml` into source control.
+    lint {
+        abortOnError = true
+        warningsAsErrors = false
+        checkReleaseBuilds = true
+        sarifReport = true
+        htmlReport = true
+        ignoreTestSources = true
+        // Suppress the bogus OldTargetApi warning — targetSdk=36 (the
+        // current target API level) is being flagged because Lint's
+        // bundled API metadata in AGP 9.2 doesn't recognise API 36 as
+        // the latest yet. Re-enable when AGP catches up. Keeping this
+        // here documents the suppression rather than burying it in a
+        // baseline file.
+        disable.add("OldTargetApi")
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -96,6 +128,33 @@ android {
         debug {
             isDebuggable = true
             signingConfig = signingConfigs.getByName("debug")
+
+            // Native sanitizers — debug only. UBSan is cheap (a few %
+            // overhead) and catches signed-overflow, null-deref,
+            // shift-out-of-range, function-pointer-cast mismatches.
+            // HWAddressSanitizer is Google's recommended aarch64
+            // sanitizer (lower overhead than ASan, catches linear AND
+            // non-linear OOB + use-after-free); the AGP knob
+            // ANDROID_SANITIZE=hwaddress wires both the clang flag and
+            // the wrap.sh runtime setup. Caller flips
+            // `-PpenroseSanitize=hwaddress|address|undefined|off` from
+            // the gradle CLI; default `undefined` because HWASan needs
+            // a userdebug or fully-debuggable build to attach the
+            // wrap.sh path and not every CI runner has that.
+            val sanitizer = project.findProperty("penroseSanitize")?.toString() ?: "undefined"
+            if (sanitizer != "off") {
+                externalNativeBuild {
+                    cmake {
+                        // ANDROID_SANITIZE is the AGP-blessed knob; clang
+                        // flags + linker flags + libclang_rt are all
+                        // wired automatically. `undefined` enables UBSan;
+                        // `hwaddress` enables HWASan; `address` enables
+                        // ASan (use only when you actually need it —
+                        // ~2x memory).
+                        arguments += "-DANDROID_SANITIZE=$sanitizer"
+                    }
+                }
+            }
         }
         release {
             // Keep R8 off for now — we don't have keep-rules for the JNI
@@ -122,7 +181,14 @@ kotlin {
 
 dependencies {
     implementation(libs.androidx.appcompat)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.preference.ktx)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.material)
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.common)
+    implementation(libs.media3.session)
 }
 
 // -----------------------------------------------------------------------------

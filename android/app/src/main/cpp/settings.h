@@ -1,7 +1,7 @@
 #pragma once
 
-#include "color.h"
-#include "penrose.h"
+#include "color/color.h"
+#include "tiling/penrose.h"
 
 #include <cstdint>
 
@@ -29,12 +29,55 @@ struct Settings {
     ColorMode colorMode = ColorMode::Type;
 
     bool   borderOn     = true;
-    float  borderWidth  = 0.8f;     // model-space, scaled to pixels at draw time
+    float  borderWidth  = 0.8f;
     Oklch  borderColor  { 0.95f, 0.0f, 0.0f };
     float  borderAlpha  = 0.35f;
 
     BackgroundMode bgMode { BackgroundMode::Solid };
     Oklch  bgColor     { 0.04f, 0.005f, 280.0f };
+
+    // Per-tile plane-wave modulation amplitude (0..1) and source. Mode 0
+    // pulses with the Choreographer-driven clock, 1 follows home-screen
+    // scroll only, 2 combines both. `rippleKind` picks the output: 0 =
+    // color modulation, 1 = vertex-position-sampled wave gradient that
+    // physically displaces the tiling, 2 = both. `rippleSpeed` scales the
+    // temporal frequency.
+    float  rippleAmount = 0.3f;
+    int    rippleMode   = 0;
+    float  rippleSpeed  = 1.0f;
+    int    rippleKind   = 0;
+
+    // View transform persisted across sessions. Updated by pinch zoom +
+    // pinch rotate. `panMode` 0 (Locked) keeps panX/panY at 0; mode 1
+    // (Generative) lets a single-finger drag grow the tiling outward by
+    // bumping the effective generation as the gesture accumulates.
+    float  zoom         = 1.0f;
+    float  rotation     = 0.0f;
+    float  panX         = 0.0f;
+    float  panY         = 0.0f;
+    int    panMode      = 0;
+
+    // Tile look: master brightness multiplier and per-tile depth/parallax
+    // gradient amplitude. Depth follows the tile's geometric apex — fat
+    // Penrose rhombi bulge at their long-axis apex, thin ones recede,
+    // giving a 3D-cube illusion on P3/P2.
+    float  brightness   = 1.0f;
+    float  depthAmount  = 0.3f;
+
+    // Custom palette — used when `preset == Preset::Custom`. 10 OKLCH
+    // triples; only the first `colorCount` are actually consumed.
+    Oklch  customOklch[kMaxColors] = {
+        { 0.18f, 0.02f, 280.0f },
+        { 0.78f, 0.13f,  80.0f },
+        { 0.65f, 0.18f,  30.0f },
+        { 0.65f, 0.18f, 120.0f },
+        { 0.65f, 0.18f, 210.0f },
+        { 0.65f, 0.18f, 300.0f },
+        { 0.50f, 0.10f,  60.0f },
+        { 0.50f, 0.10f, 150.0f },
+        { 0.50f, 0.10f, 240.0f },
+        { 0.50f, 0.10f, 330.0f },
+    };
 };
 
 // Returns true if any setting that affects geometry (tile generation) changed.

@@ -1,0 +1,28 @@
+{
+  "id": "bass_pulse",
+  "name": "Bass pulse",
+  "description": "Sub-bass and bass bands add ripple amplitude + speed; bass also pushes depth. Displacement ripple so the kick physically punches the tiling.",
+  "settings": {
+    "ripple_kind": "1"
+  },
+  "graph": {
+    "nodes": [
+      { "uid": 1, "kind":  0, "x": -400, "y": -120, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 2, "kind":  1, "x": -400, "y":  -40, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 3, "kind": 19, "x":  400, "y":    0, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 4, "kind": 20, "x":  400, "y":   80, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 5, "kind": 22, "x":  400, "y":  160, "p0": 0,   "p1": 0, "p2": 0 },
+      { "uid": 6, "kind": 18, "x":    0, "y": -120, "p0": 1.5, "p1": 0, "p2": 0 },
+      { "uid": 7, "kind": 18, "x":    0, "y":  -40, "p0": 1.8, "p1": 0, "p2": 0 },
+      { "uid": 8, "kind": 18, "x":    0, "y":  160, "p0": 1.2, "p1": 0, "p2": 0 }
+    ],
+    "links": [
+      { "src": 1, "srcPin": "out", "dst": 6, "dstPin": "x"  },
+      { "src": 6, "srcPin": "out", "dst": 3, "dstPin": "in" },
+      { "src": 1, "srcPin": "out", "dst": 7, "dstPin": "x"  },
+      { "src": 7, "srcPin": "out", "dst": 4, "dstPin": "in" },
+      { "src": 2, "srcPin": "out", "dst": 8, "dstPin": "x"  },
+      { "src": 8, "srcPin": "out", "dst": 5, "dstPin": "in" }
+    ]
+  }
+}

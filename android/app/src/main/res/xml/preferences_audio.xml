@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <Preference
+        android:key="nav_back"
+        android:title="← Back"
+        android:summary="" />
+
+    <PreferenceCategory android:title="@string/audio_category">
+        <Preference
+            android:key="audio_file_uri"
+            android:title="@string/audio_file_title"
+            android:summary="@string/audio_file_summary" />
+        <Preference
+            android:key="audio_stop"
+            android:title="@string/audio_file_stop_title"
+            android:summary="@string/audio_file_stop_summary" />
+    </PreferenceCategory>
+</PreferenceScreen>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+Adaptive-icon foreground: a 5-fold-symmetric Penrose rhombus cluster
+(five fat rhombi alternating with five thin) — the canonical "sun"
+vertex configuration of a P3 tiling. Drawn on a 108×108 viewport with
+the cluster inscribed in the inner 72×72 dp safe area so launcher
+masks (circle, squircle, teardrop, …) can't crop it.
+
+Colours: fat rhombi sweep through warm gold tones, thin rhombi
+through cool plum — the same palette as the in-app default. Each
+rhombus gets a slightly different shade so the icon reads as a
+chromatic quasicrystal at glance, rather than a flat star.
+
+Coordinates are generated from the 5-fold angles
+  fat petals at θ = -90° + 72°·k        (top tip → bottom-left tip)
+  thin petals at θ = -54° + 72°·k       (interleaved)
+with rhombus tips at radius 32 dp from the centre (54, 54). See
+build script in the commit that introduced this file.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Fat rhombi (5) -->
+    <path android:fillColor="#E0B95A" android:pathData="M54.00,54.00 L63.89,38.00 L54.00,22.00 L44.11,38.00 z" />
+    <path android:fillColor="#D4A857" android:pathData="M54.00,54.00 L72.27,58.46 L84.43,44.11 L66.16,39.65 z" />
+    <path android:fillColor="#C99A4F" android:pathData="M54.00,54.00 L55.40,72.76 L72.81,79.89 L71.40,61.13 z" />
+    <path android:fillColor="#BF8E48" android:pathData="M54.00,54.00 L36.60,61.13 L35.19,79.89 L52.60,72.76 z" />
+    <path android:fillColor="#B58547" android:pathData="M54.00,54.00 L41.84,39.65 L23.57,44.11 L35.73,58.46 z" />
+
+    <!-- Thin rhombi (5), interleaved -->
+    <path android:fillColor="#7A6A8F" android:pathData="M54.00,54.00 L67.40,43.96 L72.81,28.11 L59.40,38.15 z" />
+    <path android:fillColor="#6E5F81" android:pathData="M54.00,54.00 L67.69,63.65 L84.43,63.89 L70.74,54.24 z" />
+    <path android:fillColor="#5B4F73" android:pathData="M54.00,54.00 L49.06,70.00 L54.00,86.00 L58.94,70.00 z" />
+    <path android:fillColor="#534768" android:pathData="M54.00,54.00 L37.26,54.24 L23.57,63.89 L40.31,63.65 z" />
+    <path android:fillColor="#4B405E" android:pathData="M54.00,54.00 L48.60,38.15 L35.19,28.11 L40.60,43.96 z" />
+</vector>

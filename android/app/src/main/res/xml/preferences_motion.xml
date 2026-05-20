@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <Preference
+        android:key="nav_back"
+        android:title="← Back"
+        android:summary="" />
+
+    <PreferenceCategory android:title="@string/motion_category">
+        <SeekBarPreference
+            android:key="ripple_amount"
+            android:title="@string/ripple_amount_title"
+            android:summary="@string/ripple_amount_summary"
+            android:min="0" android:max="100" android:defaultValue="30"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="ripple_speed"
+            android:title="@string/ripple_speed_title"
+            android:min="10" android:max="300" android:defaultValue="100"
+            app:showSeekBarValue="true" />
+        <ListPreference
+            android:key="ripple_kind"
+            android:title="@string/ripple_kind_title"
+            android:summary="@string/ripple_kind_summary"
+            android:entries="@array/ripple_kind_entries"
+            android:entryValues="@array/ripple_kind_values"
+            android:defaultValue="0" />
+        <ListPreference
+            android:key="ripple_mode"
+            android:title="@string/ripple_mode_title"
+            android:summary="@string/ripple_mode_summary"
+            android:entries="@array/ripple_mode_entries"
+            android:entryValues="@array/ripple_mode_values"
+            android:defaultValue="0" />
+    </PreferenceCategory>
+</PreferenceScreen>

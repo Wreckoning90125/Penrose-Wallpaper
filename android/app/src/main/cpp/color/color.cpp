@@ -1,4 +1,4 @@
-#include "color.h"
+#include "color/color.h"
 
 #include <algorithm>
 #include <cmath>
@@ -42,10 +42,12 @@ void fillEvenStops(PresetResult& out, Oklch c0, Oklch c1, int k) {
 } // namespace
 
 // =============================================================================
-// OKLCH → sRGB. Identical formulas to web/penrose.js (Björn Ottosson, 2020).
+// OKLCH → linear sRGB. Identical formulas to web/penrose.js (Björn Ottosson,
+// 2020). Returned components are unclipped; out-of-gamut OKLCH points may
+// produce values outside [0,1].
 // =============================================================================
 
-SrgbRGBA oklchToSrgb(Oklch c, float alpha) {
+LinearRGB oklchToLinearSrgb(Oklch c) {
     const float hRad = c.H * static_cast<float>(kPi) / 180.0f;
     const float aL = c.C * std::cos(hRad);
     const float bL = c.C * std::sin(hRad);
@@ -58,18 +60,57 @@ SrgbRGBA oklchToSrgb(Oklch c, float alpha) {
     const float mc = m_ * m_ * m_;
     const float sc = s_ * s_ * s_;
 
-    float R =  4.0767416621f * lc - 3.3077115913f * mc + 0.2309699292f * sc;
-    float G = -1.2684380046f * lc + 2.6097574011f * mc - 0.3413193965f * sc;
-    float B = -0.0041960863f * lc - 0.7034186147f * mc + 1.7076147010f * sc;
+    const float R =  4.0767416621f * lc - 3.3077115913f * mc + 0.2309699292f * sc;
+    const float G = -1.2684380046f * lc + 2.6097574011f * mc - 0.3413193965f * sc;
+    const float B = -0.0041960863f * lc - 0.7034186147f * mc + 1.7076147010f * sc;
+    return { R, G, B };
+}
 
-    return { srgbEncode(R), srgbEncode(G), srgbEncode(B), alpha };
+// =============================================================================
+// Linear sRGB → linear DisplayP3. Both colorspaces share the D65 whitepoint,
+// so this is a pure 3x3 primaries transform — no chromatic adaptation needed.
+// Matrix from the ICC profile derivation (see e.g. Apple's published
+// DisplayP3-D65 → linear sRGB-D65 inverse, transposed).
+// =============================================================================
+
+LinearRGB linearSrgbToLinearP3(LinearRGB s) {
+    return {
+        0.8224621f * s.r + 0.1775379f * s.g + 0.0f       * s.b,
+        0.0331941f * s.r + 0.9668059f * s.g + 0.0f       * s.b,
+        0.0170827f * s.r + 0.0723974f * s.g + 0.9105199f * s.b,
+    };
+}
+
+// =============================================================================
+// Colorspace-aware entry point. See color.h for which path each swapchain
+// configuration takes.
+// =============================================================================
+
+ShaderColor oklchToShaderColor(Oklch c, float alpha, bool wideGamutP3, bool linearOutput) {
+    LinearRGB lin = oklchToLinearSrgb(c);
+    if (wideGamutP3) {
+        LinearRGB p3 = linearSrgbToLinearP3(lin);
+        // P3-NONLINEAR uses the sRGB piecewise EOTF. The 10-bit packed
+        // UNORM swapchain has no hardware EOTF, so we encode here.
+        return { srgbEncode(p3.r), srgbEncode(p3.g), srgbEncode(p3.b), alpha };
+    }
+    if (linearOutput) {
+        // Hardware sRGB encode happens on store; write linear, clamped to
+        // [0,1] because the UNORM target can't represent negatives.
+        const float r = std::clamp(lin.r, 0.0f, 1.0f);
+        const float g = std::clamp(lin.g, 0.0f, 1.0f);
+        const float b = std::clamp(lin.b, 0.0f, 1.0f);
+        return { r, g, b, alpha };
+    }
+    // Pre-encoded sRGB for a _UNORM swapchain (no HW gamma).
+    return { srgbEncode(lin.r), srgbEncode(lin.g), srgbEncode(lin.b), alpha };
 }
 
 // =============================================================================
 // Palette presets — direct port of PRESETS[] from web/penrose.js
 // =============================================================================
 
-PresetResult buildPreset(Preset p, int k) {
+PresetResult buildPreset(Preset p, int k, const Oklch* customSource) {
     PresetResult out{};
     const int kk = std::clamp(k, 1, kMaxColors);
 
@@ -168,6 +209,19 @@ PresetResult buildPreset(Preset p, int k) {
             for (int i = 0; i < 6; ++i) out.colors[i] = girih[i];
             for (int i = 6; i < kMaxColors; ++i) {
                 out.colors[i] = { 0.65f, 0.14f, std::fmod(static_cast<float>(i * 36 + 20), 360.0f) };
+            }
+            break;
+        }
+        case Preset::Custom: {
+            // User-authored OKLCH slots come in via `customSource`; the
+            // background tracks the first slot so a Custom palette never
+            // shows raw black behind it unless the user picks black.
+            if (customSource != nullptr) {
+                for (int i = 0; i < kMaxColors; ++i) out.colors[i] = customSource[i];
+                out.bg = customSource[0];
+            } else {
+                fillEvenStops(out, { 0.18f, 0.02f, 280.0f }, { 0.78f, 0.13f, 80.0f }, kk);
+                out.bg = { 0.04f, 0.005f, 280.0f };
             }
             break;
         }

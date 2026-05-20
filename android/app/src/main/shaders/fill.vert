@@ -15,7 +15,7 @@ layout(set = 0, binding = 0, std140) uniform Palette {
     vec4 borderColor;
     vec4 bgColor;
     uvec4 flags;
-    vec4 anim;       // x=time, y=rippleAmount, z=family, w=pageOffset
+    vec4 anim;       // x=time, y=rippleAmount, z=waveSymmetry, w=pageOffset
     vec4 borderGeom;
     vec4 effects;    // x=brightness, y=depthAmount, z=rippleSpeed, w=rippleKind
     vec4 audioBands[2];
@@ -26,74 +26,45 @@ layout(location = 0) flat out uint vColorIdx;
 layout(location = 1) flat out float vRipple;
 layout(location = 2)      out float vDepth;
 
-const float TWO_PI_OVER_5 = 1.2566370614;
-const float HALF_PI       = 1.5707963267;
-const float PI_OVER_6     = 0.5235987756;
-const float TWO_PI        = 6.2831853072;
+const float TWO_PI = 6.2831853072;
 
-// Phi at point `p` — sum of plane waves with the same phase as the
-// per-tile flat ripple but sampled at any (x, y) in model space. The
-// derivative w.r.t. p is the wave gradient, useful for physical
-// displacement that stays coherent across shared tile corners.
-float wavePhi(vec2 p, float omegaT, float pagePhase, float fam) {
-    float phi = 0.0;
-    if (fam < 1.5) {            // P3 / P2 — 5-fold
-        for (int j = 0; j < 5; ++j) {
-            float a = float(j) * TWO_PI_OVER_5;
-            vec2  e = vec2(cos(a), sin(a));
-            phi += cos(dot(p, e) * 6.0 + omegaT + pagePhase);
-        }
-        return phi * 0.2;
-    } else if (fam < 2.5) {     // Chair — 4-fold
-        for (int j = 0; j < 4; ++j) {
-            float a = float(j) * HALF_PI;
-            vec2  e = vec2(cos(a), sin(a));
-            phi += cos(dot(p, e) * 6.0 + omegaT + pagePhase);
-        }
-        return phi * 0.25;
-    } else if (fam < 3.5) {     // Dodecagonal — 12-fold
-        for (int j = 0; j < 12; ++j) {
-            float a = float(j) * PI_OVER_6;
-            vec2  e = vec2(cos(a), sin(a));
-            phi += cos(dot(p, e) * 6.0 + omegaT + pagePhase);
-        }
-        return phi * (1.0 / 12.0);
-    } else {                    // Pinwheel — isotropic radial wave
+// Phi at point `p` — a sum of `sym` plane waves at equal angular spacing,
+// matching the per-tile flat ripple but sampled at any (x, y) in model
+// space. `sym` is the family's rotational fold count (anim.z): 5 for the
+// Penrose families, 4 for the chair, 8/12/14 for the de Bruijn rhomb
+// families. sym < 1 is the isotropic radial case — a tiling with no
+// preferred axis, e.g. the pinwheel.
+float wavePhi(vec2 p, float omegaT, float pagePhase, float symF) {
+    int sym = int(symF + 0.5);
+    if (sym < 1) {
         return cos(length(p) * 6.0 + omegaT + pagePhase);
     }
+    float phi = 0.0;
+    for (int j = 0; j < sym; ++j) {
+        float a = float(j) * (TWO_PI / float(sym));
+        vec2  e = vec2(cos(a), sin(a));
+        phi += cos(dot(p, e) * 6.0 + omegaT + pagePhase);
+    }
+    return phi / float(sym);
 }
 
-// d/dp of wavePhi, also at point `p`. Returns the local wave gradient — a
-// 2D vector that points in the direction of steepest ascent of the wave.
-// Used to push vertices around like ripples on a pond.
-vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float fam) {
-    vec2 grad = vec2(0.0);
-    if (fam < 1.5) {            // P3 / P2 — 5-fold
-        for (int j = 0; j < 5; ++j) {
-            float a = float(j) * TWO_PI_OVER_5;
-            vec2  e = vec2(cos(a), sin(a));
-            grad += -sin(dot(p, e) * 6.0 + omegaT + pagePhase) * (6.0 * e);
-        }
-        return grad * 0.2;
-    } else if (fam < 2.5) {     // Chair — 4-fold
-        for (int j = 0; j < 4; ++j) {
-            float a = float(j) * HALF_PI;
-            vec2  e = vec2(cos(a), sin(a));
-            grad += -sin(dot(p, e) * 6.0 + omegaT + pagePhase) * (6.0 * e);
-        }
-        return grad * 0.25;
-    } else if (fam < 3.5) {     // Dodecagonal — 12-fold
-        for (int j = 0; j < 12; ++j) {
-            float a = float(j) * PI_OVER_6;
-            vec2  e = vec2(cos(a), sin(a));
-            grad += -sin(dot(p, e) * 6.0 + omegaT + pagePhase) * (6.0 * e);
-        }
-        return grad * (1.0 / 12.0);
-    } else {                    // Pinwheel — radial wave, no preferred axis
+// d/dp of wavePhi, at point `p` — the local wave gradient, a 2D vector that
+// points along steepest ascent. Used to push vertices around like ripples on
+// a pond; shared tile corners move together so the tiling stays seam-free.
+vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float symF) {
+    int sym = int(symF + 0.5);
+    if (sym < 1) {
         float r = length(p);
         if (r < 1e-4) return vec2(0.0);
         return -sin(r * 6.0 + omegaT + pagePhase) * 6.0 * (p / r);
     }
+    vec2 grad = vec2(0.0);
+    for (int j = 0; j < sym; ++j) {
+        float a = float(j) * (TWO_PI / float(sym));
+        vec2  e = vec2(cos(a), sin(a));
+        grad += -sin(dot(p, e) * 6.0 + omegaT + pagePhase) * (6.0 * e);
+    }
+    return grad / float(sym);
 }
 
 void main() {
@@ -101,7 +72,7 @@ void main() {
     vDepth = inDepth;
 
     float amp = ubo.anim.y;
-    float fam = ubo.anim.z;
+    float waveSym = ubo.anim.z;
     float speed = ubo.effects.z;
     int kind = int(ubo.effects.w + 0.5);
 
@@ -117,9 +88,9 @@ void main() {
         // uniformly. Displacement samples at the vertex's own position so
         // shared corners between neighbouring tiles displace by the same
         // amount and the tiling stays seam-free.
-        if (kind != 1) phiCenter = wavePhi(inCenter, omegaT, pagePhase, fam);
+        if (kind != 1) phiCenter = wavePhi(inCenter, omegaT, pagePhase, waveSym);
         if (kind != 0) {
-            vec2 grad = waveGradient(inPos, omegaT, pagePhase, fam);
+            vec2 grad = waveGradient(inPos, omegaT, pagePhase, waveSym);
             // Bounded amplitude — the gradient norm can hit ~6 at peaks, so
             // 0.006 keeps full-amplitude motion at ~3.6% of world span. The
             // ripple-amount slider further attenuates.

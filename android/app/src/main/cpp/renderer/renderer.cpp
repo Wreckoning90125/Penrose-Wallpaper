@@ -256,11 +256,7 @@ void Renderer::setSystemInsets(int topPx, int bottomPx, int leftPx, int rightPx)
 void Renderer::considerGrowth() {
     if (settings_.panMode != 1) return;
     const float threshold = (surfW_ > 0) ? (float)surfW_ : 1080.0f;
-    const int maxGen = (settings_.family == Family::Chair)       ? kMaxGenChair :
-                       (settings_.family == Family::P2)          ? kMaxGenP2 :
-                       (settings_.family == Family::Dodecagonal) ? kMaxGenDodeca :
-                       (settings_.family == Family::Pinwheel)    ? kMaxGenPinwheel :
-                                                                   kMaxGenP3;
+    const int maxGen = familyInfo(settings_.family).maxGen;
     while (panAccumPx_ >= threshold && effectiveGeneration_ < maxGen) {
         panAccumPx_ -= threshold;
         effectiveGeneration_ += 1;
@@ -360,7 +356,7 @@ void Renderer::drawFrame() {
         float anim[4] = {
             time_,
             settings_.rippleAmount,
-            static_cast<float>(static_cast<int>(settings_.family)),
+            static_cast<float>(familyInfo(settings_.family).waveSymmetry),
             pageOffset_,
         };
         float effects[4] = {

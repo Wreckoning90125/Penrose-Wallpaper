@@ -315,56 +315,51 @@ void edgesChair(const Tile& t, std::vector<Edge>& out) {
 }
 
 // =============================================================================
-// Dodecagonal — de Bruijn 6-grid dualization
+// de Bruijn N-grid dualization (Dodecagonal, Ammann-Beenker, Heptagonal)
 // =============================================================================
-// The dual of six line grids 30 degrees apart is a 12-fold tiling of 30/60/90
-// rhombi (thin rhomb / thick rhomb / square). Each rhombus is the dual of one
-// intersection between a line of grid family j and a line of family k; its two
-// edge vectors are the unit grid normals, so every rhomb has unit edges and
-// the three shapes are fixed by |j - k|. This is the documented "de Bruijn
-// rhomb-square dodecagonal tiling" — not a substitution, so there is no
-// seed/subdivide pair; `generations` simply scales the grid range.
+// The dual of N line grids spaced 180/N degrees apart is a rhombic tiling with
+// 2N-fold symmetry. Every rhombus is the dual of one intersection between a
+// line of grid family j and a line of family k; its two edge vectors are the
+// unit grid normals, so all rhomb edges are unit length and the rhomb shape is
+// fixed by |j - k|. gridCount = 4 gives the Ammann-Beenker square + 45 rhomb,
+// 6 the dodecagonal 30/60/90 rhombi, 7 the 14-fold heptagonal rhombi. This is
+// dualization, not substitution: no seed/subdivide pair; `generations` scales
+// the grid range and `seedIdx` (0..2) picks a grid-offset variant.
 
-std::vector<Tile> generateDodecagonal(int seedIdx, int generations) {
-    constexpr int N = 6;
-    double dirx[N], diry[N];
+std::vector<Tile> generateMultigrid(int gridCount, int seedIdx, int generations) {
+    const int N = (gridCount < 2) ? 2 : gridCount;
+    std::vector<double> dirx(N), diry(N);
     for (int k = 0; k < N; ++k) {
-        const double a = kPi * k / 6.0;
+        const double a = kPi * k / N;
         dirx[k] = std::cos(a);
         diry[k] = std::sin(a);
     }
 
-    // Per-seed grid offsets. Because dir0 - dir2 + dir4 = 0 and
-    // dir1 - dir3 + dir5 = 0, the hexagrid is non-singular (no concurrent
-    // lines, hence a clean overlap-free dual) only when both
-    // (gamma0 - gamma2 + gamma4) and (gamma1 - gamma3 + gamma5) are
-    // non-integers — keep any new offset set away from those. A constant 0.5
-    // (Rosette) lands those invariants at -0.5, the farthest-from-integer
-    // value, and is invariant under the 30-degree family-permuting rotation,
-    // so it yields an exactly 12-fold-symmetric tiling; the other seeds
-    // perturb the offsets into distinct quasiperiodic patches.
-    double gamma[N];
+    // Grid offsets: an arithmetic progression with an irrational common
+    // difference (sqrt(2) - 1). For any N this is non-singular — no three grid
+    // lines ever concurrent — so the de Bruijn dual is a clean, gap-free,
+    // overlap-free rhombic tiling. `seedIdx` shifts the whole progression to a
+    // different patch of the same tiling.
+    std::vector<double> gamma(N);
     {
-        const double drift[N] = { 0.50, 0.18, 0.74, 0.33, 0.61, 0.05 };
-        const double quasi[N] = { 0.10, 0.40, 0.65, 0.20, 0.85, 0.55 };
-        for (int k = 0; k < N; ++k) {
-            gamma[k] = (seedIdx == 1) ? drift[k]
-                     : (seedIdx == 2) ? quasi[k]
-                                      : 0.5;
-        }
+        const double phase[3] = { 0.0, 0.1701, 0.4327 };
+        const int si = (seedIdx >= 0 && seedIdx < 3) ? seedIdx : 0;
+        const double base = 0.5 + phase[si];
+        for (int k = 0; k < N; ++k)
+            gamma[k] = std::fmod(base + k * 0.4142135623730951, 1.0);
     }
 
-    int gen = generations < 0 ? 0 : (generations > kMaxGenDodeca ? kMaxGenDodeca
-                                                                 : generations);
+    int gen = generations < 0 ? 0 : generations;
     // The grid line-index half-range grows ~phi per generation, so the
     // normalised tile size shrinks at the same 1/phi rate the renderer's
     // border scaling (deflationRate) assumes for the substitution families.
     int B = static_cast<int>(std::lround(12.0 * std::pow(kPhi, gen - 6)));
     if (B < 2) B = 2;
-    // Keep rhombi whose centroid lies inside this raw-units radius. 3*(B-1)
-    // guarantees both grid lines of every kept rhomb fall within [-B, B] (the
-    // dual map scales the plane by ~3), so the patch has no holes.
-    const double keepR2 = (3.0 * (B - 1)) * (3.0 * (B - 1));
+    // Keep rhombi whose centroid lies inside this raw-units radius. The dual
+    // map scales the plane by ~N/2, so 0.5*N*(B-1) keeps the patch hole-free
+    // out to that radius (for N = 6 this is the original 3*(B-1)).
+    const double keepLin = 0.5 * N * (B - 1);
+    const double keepR2 = keepLin * keepLin;
 
     std::vector<Tile> out;
     double maxR2 = 0.0;
@@ -525,50 +520,71 @@ std::vector<Tile> seedPinwheel(SeedPinwheel seed) {
 }
 
 // =============================================================================
+// Per-family descriptor table
+// =============================================================================
+// One row per Family enumerator, in enum order. The renderer, the colour
+// classifier (color.cpp) and the ripple shader all read this table instead of
+// branching on the family. The first five rows carry exactly the values those
+// branches used before the table existed, so P3/P2/Chair/Dodecagonal/Pinwheel
+// are unchanged; AmmannBeenker and Heptagonal are new rows.
+
+const FamilyInfo kFamilyInfo[kFamilyCount] = {
+    // maxGen, deflationRate,        waveSym, hideSeam, depthParallax,
+    //   cls{ typeBuckets, orientBuckets, orientFromType, angA, angB, ringChebyshev }
+    /* P3            */ { 8, 0.6180339887498949f,  5, 1, true,
+                          { 2, 10, false, 0, 2, false } },
+    /* P2            */ { 8, 0.6180339887498949f,  5, 2, true,
+                          { 2, 10, false, 0, 2, false } },
+    /* Chair         */ { 7, 0.5f,                 4, 0, false,
+                          { 4,  4, true,  0, 0, true  } },
+    /* Dodecagonal   */ { 8, 0.6180339887498949f, 12, 0, false,
+                          { 3, 12, false, 0, 1, false } },
+    /* Pinwheel      */ { 6, 0.4472135954999579f,  0, 0, true,
+                          { 2, 10, false, 0, 2, false } },
+    /* AmmannBeenker */ { 8, 0.6180339887498949f,  8, 0, false,
+                          { 2,  8, false, 0, 1, false } },
+    /* Heptagonal    */ { 8, 0.6180339887498949f, 14, 0, false,
+                          { 3, 14, false, 0, 1, false } },
+};
+
+// =============================================================================
 // Family-erased generate()
 // =============================================================================
 
 std::vector<Tile> generate(Family family, int seedIdx, int generations) {
-    std::vector<Tile> tiles;
+    const int cap0 = generations < 0 ? 0 : generations;
+    const int maxG = familyInfo(family).maxGen;
+    const int cap  = cap0 > maxG ? maxG : cap0;
     switch (family) {
         case Family::P3: {
-            int s = seedIdx;
-            if (s < 0 || s > 3) s = 0;
-            tiles = seedP3(static_cast<SeedP3>(s));
-            int cap = generations < 0 ? 0 : (generations > kMaxGenP3 ? kMaxGenP3 : generations);
+            int s = (seedIdx < 0 || seedIdx > 3) ? 0 : seedIdx;
+            auto tiles = seedP3(static_cast<SeedP3>(s));
             for (int g = 0; g < cap; ++g) tiles = subdivideP3(tiles);
-            break;
+            return tiles;
         }
         case Family::P2: {
-            int s = seedIdx;
-            if (s < 0 || s > 1) s = 0;
-            tiles = seedP2(static_cast<SeedP2>(s));
-            int cap = generations < 0 ? 0 : (generations > kMaxGenP2 ? kMaxGenP2 : generations);
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            auto tiles = seedP2(static_cast<SeedP2>(s));
             for (int g = 0; g < cap; ++g) tiles = subdivideP2(tiles);
-            break;
+            return tiles;
         }
         case Family::Chair: {
-            int s = seedIdx;
-            if (s < 0 || s > 2) s = 0;
-            tiles = seedChair(static_cast<SeedChair>(s));
-            int cap = generations < 0 ? 0 : (generations > kMaxGenChair ? kMaxGenChair : generations);
+            int s = (seedIdx < 0 || seedIdx > 2) ? 0 : seedIdx;
+            auto tiles = seedChair(static_cast<SeedChair>(s));
             for (int g = 0; g < cap; ++g) tiles = subdivideChair(tiles);
-            break;
-        }
-        case Family::Dodecagonal: {
-            tiles = generateDodecagonal(seedIdx, generations);
-            break;
+            return tiles;
         }
         case Family::Pinwheel: {
-            int s = seedIdx;
-            if (s < 0 || s > 2) s = 0;
-            tiles = seedPinwheel(static_cast<SeedPinwheel>(s));
-            int cap = generations < 0 ? 0 : (generations > kMaxGenPinwheel ? kMaxGenPinwheel : generations);
+            int s = (seedIdx < 0 || seedIdx > 2) ? 0 : seedIdx;
+            auto tiles = seedPinwheel(static_cast<SeedPinwheel>(s));
             for (int g = 0; g < cap; ++g) tiles = subdividePinwheel(tiles);
-            break;
+            return tiles;
         }
+        case Family::Dodecagonal:   return generateMultigrid(6, seedIdx, cap);
+        case Family::AmmannBeenker: return generateMultigrid(4, seedIdx, cap);
+        case Family::Heptagonal:    return generateMultigrid(7, seedIdx, cap);
     }
-    return tiles;
+    return {};
 }
 
 } // namespace penrose

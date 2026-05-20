@@ -6,6 +6,8 @@
         <item>Chair (L-trominoes)</item>
         <item>Dodecagonal (rhomb&#8211;square)</item>
         <item>Pinwheel (right triangles)</item>
+        <item>Ammann–Beenker (8-fold)</item>
+        <item>Heptagonal (14-fold)</item>
     </string-array>
     <string-array name="family_values">
         <item>0</item>
@@ -13,6 +15,8 @@
         <item>2</item>
         <item>3</item>
         <item>4</item>
+        <item>5</item>
+        <item>6</item>
     </string-array>
 
     <!-- Seeds per family — SettingsFragment swaps these into the seed
@@ -67,6 +71,28 @@
         <item>Rectangle</item>
     </string-array>
     <string-array name="seed_pinwheel_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <string-array name="seed_ammannbeenker_entries">
+        <item>Star</item>
+        <item>Drift</item>
+        <item>Quasi</item>
+    </string-array>
+    <string-array name="seed_ammannbeenker_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <string-array name="seed_heptagonal_entries">
+        <item>Star</item>
+        <item>Drift</item>
+        <item>Quasi</item>
+    </string-array>
+    <string-array name="seed_heptagonal_values">
         <item>0</item>
         <item>1</item>
         <item>2</item>

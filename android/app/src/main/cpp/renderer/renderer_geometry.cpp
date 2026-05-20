@@ -54,14 +54,11 @@ struct EdgeKeyHash {
 };
 
 inline bool hideSeam(Family fam, EdgeKind k1, EdgeKind k2) {
-    switch (fam) {
-        case Family::P3:          return k1 == EdgeKind::Base && k2 == EdgeKind::Base;
-        case Family::P2:          return k1 == EdgeKind::Leg  && k2 == EdgeKind::Leg;
-        case Family::Chair:       return false;
-        case Family::Dodecagonal: return false;
-        case Family::Pinwheel:    return false;
+    switch (familyInfo(fam).hideSeamMode) {
+        case 1:  return k1 == EdgeKind::Base && k2 == EdgeKind::Base;  // P3
+        case 2:  return k1 == EdgeKind::Leg  && k2 == EdgeKind::Leg;   // P2
+        default: return false;
     }
-    return false;
 }
 
 } // namespace
@@ -102,7 +99,9 @@ bool Renderer::buildGeometry() {
             // Per-vertex parallax depth. Penrose triangle vert 1 is the
             // rhombus's long-axis apex; L (type 0) bulges (+1), S (type
             // 1) recedes (-1). Legs sit at midline (0).
-            const float apexDepth = (t.type == 0) ? +1.0f : -1.0f;
+            const float apexDepth = familyInfo(settings_.family).depthParallax
+                                        ? ((t.type == 0) ? +1.0f : -1.0f)
+                                        : 0.0f;
             const float depths[3] = { 0.0f, apexDepth, 0.0f };
             for (int v = 0; v < 3; ++v) {
                 fills.push_back(FillVertex{ t.x[v], t.y[v], paletteIdx, cx, cy, depths[v] });
@@ -271,7 +270,7 @@ void Renderer::updatePaletteUbo() {
     // amount short-circuits the wave math for every tile.
     ubo.anim[0] = time_;
     ubo.anim[1] = settings_.rippleAmount;
-    ubo.anim[2] = static_cast<float>(static_cast<int>(settings_.family));
+    ubo.anim[2] = static_cast<float>(familyInfo(settings_.family).waveSymmetry);
     ubo.anim[3] = pageOffset_;
 
     // Border half-width in world space, scaled by the family's deflation

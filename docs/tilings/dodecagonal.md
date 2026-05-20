@@ -1,9 +1,9 @@
 # Dodecagonal tilings — 12-fold
 
-The 12-fold family — the richest in the source material and the renderer's
-top candidate for a fourth `Family`. Covered here: the Socolar (butterfly)
-tiling, the Stampfli 12-star square-triangle tiling, the de Bruijn
-rhomb-square dodecagonal tilings, the ship tiling, and the Keplerian
+The 12-fold family — the richest in the source material; its de Bruijn
+rhomb-square member is the renderer's fourth `Family`. Covered here: the
+Socolar (butterfly) tiling, the Stampfli 12-star square-triangle tiling, the
+de Bruijn rhomb-square dodecagonal tilings, the ship tiling, and the Keplerian
 dodecagonal recurrence.
 
 Two construction methods recur: **dualization** (de Bruijn's grid method) and
@@ -221,11 +221,18 @@ of Moiré patterns (superimposed grids of just this kind) did not lead to the
 discovery of quasiperiodicity earlier.
 
 ### Renderer mapping
-Not implemented. Dualization is a different engine from the renderer's
-substitution machinery — it would mean generating two hexagonal grids and
-computing a dual, not inflating a seed. Lower priority than implementing the
-Stampfli tiling via a completed substitution rule. Worth keeping as the
-fallback generator if a clean 12-fold substitution proves elusive.
+Implemented — `Family::Dodecagonal`, the renderer's fourth family, generated
+by `generateDodecagonal` (`tiling/penrose.cpp`). It is the documented
+fallback: a clean 12-fold *substitution* stayed elusive, so dualization is the
+engine that shipped. A six-direction de Bruijn multigrid is enumerated
+intersection by intersection, bypassing the substitution machinery entirely —
+`generations` selects the grid line-index range rather than a deflation depth.
+Rhombi are 4-vertex `Tile`s with `type` 0/1/2 for the 30°/60°/90° shapes.
+Three seeds set the grid offsets: `Rosette` (constant ½ — non-singular and
+exactly 12-fold symmetric) and the quasiperiodic `Drift` and `Quasi`; the
+hexagrid stays non-singular only while `γ₀−γ₂+γ₄` and `γ₁−γ₃+γ₅` are
+non-integers. The ripple shader's 12-fold wave-sum branch (12 plane waves at
+30° steps) is shared with the other dodecagonal systems.
 
 ### References
 N. G. de Bruijn; P. Stampfli; Hans-Ude Nissen; quadibloc `dode02.htm`.
@@ -376,8 +383,9 @@ decorative target is the square / triangle motif of the Topkapi scroll, which
 brings in pentagonal stars and near-octagonal regions.
 
 ### Renderer mapping
-Not implemented — the **primary candidate** for the renderer's fourth
-`Family` and the focus of the current documentation push. Mapping:
+Not implemented — the primary *substitution*-based candidate for a future
+`Family` (the fourth implemented family is the de Bruijn rhomb-square
+dodecagonal tiling above). Mapping:
 - Prototiles: dodecagon (neutral + 2 oriented), 30° rhomb, equilateral
   triangle, square — a 5-symbol-ish set with a per-dodecagon orientation enum
   {neutral, oriented-A, oriented-B} and a per-rhomb orientation bit.
@@ -389,8 +397,9 @@ Not implemented — the **primary candidate** for the renderer's fourth
   neutral-dodecagon decomposition — accepting statistical (not single-centre)
   12-fold symmetry. The first-modified tiling, which keeps the rhomb for
   visual clarity, is the richer follow-up.
-- Ripple shader: a 12-fold wave-sum branch (12 plane waves at 30° steps),
-  alongside the existing 5-fold (P3/P2) and 4-fold (Chair) branches.
+- Ripple shader: the 12-fold wave-sum branch (12 plane waves at 30° steps,
+  alongside the 5-fold P3/P2 and 4-fold Chair branches) already exists — the
+  de Bruijn dodecagonal family added it — and would be reused as-is.
 
 ### References
 Johannes Kepler (recurrence technique); Baake, Grimm & Moody, *What is

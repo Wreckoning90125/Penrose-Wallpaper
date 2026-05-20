@@ -242,17 +242,36 @@ Classification classify(const std::vector<Tile>& tiles,
     const size_t n = tiles.size();
     c.bucket.resize(n);
     const bool isChair = (family == Family::Chair);
+    const bool isDodeca = (family == Family::Dodecagonal);
     const int k = std::clamp(colorCount, 1, kMaxColors);
 
     if (mode == ColorMode::Type) {
-        c.numBuckets = isChair ? 4 : 2;
+        // Type buckets: 4 chair orientations, 3 dodeca rhomb shapes, else
+        // the 2 Penrose Robinson-triangle kinds.
+        c.numBuckets = isChair ? 4 : (isDodeca ? 3 : 2);
         for (size_t i = 0; i < n; ++i) {
-            c.bucket[i] = isChair ? (tiles[i].type & 3) : (tiles[i].type & 1);
+            c.bucket[i] = isChair  ? (tiles[i].type & 3)
+                        : isDodeca ? static_cast<uint8_t>(tiles[i].type % 3)
+                                   : (tiles[i].type & 1);
         }
     } else if (mode == ColorMode::Orient) {
         if (isChair) {
             c.numBuckets = 4;
             for (size_t i = 0; i < n; ++i) c.bucket[i] = tiles[i].type & 3;
+        } else if (isDodeca) {
+            // 12 orientation bins from the rhomb's first edge direction.
+            c.numBuckets = 12;
+            const double denom = 2.0 * kPi / 12.0;
+            for (size_t i = 0; i < n; ++i) {
+                const Tile& t = tiles[i];
+                const float dx = t.x[1] - t.x[0];
+                const float dy = t.y[1] - t.y[0];
+                double ang = std::atan2(static_cast<double>(dy), static_cast<double>(dx));
+                if (ang < 0.0) ang += 2.0 * kPi;
+                int bin = static_cast<int>(std::floor((ang + denom * 0.5) / denom));
+                bin = ((bin % 12) + 12) % 12;
+                c.bucket[i] = static_cast<uint8_t>(bin);
+            }
         } else {
             c.numBuckets = 10;
             const double denom = 2.0 * kPi / 10.0;

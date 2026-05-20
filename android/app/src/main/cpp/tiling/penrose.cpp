@@ -305,12 +305,127 @@ void edgesChair(const Tile& t, std::vector<Edge>& out) {
     Edge e{};
     e.tileType = t.type;
     e.kind = EdgeKind::ChairEdge;
-    for (int i = 0; i < 6; ++i) {
-        const int j = (i + 1) % 6;
+    const int n = t.vcount;
+    for (int i = 0; i < n; ++i) {
+        const int j = (i + 1) % n;
         e.p1x = t.x[i]; e.p1y = t.y[i];
         e.p2x = t.x[j]; e.p2y = t.y[j];
         out.push_back(e);
     }
+}
+
+// =============================================================================
+// Dodecagonal — de Bruijn 6-grid dualization
+// =============================================================================
+// The dual of six line grids 30 degrees apart is a 12-fold tiling of 30/60/90
+// rhombi (thin rhomb / thick rhomb / square). Each rhombus is the dual of one
+// intersection between a line of grid family j and a line of family k; its two
+// edge vectors are the unit grid normals, so every rhomb has unit edges and
+// the three shapes are fixed by |j - k|. This is the documented "de Bruijn
+// rhomb-square dodecagonal tiling" — not a substitution, so there is no
+// seed/subdivide pair; `generations` simply scales the grid range.
+
+std::vector<Tile> generateDodecagonal(int seedIdx, int generations) {
+    constexpr int N = 6;
+    double dirx[N], diry[N];
+    for (int k = 0; k < N; ++k) {
+        const double a = kPi * k / 6.0;
+        dirx[k] = std::cos(a);
+        diry[k] = std::sin(a);
+    }
+
+    // Per-seed grid offsets. Because dir0 - dir2 + dir4 = 0 and
+    // dir1 - dir3 + dir5 = 0, the hexagrid is non-singular (no concurrent
+    // lines, hence a clean overlap-free dual) only when both
+    // (gamma0 - gamma2 + gamma4) and (gamma1 - gamma3 + gamma5) are
+    // non-integers — keep any new offset set away from those. A constant 0.5
+    // (Rosette) lands those invariants at -0.5, the farthest-from-integer
+    // value, and is invariant under the 30-degree family-permuting rotation,
+    // so it yields an exactly 12-fold-symmetric tiling; the other seeds
+    // perturb the offsets into distinct quasiperiodic patches.
+    double gamma[N];
+    {
+        const double drift[N] = { 0.50, 0.18, 0.74, 0.33, 0.61, 0.05 };
+        const double quasi[N] = { 0.10, 0.40, 0.65, 0.20, 0.85, 0.55 };
+        for (int k = 0; k < N; ++k) {
+            gamma[k] = (seedIdx == 1) ? drift[k]
+                     : (seedIdx == 2) ? quasi[k]
+                                      : 0.5;
+        }
+    }
+
+    int gen = generations < 0 ? 0 : (generations > kMaxGenDodeca ? kMaxGenDodeca
+                                                                 : generations);
+    // The grid line-index half-range grows ~phi per generation, so the
+    // normalised tile size shrinks at the same 1/phi rate the renderer's
+    // border scaling (deflationRate) assumes for the substitution families.
+    int B = static_cast<int>(std::lround(12.0 * std::pow(kPhi, gen - 6)));
+    if (B < 2) B = 2;
+    // Keep rhombi whose centroid lies inside this raw-units radius. 3*(B-1)
+    // guarantees both grid lines of every kept rhomb fall within [-B, B] (the
+    // dual map scales the plane by ~3), so the patch has no holes.
+    const double keepR2 = (3.0 * (B - 1)) * (3.0 * (B - 1));
+
+    std::vector<Tile> out;
+    double maxR2 = 0.0;
+
+    for (int j = 0; j < N; ++j) {
+        for (int k = j + 1; k < N; ++k) {
+            const double det = dirx[j] * diry[k] - diry[j] * dirx[k];
+            const int d = k - j;
+            const int shape = (d < N - d) ? d : (N - d);          // 1, 2, 3
+            const uint8_t type = static_cast<uint8_t>(shape - 1); // 0, 1, 2
+            for (int r = -B; r <= B; ++r) {
+                const double a = r + gamma[j];
+                for (int s = -B; s <= B; ++s) {
+                    const double b = s + gamma[k];
+                    // Intersection of line r (family j) and line s (family k).
+                    const double px = (a * diry[k] - b * diry[j]) / det;
+                    const double py = (b * dirx[j] - a * dirx[k]) / det;
+                    // Fixed grid coordinates for the other four families.
+                    double basex = 0.0, basey = 0.0;
+                    for (int l = 0; l < N; ++l) {
+                        if (l == j || l == k) continue;
+                        const double t = px * dirx[l] + py * diry[l] - gamma[l];
+                        const double Kl = std::floor(t + 1e-9);
+                        basex += Kl * dirx[l];
+                        basey += Kl * diry[l];
+                    }
+                    // Rhomb corner v0 takes K_j = r-1, K_k = s-1; the other
+                    // three corners step K_j and/or K_k up by one.
+                    const double v0x = basex + (r - 1) * dirx[j] + (s - 1) * dirx[k];
+                    const double v0y = basey + (r - 1) * diry[j] + (s - 1) * diry[k];
+                    const double cx[4] = {
+                        v0x, v0x + dirx[j], v0x + dirx[j] + dirx[k], v0x + dirx[k] };
+                    const double cy[4] = {
+                        v0y, v0y + diry[j], v0y + diry[j] + diry[k], v0y + diry[k] };
+                    const double centx = (cx[0] + cx[1] + cx[2] + cx[3]) * 0.25;
+                    const double centy = (cy[0] + cy[1] + cy[2] + cy[3]) * 0.25;
+                    if (centx * centx + centy * centy > keepR2) continue;
+                    Tile tile{};
+                    tile.vcount = 4;
+                    tile.type = type;
+                    for (int c = 0; c < 4; ++c) {
+                        tile.x[c] = static_cast<float>(cx[c]);
+                        tile.y[c] = static_cast<float>(cy[c]);
+                        const double rr = cx[c] * cx[c] + cy[c] * cy[c];
+                        if (rr > maxR2) maxR2 = rr;
+                    }
+                    out.push_back(tile);
+                }
+            }
+        }
+    }
+
+    // Normalise the patch into the unit disk so model-space scale — and the
+    // ripple shader's fixed spatial frequency — matches the other families.
+    if (maxR2 > 1e-12) {
+        const float inv = static_cast<float>(1.0 / std::sqrt(maxR2));
+        for (Tile& tile : out) {
+            for (int c = 0; c < 4; ++c) { tile.x[c] *= inv; tile.y[c] *= inv; }
+        }
+    }
+    return out;
 }
 
 // =============================================================================
@@ -342,6 +457,10 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
             tiles = seedChair(static_cast<SeedChair>(s));
             int cap = generations < 0 ? 0 : (generations > kMaxGenChair ? kMaxGenChair : generations);
             for (int g = 0; g < cap; ++g) tiles = subdivideChair(tiles);
+            break;
+        }
+        case Family::Dodecagonal: {
+            tiles = generateDodecagonal(seedIdx, generations);
             break;
         }
     }

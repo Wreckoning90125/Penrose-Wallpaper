@@ -55,9 +55,10 @@ struct EdgeKeyHash {
 
 inline bool hideSeam(Family fam, EdgeKind k1, EdgeKind k2) {
     switch (fam) {
-        case Family::P3:    return k1 == EdgeKind::Base && k2 == EdgeKind::Base;
-        case Family::P2:    return k1 == EdgeKind::Leg  && k2 == EdgeKind::Leg;
-        case Family::Chair: return false;
+        case Family::P3:          return k1 == EdgeKind::Base && k2 == EdgeKind::Base;
+        case Family::P2:          return k1 == EdgeKind::Leg  && k2 == EdgeKind::Leg;
+        case Family::Chair:       return false;
+        case Family::Dodecagonal: return false;
     }
     return false;
 }
@@ -133,7 +134,10 @@ bool Renderer::buildGeometry() {
     std::vector<uint32_t>     borderIndices;
     if (settings_.borderOn) {
         std::vector<Edge> edges;
-        edges.reserve(tiles.size() * (settings_.family == Family::Chair ? 6 : 3));
+        const int edgesPerTile = (settings_.family == Family::Chair)       ? 6
+                               : (settings_.family == Family::Dodecagonal) ? 4
+                                                                           : 3;
+        edges.reserve(tiles.size() * edgesPerTile);
         for (const Tile& t : tiles) {
             if (t.vcount == 3) edgesPenrose(t, edges);
             else               edgesChair(t, edges);

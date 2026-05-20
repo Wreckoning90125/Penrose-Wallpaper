@@ -126,10 +126,10 @@ These terms have a fixed meaning across all documents here. Use them exactly.
   describe, or link to a source.
 - **Renderer mapping is mandatory.** Every system says, explicitly, whether
   it is implemented in the renderer and what a `Family` entry would cost. The
-  app currently implements three families — P3 and P2 (see
-  `pentagonal-penrose.md`) and the Chair L-tromino tiling (a 4-fold
-  substitution not covered by the source PDFs; documented as a renderer note
-  only).
+  app currently implements four families — P3 and P2 (see
+  `pentagonal-penrose.md`), the Chair L-tromino tiling (a 4-fold substitution
+  not covered by the source PDFs; documented as a renderer note only), and the
+  de Bruijn rhomb-square dodecagonal tiling (see `dodecagonal.md`).
 - **Primary source.** Most of this material is synthesised from John Savard's
   tiling series at `http://www.quadibloc.com/math` (page IDs are cited per
   system), cross-checked against the primary academic literature each page

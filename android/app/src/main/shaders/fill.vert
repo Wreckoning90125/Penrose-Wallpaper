@@ -28,6 +28,7 @@ layout(location = 2)      out float vDepth;
 
 const float TWO_PI_OVER_5 = 1.2566370614;
 const float HALF_PI       = 1.5707963267;
+const float PI_OVER_6     = 0.5235987756;
 const float TWO_PI        = 6.2831853072;
 
 // Phi at point `p` — sum of plane waves with the same phase as the
@@ -36,20 +37,27 @@ const float TWO_PI        = 6.2831853072;
 // displacement that stays coherent across shared tile corners.
 float wavePhi(vec2 p, float omegaT, float pagePhase, float fam) {
     float phi = 0.0;
-    if (fam < 1.5) {
+    if (fam < 1.5) {            // P3 / P2 — 5-fold
         for (int j = 0; j < 5; ++j) {
             float a = float(j) * TWO_PI_OVER_5;
             vec2  e = vec2(cos(a), sin(a));
             phi += cos(dot(p, e) * 6.0 + omegaT + pagePhase);
         }
         return phi * 0.2;
-    } else {
+    } else if (fam < 2.5) {     // Chair — 4-fold
         for (int j = 0; j < 4; ++j) {
             float a = float(j) * HALF_PI;
             vec2  e = vec2(cos(a), sin(a));
             phi += cos(dot(p, e) * 6.0 + omegaT + pagePhase);
         }
         return phi * 0.25;
+    } else {                    // Dodecagonal — 12-fold
+        for (int j = 0; j < 12; ++j) {
+            float a = float(j) * PI_OVER_6;
+            vec2  e = vec2(cos(a), sin(a));
+            phi += cos(dot(p, e) * 6.0 + omegaT + pagePhase);
+        }
+        return phi * (1.0 / 12.0);
     }
 }
 
@@ -58,20 +66,27 @@ float wavePhi(vec2 p, float omegaT, float pagePhase, float fam) {
 // Used to push vertices around like ripples on a pond.
 vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float fam) {
     vec2 grad = vec2(0.0);
-    if (fam < 1.5) {
+    if (fam < 1.5) {            // P3 / P2 — 5-fold
         for (int j = 0; j < 5; ++j) {
             float a = float(j) * TWO_PI_OVER_5;
             vec2  e = vec2(cos(a), sin(a));
             grad += -sin(dot(p, e) * 6.0 + omegaT + pagePhase) * (6.0 * e);
         }
         return grad * 0.2;
-    } else {
+    } else if (fam < 2.5) {     // Chair — 4-fold
         for (int j = 0; j < 4; ++j) {
             float a = float(j) * HALF_PI;
             vec2  e = vec2(cos(a), sin(a));
             grad += -sin(dot(p, e) * 6.0 + omegaT + pagePhase) * (6.0 * e);
         }
         return grad * 0.25;
+    } else {                    // Dodecagonal — 12-fold
+        for (int j = 0; j < 12; ++j) {
+            float a = float(j) * PI_OVER_6;
+            vec2  e = vec2(cos(a), sin(a));
+            grad += -sin(dot(p, e) * 6.0 + omegaT + pagePhase) * (6.0 * e);
+        }
+        return grad * (1.0 / 12.0);
     }
 }
 

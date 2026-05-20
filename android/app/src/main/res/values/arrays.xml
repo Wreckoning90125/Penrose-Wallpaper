@@ -4,11 +4,13 @@
         <item>P3 (rhombi)</item>
         <item>P2 (kites &amp; darts)</item>
         <item>Chair (L-trominoes)</item>
+        <item>Dodecagonal (rhomb&#8211;square)</item>
     </string-array>
     <string-array name="family_values">
         <item>0</item>
         <item>1</item>
         <item>2</item>
+        <item>3</item>
     </string-array>
 
     <!-- Seeds per family — SettingsFragment swaps these into the seed
@@ -41,6 +43,17 @@
         <item>Large</item>
     </string-array>
     <string-array name="seed_chair_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <string-array name="seed_dodeca_entries">
+        <item>Rosette</item>
+        <item>Drift</item>
+        <item>Quasi</item>
+    </string-array>
+    <string-array name="seed_dodeca_values">
         <item>0</item>
         <item>1</item>
         <item>2</item>

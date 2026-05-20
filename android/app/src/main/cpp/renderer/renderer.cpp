@@ -256,9 +256,10 @@ void Renderer::setSystemInsets(int topPx, int bottomPx, int leftPx, int rightPx)
 void Renderer::considerGrowth() {
     if (settings_.panMode != 1) return;
     const float threshold = (surfW_ > 0) ? (float)surfW_ : 1080.0f;
-    const int maxGen = (settings_.family == Family::Chair) ? kMaxGenChair :
-                       (settings_.family == Family::P2)    ? kMaxGenP2 :
-                                                              kMaxGenP3;
+    const int maxGen = (settings_.family == Family::Chair)       ? kMaxGenChair :
+                       (settings_.family == Family::P2)          ? kMaxGenP2 :
+                       (settings_.family == Family::Dodecagonal) ? kMaxGenDodeca :
+                                                                   kMaxGenP3;
     while (panAccumPx_ >= threshold && effectiveGeneration_ < maxGen) {
         panAccumPx_ -= threshold;
         effectiveGeneration_ += 1;

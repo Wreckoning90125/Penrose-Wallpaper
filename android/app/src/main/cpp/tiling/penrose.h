@@ -35,13 +35,13 @@ struct Tile {
 
 enum class Family : int {
     P3 = 0, P2 = 1, Chair = 2, Dodecagonal = 3, Pinwheel = 4,
-    AmmannBeenker = 5, Heptagonal = 6,
+    AmmannBeenker = 5, Heptagonal = 6, Binary = 7,
 };
 
 // Number of Family enumerators. The JNI layer validates the incoming family
 // index against this; keep it in step with the enum above and with the
 // kFamilyInfo[] table in penrose.cpp.
-constexpr int kFamilyCount = 7;
+constexpr int kFamilyCount = 8;
 
 // Per-family edge classification used by the border seam-hiding rule.
 //   For Penrose: Leg = the two equal-length sides, Base = the third.
@@ -64,6 +64,7 @@ enum class SeedP2 : int { Sun = 0, Star = 1 };
 enum class SeedChair : int { Pinwheel = 0, Small = 1, Large = 2 };
 enum class SeedDodeca : int { Rosette = 0, Drift = 1, Quasi = 2 };
 enum class SeedPinwheel : int { Square = 0, Triangle = 1, Rectangle = 2 };
+enum class SeedBinary : int { Bear = 0, Dog = 1 };
 
 std::vector<Tile> seedP3(SeedP3 seed);
 std::vector<Tile> seedP2(SeedP2 seed);
@@ -90,6 +91,13 @@ std::vector<Tile> subdividePinwheel(const std::vector<Tile>& in);
 // so a higher value yields a finer patch the way deeper deflation does for
 // the substitution families. `seedIdx` (0..2) picks a grid-offset variant.
 std::vector<Tile> generateMultigrid(int gridCount, int seedIdx, int generations);
+
+// Godreche-Lancon binary tiling: a non-Pisot 5-fold substitution on the two
+// Penrose rhombs (inflation factor sqrt(2+phi), eigenvalue phi^2). Grown by
+// the recursion of Godreche & Lancon 1992, then closed into the centred Bear
+// (seedIdx 0) or Dog (seedIdx 1) patch. Like generateMultigrid there is no
+// seed/subdivide pair; `generations` is the recursion depth.
+std::vector<Tile> generateBinary(int seedIdx, int generations);
 
 // =============================================================================
 // Edge extraction (one entry per side of every tile)

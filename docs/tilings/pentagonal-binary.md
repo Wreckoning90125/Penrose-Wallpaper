@@ -26,8 +26,8 @@ rules do *not* force aperiodicity.
 | Aperiodic        | not-forced |
 | Prototiles       | 2 — thick rhomb (72°/108°), thin rhomb (36°/144°) |
 | Construction     | substitution + corner-marking matching rule |
-| Inflation factor | golden-ratio family |
-| Attribution      | quasicrystal literature (term used by Savard) |
+| Inflation factor | √(2 + φ) ≈ 1.902 — non-Pisot |
+| Attribution      | Lançon & Billard 1988; Godrèche & Lançon 1992 |
 
 ### Prototiles
 The same two golden rhombs as P3, equal unit edge: thick 72°/108°, thin
@@ -36,12 +36,17 @@ types, drawn as white circles (the "large atom" sites, at the acute ends of
 the thin rhomb) and black circles ("small atom" sites).
 
 ### Construction
-A substitution relation exists — described by Savard as "particularly
-challenging to grasp," shown over four generations. Each thick and thin rhomb
-inflates into a cluster of thick and thin rhombs; the inflation produces
-scaled-up thick and thin super-rhombs, i.e. a self-similar rhomb-to-rhomb
-substitution. The boundary of an infinitely-recurred region is a fractal
-curve.
+A self-similar rhomb-to-rhomb substitution. Godrèche & Lançon (1992) give it
+explicitly: with eₖ = (cos 2πk/5, sin 2πk/5), the large rhomb L (72°/108°) is
+built on e₀,e₁ and the sharp rhomb S (36°/144°) on e₀,e₂. The substitution
+matrix is **[[3,1],[1,2]]** — L → 3L + 1S, S → 1L + 2S — with leading
+eigenvalue φ² (so the linear inflation factor is √(2 + φ) ≈ 1.902, a
+*non-Pisot* number; the second eigenvalue 3 − φ ≈ 1.382 also exceeds 1). The
+growth recurrence (their eq. 3) joins rotated, g-scaled copies of the previous
+finite tilings Lₙ, Sₙ; the centred **Bear** and **Dog** patches (their eq. 4)
+drop every translation so the copies fan a full turn around the origin. The
+boundary of an infinitely-recurred region is a fractal curve (dimension ≈
+1.078).
 
 ### Matching rules
 **Corner marks, not edge arrows** — analogous in kind to the kite-and-dart
@@ -71,13 +76,21 @@ acute-thin-rhomb corner is the atom needing more space.
 Of interest in quasicrystal physics as a two-atomic-species model.
 
 ### Renderer mapping
-Not implemented. A binary `Family` is feasible as a substitution, but the
-corner-marking rules carry no aperiodicity guarantee — the renderer would
-have to drive it purely by the substitution and treat the marks as decoration
-only. Lower value than P3/P2, which it geometrically overlaps.
+Implemented — `Family::Binary` (`generateBinary` in `tiling/penrose.cpp`).
+The renderer drives it purely by the substitution (the corner marks are not
+modelled — they carry no aperiodicity guarantee anyway). `generateBinary`
+runs the Godrèche–Lançon eq. (3) growth recurrence to depth `generations`,
+then closes it with eq. (4) into the centred Bear (`seedIdx` 0) or Dog
+(`seedIdx` 1) patch, and normalises into the unit disk. Tiles are 4-vertex
+rhombs with `type` 0 = L, 1 = S; `waveSymmetry` 5 is shared with P3/P2.
+Verified by the substitution harness: exact tile counts from [[3,1],[1,2]],
+every rhomb edge-to-edge, no overlaps.
 
 ### References
-Mikulla, Roth (named tiling); quadibloc `pen02.htm`.
+Lançon, F. & Billard, L., *J. Physique* **49** (1988) 249 (the binary tiling);
+Godrèche, C. & Lançon, F., "A simple example of a non-Pisot tiling with
+five-fold symmetry", *J. Phys. I France* **2** (1992) 207 (the explicit
+substitution, eqs. 3–4); Mikulla, Roth (named variant); quadibloc `pen02.htm`.
 
 ---
 

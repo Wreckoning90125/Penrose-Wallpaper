@@ -139,7 +139,8 @@ bool Renderer::buildGeometry() {
             (fam == Family::Chair)          ? 6 :
             (fam == Family::Dodecagonal  ||
              fam == Family::AmmannBeenker ||
-             fam == Family::Heptagonal)     ? 4 : 3;
+             fam == Family::Heptagonal    ||
+             fam == Family::Binary)         ? 4 : 3;
         edges.reserve(tiles.size() * edgesPerTile);
         for (const Tile& t : tiles) {
             if (t.vcount == 3) edgesPenrose(t, edges);

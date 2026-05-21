@@ -544,6 +544,136 @@ std::vector<Tile> seedPinwheel(SeedPinwheel seed) {
 }
 
 // =============================================================================
+// Godreche-Lancon binary tiling — non-Pisot 5-fold rhomb substitution
+// =============================================================================
+// The two Penrose rhombs grown by the recursion of C. Godreche & F. Lancon,
+// "A simple example of a non-Pisot tiling with five-fold symmetry", J. Phys. I
+// France 2 (1992) 207-220. With e_k = (cos 2pi k/5, sin 2pi k/5), the large
+// rhomb L (72/108) is built on e0,e1 and the sharp rhomb S (36/144) on e0,e2.
+// Equation (3) grows the corner-anchored tilings L_n, S_n:
+//   L_{n+1} = L_n + [r , g^{n+1}(e0)   ]L_n + [r2, g^{n+1}(e0+e1)]L_n
+//                 + [r3, g^{n+1}(e1)   ]S_n
+//   S_{n+1} = S_n + [r2, g^{n+1}(e0+e2)]S_n + [r4, g^{n+1}(e2)   ]L_n
+// with r = rotation 2pi/5, g = rotation -pi/10 then dilation by the inflation
+// factor theta = sqrt(2+phi), and [rot,t] meaning "rotate then translate".
+// Equation (4) closes the centred patches by dropping every translation, so
+// the pieces fan around the origin: Bear B = L + rL + r2L + r3S (3L+1S spans
+// 3*72+144 = 360 deg); Dog D = S + r2S + r4L. The substitution matrix is
+// [[3,1],[1,2]] (L->3L+1S, S->2S+1L), eigenvalue phi^2. There is no overlap or
+// gap: equal grid edges from adjacent rhombs split identically (Godreche &
+// Lancon section 2).
+
+namespace {
+
+// A working rhomb: 4 CCW double-precision corners + L/S type. Kept separate
+// from Tile so the many-iteration recursion runs without float drift.
+struct BinRhomb { double x[4], y[4]; uint8_t type; };
+
+// Append into `dst` a copy of every rhomb in `src` rotated by `rot` about the
+// origin and then translated by (tx,ty).
+inline void binEmit(std::vector<BinRhomb>& dst, const std::vector<BinRhomb>& src,
+                    double rot, double tx, double ty) {
+    const double c = std::cos(rot), s = std::sin(rot);
+    for (const BinRhomb& q : src) {
+        BinRhomb o; o.type = q.type;
+        for (int i = 0; i < 4; ++i) {
+            o.x[i] = c * q.x[i] - s * q.y[i] + tx;
+            o.y[i] = s * q.x[i] + c * q.y[i] + ty;
+        }
+        dst.push_back(o);
+    }
+}
+
+} // namespace
+
+std::vector<Tile> generateBinary(int seedIdx, int generations) {
+    const double theta = std::sqrt(2.0 + kPhi);   // inflation factor ~1.902113
+    const double r1 = 2.0 * kPi / 5.0;             // r = rotation 2pi/5
+
+    double ex[5], ey[5];
+    for (int k = 0; k < 5; ++k) {
+        ex[k] = std::cos(2.0 * kPi * k / 5.0);
+        ey[k] = std::sin(2.0 * kPi * k / 5.0);
+    }
+
+    // L0, S0: a single large / sharp rhomb anchored with one corner at O.
+    std::vector<BinRhomb> L, S;
+    {
+        BinRhomb l{}; l.type = 0;
+        l.x[0] = 0.0;                 l.y[0] = 0.0;
+        l.x[1] = ex[0];               l.y[1] = ey[0];
+        l.x[2] = ex[0] + ex[1];       l.y[2] = ey[0] + ey[1];
+        l.x[3] = ex[1];               l.y[3] = ey[1];
+        L.push_back(l);
+        BinRhomb s{}; s.type = 1;
+        s.x[0] = 0.0;                 s.y[0] = 0.0;
+        s.x[1] = ex[0];               s.y[1] = ey[0];
+        s.x[2] = ex[0] + ex[2];       s.y[2] = ey[0] + ey[2];
+        s.x[3] = ex[2];               s.y[3] = ey[2];
+        S.push_back(s);
+    }
+
+    const int gen = generations < 1 ? 1 : generations;
+
+    // Equation (3): grow L_n, S_n to L_{gen-1}, S_{gen-1}.
+    for (int n = 0; n < gen - 1; ++n) {
+        const double gm = std::pow(theta, n + 1);          // g^{n+1} scale
+        const double ga = -(n + 1) * kPi / 10.0;           // g^{n+1} rotation
+        const double gc = std::cos(ga), gs = std::sin(ga);
+        auto gvec = [&](double vx, double vy, double& ox, double& oy) {
+            ox = gm * (gc * vx - gs * vy);
+            oy = gm * (gs * vx + gc * vy);
+        };
+        std::vector<BinRhomb> Ln = L, Sn = S;             // identity term
+        double tx, ty;
+        gvec(ex[0],          ey[0],          tx, ty); binEmit(Ln, L, r1 * 1, tx, ty);
+        gvec(ex[0] + ex[1],  ey[0] + ey[1],  tx, ty); binEmit(Ln, L, r1 * 2, tx, ty);
+        gvec(ex[1],          ey[1],          tx, ty); binEmit(Ln, S, r1 * 3, tx, ty);
+        gvec(ex[0] + ex[2],  ey[0] + ey[2],  tx, ty); binEmit(Sn, S, r1 * 2, tx, ty);
+        gvec(ex[2],          ey[2],          tx, ty); binEmit(Sn, L, r1 * 4, tx, ty);
+        L.swap(Ln); S.swap(Sn);
+    }
+
+    // Equation (4): close the centred patch — every translation is the null
+    // vector, so the rotated copies fan a full turn around the origin.
+    std::vector<BinRhomb> out;
+    if (seedIdx == 1) {                 // Dog: D = S + r2 S + r4 L
+        out = S;
+        binEmit(out, S, r1 * 2, 0.0, 0.0);
+        binEmit(out, L, r1 * 4, 0.0, 0.0);
+    } else {                            // Bear: B = L + r L + r2 L + r3 S
+        out = L;
+        binEmit(out, L, r1 * 1, 0.0, 0.0);
+        binEmit(out, L, r1 * 2, 0.0, 0.0);
+        binEmit(out, S, r1 * 3, 0.0, 0.0);
+    }
+
+    // Normalise the centred patch into the unit disk, matching the other
+    // families' model-space scale and the ripple shader's spatial frequency.
+    double maxR2 = 0.0;
+    for (const BinRhomb& q : out)
+        for (int i = 0; i < 4; ++i) {
+            const double rr = q.x[i] * q.x[i] + q.y[i] * q.y[i];
+            if (rr > maxR2) maxR2 = rr;
+        }
+    const double inv = maxR2 > 1e-12 ? 1.0 / std::sqrt(maxR2) : 1.0;
+
+    std::vector<Tile> tiles;
+    tiles.reserve(out.size());
+    for (const BinRhomb& q : out) {
+        Tile t{};
+        t.vcount = 4;
+        t.type = q.type;
+        for (int i = 0; i < 4; ++i) {
+            t.x[i] = static_cast<float>(q.x[i] * inv);
+            t.y[i] = static_cast<float>(q.y[i] * inv);
+        }
+        tiles.push_back(t);
+    }
+    return tiles;
+}
+
+// =============================================================================
 // Per-family descriptor table
 // =============================================================================
 // One row per Family enumerator, in enum order. The renderer, the colour
@@ -572,6 +702,8 @@ const FamilyInfo kFamilyInfo[kFamilyCount] = {
                           { 2,  4, false, 0, 1, true,  false } },
     /* Heptagonal    */ { 8, 0.6180339887498949f, 14, 0, false,
                           { 3,  7, false, 0, 1, true,  false } },
+    /* Binary        */ { 8, 0.5257311121191336f,  5, 0, false,
+                          { 2,  5, false, 0, 1, true,  false } },
 };
 
 // =============================================================================
@@ -610,6 +742,10 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
         case Family::Dodecagonal:   return generateMultigrid(6, seedIdx, cap);
         case Family::AmmannBeenker: return generateMultigrid(4, seedIdx, cap);
         case Family::Heptagonal:    return generateMultigrid(7, seedIdx, cap);
+        case Family::Binary: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            return generateBinary(s, cap);
+        }
     }
     return {};
 }

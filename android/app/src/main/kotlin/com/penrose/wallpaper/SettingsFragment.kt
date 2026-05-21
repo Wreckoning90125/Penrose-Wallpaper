@@ -239,6 +239,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
             4 -> R.array.seed_pinwheel_entries to R.array.seed_pinwheel_values
             5 -> R.array.seed_ammannbeenker_entries to R.array.seed_ammannbeenker_values
             6 -> R.array.seed_heptagonal_entries to R.array.seed_heptagonal_values
+            7 -> R.array.seed_binary_entries to R.array.seed_binary_values
             else -> R.array.seed_p3_entries to R.array.seed_p3_values
         }
         val entries = resources.getStringArray(entriesId)

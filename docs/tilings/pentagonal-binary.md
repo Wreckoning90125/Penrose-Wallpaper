@@ -213,7 +213,7 @@ Robinson triangle tiling; the parent of the Mikulla–Roth tiling.
 | Prototiles       | acute & obtuse golden isosceles triangles |
 | Construction     | substitution |
 | Inflation factor | φ |
-| Attribution      | Tübingen quasicrystal group |
+| Attribution      | Baake, Kramer, Schlottmann, Lück (Tübingen group, 1990) |
 
 ### Prototiles
 Acute and obtuse golden isosceles triangles, the same triangle family as the
@@ -222,13 +222,23 @@ derivation.
 
 ### Construction
 A substitution similar to — but distinct from — the Robinson triangle
-recurrence, shown on the right-hand side of Savard's triangle-recurrence
-diagram (black = current generation, orange = next-generation boundaries /
-orientation indicator). Each triangle subdivides into next-generation
-triangles each step.
+recurrence, with inflation factor φ. From BKSZ90 Fig. 4.6 ("local deflation
+of oriented triangles"):
+- **obtuse → 1 obtuse + 1 acute.** A single cevian runs from the 108° apex to
+  the point on the long base that divides it φ⁻¹ : φ⁻² (the φ⁻¹ part toward
+  the second base vertex). The apex-side wedge to the first base vertex is the
+  child obtuse; the remaining triangle is the child acute.
+- **acute → 2 acute + 1 obtuse.** Marking each leg φ⁻¹ of the way down from
+  the 36° apex gives points D, E; triangle apex-D-E is the child acute at the
+  apex. A diagonal D→(far base vertex) splits the rest into a second acute
+  (against the base) and an obtuse.
+
+Because each prototile is mirror-symmetric but its substitution is not, a
+triangle and its mirror deflate to mirror-image clusters — left- and
+right-handed tiles are genuinely distinct and must be tracked.
 
 ### Matching rules
-Triangle-orientation rules as encoded by the recurrence diagram.
+Triangle-orientation (handedness) rules as encoded by the recurrence diagram.
 
 ### Symmetry & aperiodicity
 Aperiodic substitution tiling.
@@ -241,9 +251,23 @@ tiling when vertices/centres are marked with atoms.
 Named for quasicrystal research at Tübingen.
 
 ### Renderer mapping
-Not implemented. A candidate `Family` — a clean two-triangle substitution —
-if a triangle-based 5-fold family is ever wanted alongside the rhomb-based
-P3.
+Implemented — `Family::Tuebingen` (`subdivideTuebingen` / `seedTuebingen` in
+`tiling/penrose.cpp`). Triangles are stored verts `[apex, b1, b2]`, `type`
+0 = obtuse / 1 = acute, like P3/P2. The chiral substitution is written once in
+barycentric coordinates of the parent frame and applied through that frame's
+affine map, so reflected tiles deflate to reflected clusters with no special
+case — the vertex winding *is* the handedness. Seeds: `Sun` (a ten-acute
+decagon rosette of alternating handedness) and `Triangle` (a single acute).
+`waveSymmetry` 5 is shared with P3/P2. Verified by the substitution harness:
+tile counts match the [[1,1],[1,2]] matrix at every generation, no overlaps,
+and the rendered patch reproduces the pinwheel-rosette texture of the BKSZ90
+reference patch.
+
+### References
+Baake, M., Kramer, P., Schlottmann, M. & Lück, R., "Planar patterns with
+fivefold symmetry as sections of periodic structures in 4-space", *Int. J.
+Mod. Phys. B* **4** (1990) 2217 (the substitution, Fig. 4.6); quadibloc
+`pen02.htm`.
 
 ### References
 Tübingen quasicrystal group; quadibloc `pen02.htm`.

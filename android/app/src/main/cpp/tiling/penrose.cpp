@@ -134,6 +134,43 @@ std::vector<Tile> subdivideP2(const std::vector<Tile>& in) {
     return out;
 }
 
+// Tübingen triangle deflation. The two Robinson triangles, stored verts
+// [apex, b1, b2], type 0 = obtuse (108-36-36), 1 = acute (36-72-72). Inflation
+// φ; per Baake-Kramer-Schlottmann-Lück 1990 Fig. 4.6:
+//   obtuse → 1 obtuse + 1 acute  (a cevian from the apex to the long base)
+//   acute  → 2 acute  + 1 obtuse (top acute at the apex, the rest split by a
+//                                 diagonal into an acute and an obtuse)
+// Each child is written in barycentric (s,d) coordinates of the parent frame
+// V + s·(b1-V) + d·(b2-V), so the parent's affine map carries the chiral rule
+// onto reflected tiles automatically — the vertex winding is the handedness.
+std::vector<Tile> subdivideTuebingen(const std::vector<Tile>& in) {
+    std::vector<Tile> out;
+    out.reserve(in.size() * 3);
+    for (const Tile& t : in) {
+        const float x0 = t.x[0], y0 = t.y[0];
+        const float ux = t.x[1] - x0, uy = t.y[1] - y0;   // b1 - apex
+        const float wx = t.x[2] - x0, wy = t.y[2] - y0;   // b2 - apex
+        auto P = [&](double s, double d, float& ox, float& oy) {
+            ox = static_cast<float>(x0 + s * ux + d * wx);
+            oy = static_cast<float>(y0 + s * uy + d * wy);
+        };
+        if (t.type == 1) {            // acute → 2 acute + 1 obtuse
+            float Dx, Dy, Ex, Ey;
+            P(kPsi, 0.0,  Dx, Dy);    // D on apex→b1 leg at 1/φ
+            P(0.0,  kPsi, Ex, Ey);    // E on apex→b2 leg at 1/φ
+            out.push_back(mkTri(1, x0, y0, Dx, Dy, Ex, Ey));
+            out.push_back(mkTri(1, t.x[2], t.y[2], Dx, Dy, t.x[1], t.y[1]));
+            out.push_back(mkTri(0, Ex, Ey, Dx, Dy, t.x[2], t.y[2]));
+        } else {                      // obtuse → 1 obtuse + 1 acute
+            float Px, Py;
+            P(kPsi, kPsi2, Px, Py);   // cevian foot on the b1→b2 base
+            out.push_back(mkTri(0, Px, Py, x0, y0, t.x[1], t.y[1]));
+            out.push_back(mkTri(1, t.x[2], t.y[2], x0, y0, Px, Py));
+        }
+    }
+    return out;
+}
+
 std::vector<Tile> subdivideChair(const std::vector<Tile>& in) {
     std::vector<Tile> out;
     out.reserve(in.size() * 4);
@@ -247,6 +284,32 @@ std::vector<Tile> seedP2(SeedP2 seed) {
             }
             break;
         }
+    }
+    return out;
+}
+
+std::vector<Tile> seedTuebingen(SeedTuebingen seed) {
+    std::vector<Tile> out;
+    if (seed == SeedTuebingen::Tile) {
+        // A single acute golden triangle, apex up, unit base.
+        const double h = std::sqrt(kPhi * kPhi - 0.25);
+        out.push_back(mkTri(1, 0.0f, static_cast<float>(h),
+                               -0.5f, 0.0f, 0.5f, 0.0f));
+        return out;
+    }
+    // Sun: ten acute triangles, 36° apex at the origin, fanning a decagon.
+    // Alternate triangles take the mirror winding so the rosette carries
+    // both handednesses, as the chiral substitution requires.
+    out.reserve(10);
+    for (int i = 0; i < 10; ++i) {
+        const double a1 = 2.0 * kPi * i / 10.0;
+        const double a2 = 2.0 * kPi * (i + 1) / 10.0;
+        const float p1x = static_cast<float>(std::cos(a1));
+        const float p1y = static_cast<float>(std::sin(a1));
+        const float p2x = static_cast<float>(std::cos(a2));
+        const float p2y = static_cast<float>(std::sin(a2));
+        if (i & 1) out.push_back(mkTri(1, 0.0f, 0.0f, p2x, p2y, p1x, p1y));
+        else       out.push_back(mkTri(1, 0.0f, 0.0f, p1x, p1y, p2x, p2y));
     }
     return out;
 }
@@ -704,6 +767,8 @@ const FamilyInfo kFamilyInfo[kFamilyCount] = {
                           { 3,  7, false, 0, 1, true,  false } },
     /* Binary        */ { 8, 0.5257311121191336f,  5, 0, false,
                           { 2,  5, false, 0, 1, true,  false } },
+    /* Tuebingen     */ { 8, 0.6180339887498949f,  5, 0, false,
+                          { 2, 10, false, 0, 2, false, false } },
 };
 
 // =============================================================================
@@ -745,6 +810,12 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
         case Family::Binary: {
             int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
             return generateBinary(s, cap);
+        }
+        case Family::Tuebingen: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            auto tiles = seedTuebingen(static_cast<SeedTuebingen>(s));
+            for (int g = 0; g < cap; ++g) tiles = subdivideTuebingen(tiles);
+            return tiles;
         }
     }
     return {};

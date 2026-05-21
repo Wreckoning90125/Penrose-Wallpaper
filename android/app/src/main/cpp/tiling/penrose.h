@@ -35,13 +35,13 @@ struct Tile {
 
 enum class Family : int {
     P3 = 0, P2 = 1, Chair = 2, Dodecagonal = 3, Pinwheel = 4,
-    AmmannBeenker = 5, Heptagonal = 6, Binary = 7,
+    AmmannBeenker = 5, Heptagonal = 6, Binary = 7, Tuebingen = 8,
 };
 
 // Number of Family enumerators. The JNI layer validates the incoming family
 // index against this; keep it in step with the enum above and with the
 // kFamilyInfo[] table in penrose.cpp.
-constexpr int kFamilyCount = 8;
+constexpr int kFamilyCount = 9;
 
 // Per-family edge classification used by the border seam-hiding rule.
 //   For Penrose: Leg = the two equal-length sides, Base = the third.
@@ -65,11 +65,13 @@ enum class SeedChair : int { Pinwheel = 0, Small = 1, Large = 2 };
 enum class SeedDodeca : int { Rosette = 0, Drift = 1, Quasi = 2 };
 enum class SeedPinwheel : int { Square = 0, Triangle = 1, Rectangle = 2 };
 enum class SeedBinary : int { Bear = 0, Dog = 1 };
+enum class SeedTuebingen : int { Sun = 0, Tile = 1 };
 
 std::vector<Tile> seedP3(SeedP3 seed);
 std::vector<Tile> seedP2(SeedP2 seed);
 std::vector<Tile> seedChair(SeedChair seed);
 std::vector<Tile> seedPinwheel(SeedPinwheel seed);
+std::vector<Tile> seedTuebingen(SeedTuebingen seed);
 
 // =============================================================================
 // Substitutions
@@ -78,6 +80,12 @@ std::vector<Tile> seedPinwheel(SeedPinwheel seed);
 std::vector<Tile> subdivideP3(const std::vector<Tile>& in);
 std::vector<Tile> subdivideP2(const std::vector<Tile>& in);
 std::vector<Tile> subdivideChair(const std::vector<Tile>& in);
+
+// Tübingen triangle deflation (Baake, Kramer, Schlottmann, Lück 1990): the
+// two Robinson triangles, inflation φ. Stored like P3/P2 — verts [apex, b1,
+// b2], type 0 = obtuse, 1 = acute — but the chiral substitution is carried by
+// the vertex winding and applied through the affine map of the parent frame.
+std::vector<Tile> subdivideTuebingen(const std::vector<Tile>& in);
 
 // Pinwheel deflation: each 1:2:sqrt(5) triangle becomes five at 1/sqrt(5)
 // scale (Conway / Radin). Reflected tiles arise naturally and are kept.

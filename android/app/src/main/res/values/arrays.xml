@@ -9,6 +9,7 @@
         <item>Ammann–Beenker (8-fold)</item>
         <item>Heptagonal (14-fold)</item>
         <item>Binary (Godrèche–Lançon)</item>
+        <item>Tübingen triangle (5-fold)</item>
     </string-array>
     <string-array name="family_values">
         <item>0</item>
@@ -19,6 +20,7 @@
         <item>5</item>
         <item>6</item>
         <item>7</item>
+        <item>8</item>
     </string-array>
 
     <!-- Seeds per family — SettingsFragment swaps these into the seed
@@ -105,6 +107,15 @@
         <item>Dog</item>
     </string-array>
     <string-array name="seed_binary_values">
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+
+    <string-array name="seed_tuebingen_entries">
+        <item>Sun</item>
+        <item>Triangle</item>
+    </string-array>
+    <string-array name="seed_tuebingen_values">
         <item>0</item>
         <item>1</item>
     </string-array>

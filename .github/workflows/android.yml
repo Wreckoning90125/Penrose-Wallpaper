@@ -101,6 +101,16 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # Post-build verification of the APK the toolchain just produced and
+      # published. The source build proves the code compiles; this proves
+      # the *artifact* is sound — signature, manifest, payload (native
+      # libs, SPIR-V shaders, presets), and the main catch: that
+      # libpenrose.so exports a Java_* symbol for every `external fun` in
+      # NativeBridge.kt, so a JNI mismatch fails CI here instead of
+      # crashing the app with UnsatisfiedLinkError on first native call.
+      - name: Verify release APK
+        run: bash ../scripts/verify-apk.sh "$(ls app/build/outputs/apk/release/*.apk | head -1)"
+
   # Parallel job: UBSan-instrumented debug APK. Cheap (a few percent
   # overhead) and catches signed-overflow, null-deref, shift-out-of-range
   # and function-pointer-cast mismatches the moment they happen on a

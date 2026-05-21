@@ -321,21 +321,19 @@ College PhD thesis (2003) and in *Discrete & Computational Geometry* 34
 (2005) 523–536.
 
 ### Renderer mapping
-Not implemented, and not implementable from the documented data alone. The
-sources fix the prototiles, the inflation factor λ = 2 + 2·cos(π/7), and the
-exact per-parent child *counts* (Harriss Table 1) — but they give the actual
-dissection only as figures (Harriss Fig. 2 and 7–9), never as child
-coordinates. Because the substitution is not volume-hierarchic, the children
-fill a dimpled region rather than a plain rhomb, so the area-conservation and
-gap/overlap-closure checks that verify the renderer's other substitutions
-(P1, P2, P3, pinwheel, Tübingen, binary) do not apply directly. A faithful
-`Family` would require: digitising Harriss Fig. 2 into a child list of
-(label, edge-direction pair, translation, orientation); tracking six labels
-(T₁, T₂, T₃ and the marked R, P, Q); modelling the π/7 dimple on every edge;
-and verifying each patch against the 2π interior-vertex condition. That
-reconstruction is a research task in its own right — deferred until the child
-geometry can be pinned down and verified on-device. `waveSymmetry` would
-be 7.
+Not implemented. The obstruction is mathematical, not a missing figure. The
+substitution is not volume-hierarchic: an inflated rhomb is a dimpled region,
+not a plain rhomb, and at λ ≈ 3.802 the thin rhomb alone expands to ten
+children (Harriss Table 1), the others comparably. Its dissection is therefore
+a rhomb-packing problem — place the unit rhombs so every edge dimple matches
+and the angles at every interior vertex sum to 2π — not the small
+polygon-triangulation enumeration that makes the triangle families (Danzer,
+Tübingen) tractable to a closure solver. The published figures (Harriss
+Fig. 2, 7–9) exhibit one solved packing; they are not the *source* of its
+validity, which is the dimple rule plus the 2π-vertex condition plus
+primitivity. A faithful `Family` therefore needs a constraint solver over
+rhomb placements, not a transcribed picture — the open tooling task noted in
+`tools/README.md`. `waveSymmetry` would be 7.
 
 ### References
 - E. O. Harriss, "Non-Periodic Rhomb Substitution Tilings that Admit Order n
@@ -428,14 +426,16 @@ admits no translation period, since a period lattice would have to map to a
 ρ-scaled sublattice of itself.
 
 ### Variants & relations
-Nischke–Danzer 1996 build a whole family F_n of triangle substitutions for
-every odd n not divisible by 3; n = 7 is the smallest non-trivial case, with
-(n−1)(n−2)/6 = 5 triangles available and Danzer's original §6.3 tiling using
-three of them at inflation μ²_{7,3}/μ_{7,2} = 1 + ρ ≈ 2.802. The renderer's
-four-prototile rule at inflation ρ is a closure-verified member of the same
-F₇ triangle-substitution class (reconstructed and checked for area and
-gap/overlap closure, as the published dissections are given only as figures).
-Danzer's best-known tiling is a separate three-dimensional icosahedral one.
+Nischke–Danzer 1996 construct a whole family F_n of triangle substitutions for
+every odd n not divisible by 3; n = 7 is the smallest non-trivial case. F₇ has
+(n−1)(n−2)/6 = 5 triangles available, and Danzer's §6.3 tiling uses three of
+them at inflation μ²_{7,3}/μ_{7,2} = 1 + ρ ≈ 2.802. The renderer's rule is the
+four-prototile F₇ substitution at inflation ρ; its correctness is the closure
+algebra of the Construction section — a primitive substitution matrix with
+Perron eigenvalue ρ² and an exact gap/overlap-free dissection of each inflated
+prototile — and is re-checked on every build by `tools/verify_tilings.cpp`,
+with no dependence on any published figure. Danzer's best-known tiling is a
+separate three-dimensional icosahedral one.
 
 ### History & decoration
 L. Danzer; the construction is formalised in K.-P. Nischke & L. Danzer, "A

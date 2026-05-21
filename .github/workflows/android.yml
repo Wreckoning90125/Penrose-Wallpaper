@@ -167,3 +167,28 @@ jobs:
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
           retention-days: 14
+
+  # Parallel job: certify the tiling families. Links the production tiling
+  # core (tiling/penrose.cpp) with a host compiler — no Android SDK, no
+  # Vulkan — and runs tools/verify_tilings.cpp, which proves every family
+  # conserves area under deflation and tiles its region with no gap and no
+  # overlap. This gates substitution-rule regressions on every push, the
+  # same closure argument used to derive the rules in the first place.
+  tiling-verify:
+    name: verify tilings
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Compile the tiling core and the verifier
+        run: |
+          g++ -std=c++17 -O2 -Wall -Wextra -I android/app/src/main/cpp \
+            tools/verify_tilings.cpp \
+            android/app/src/main/cpp/tiling/penrose.cpp \
+            -o verify_tilings
+
+      - name: Run substitution / closure verification
+        run: ./verify_tilings

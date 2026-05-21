@@ -235,7 +235,10 @@ non-integers. The ripple shader's 12-fold wave-sum branch (12 plane waves at
 30° steps) is shared with the other dodecagonal systems.
 
 ### References
-N. G. de Bruijn; P. Stampfli; Hans-Ude Nissen; quadibloc `dode02.htm`.
+N. G. de Bruijn, "Algebraic theory of Penrose's non-periodic tilings of the
+plane", *Nederl. Akad. Wetensch. Proc. Ser. A* **84** (1981) 38–66 (the
+dualization method, of which this twelve-fold construction is the
+hexagonal-grid case); P. Stampfli; Hans-Ude Nissen; quadibloc `dode02.htm`.
 
 ---
 

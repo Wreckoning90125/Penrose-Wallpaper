@@ -157,7 +157,9 @@ It shares the multigrid generator with the dodecagonal and Ammann–Beenker
 families — only the grid count differs.
 
 ### References
-N. G. de Bruijn (dualization); quadibloc `heptint.htm`.
+N. G. de Bruijn, "Algebraic theory of Penrose's non-periodic tilings of the
+plane", *Nederl. Akad. Wetensch. Proc. Ser. A* **84** (1981) 38–66 (the
+dualization method, here run on seven line grids); quadibloc `heptint.htm`.
 
 ---
 

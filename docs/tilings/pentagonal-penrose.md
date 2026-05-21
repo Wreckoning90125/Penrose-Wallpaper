@@ -178,6 +178,14 @@ A substitution relation exists for the rhomb pair, relating P3 to P2 at
 several relative scales. Each rhomb inflates into a cluster of thick and thin
 rhombs scaled by φ.
 
+P3 is equivalently the **de Bruijn dualization** of a *pentagrid* — five
+superimposed grids of equally spaced parallel lines, the grid normals 72°
+apart, each grid k carrying a real shift γₖ (k = 0..4). Every grid
+intersection dualizes to a rhomb whose edges are orthogonal to the two
+crossing lines; a 36° crossing yields a thin rhomb, a 72° crossing a thick
+one. de Bruijn (1981) proved the dual obeys the Penrose matching rules
+exactly when Σγₖ is an integer.
+
 ### Matching rules
 Edge rules (conventionally arrows, two arrow types) force aperiodicity.
 **Eight** distinct legal vertex types occur (versus seven for P2). In the
@@ -195,6 +203,15 @@ Related to P2 and P1. The P2↔P3 relation is **not** the naive one: Ammann-bar
 spacing differs between P2 and P3 even when pentagons/stars are drawn at the
 same scale, proving the real isomorphism sits at a different relative scale.
 
+Equal-shift pentagrids (all γₖ equal) give the exactly-symmetric Penrose
+tilings. **SUN** (Σγ = 1) and **STAR** (Σγ = 2) are the only two with a centre
+of full tenfold symmetry; **CARTWHEEL** (all shifts 0) has a lower-symmetry
+centre — ten triangular sectors bordered by Conway worms, enclosing an
+alternating SUN/STAR sequence of central regions whose radii grow by φ. These
+three correspond to the renderer's `SeedP3` Sun, Star and Cartwheel seeds.
+Equal-shift pentagrids whose Σγ is non-integer give the *generalized* Penrose
+tilings — fivefold, but not governed by the Penrose matching rules.
+
 ### History & decoration
 The decorated-rhomb Islamic motif (see `pentagonal-islamic.md`) is built to
 sit on a P3 rhomb arrangement, carrying girih strapwork onto an aperiodic
@@ -207,7 +224,10 @@ substitution by generation count. The quasicrystal ripple shader uses a
 
 ### References
 Roger Penrose; external page tabulating the eight rhomb vertex-type limit
-frequencies; quadibloc `penrose.htm`.
+frequencies; N. G. de Bruijn, "Algebraic theory of Penrose's non-periodic
+tilings of the plane", *Nederl. Akad. Wetensch. Proc. Ser. A* **84** (*Indag.
+Math.* **43**) (1981) 38–66 (the pentagrid / dualization construction);
+quadibloc `penrose.htm`.
 
 ---
 

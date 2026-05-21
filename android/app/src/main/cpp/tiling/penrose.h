@@ -23,6 +23,8 @@ namespace penrose {
 //                  vertices in CCW order, type = the rhomb shape.
 //   P1           — pentagon (5), star (10), boat (≤10), diamond (4) in CCW
 //                  order; type 0=pentagon, 1=star, 2=boat, 3=diamond.
+//   Danzer       — four 7-fold triangles. verts = [v0, v1, v2]; type 0..3
+//                  selects the prototile (see subdivideDanzer).
 // We pack every shape into the same struct so the renderer can iterate
 // uniformly. `vcount` ranges 3..10 — 3 triangles, 4 rhombs, 6 Chair, 5/10/
 // ≤10/4 for the P1 tiles.
@@ -38,13 +40,13 @@ struct Tile {
 enum class Family : int {
     P3 = 0, P2 = 1, Chair = 2, Dodecagonal = 3, Pinwheel = 4,
     AmmannBeenker = 5, Heptagonal = 6, Binary = 7, Tuebingen = 8,
-    P1 = 9,
+    P1 = 9, Danzer = 10,
 };
 
 // Number of Family enumerators. The JNI layer validates the incoming family
 // index against this; keep it in step with the enum above and with the
 // kFamilyInfo[] table in penrose.cpp.
-constexpr int kFamilyCount = 10;
+constexpr int kFamilyCount = 11;
 
 // Per-family edge classification used by the border seam-hiding rule.
 //   For Penrose: Leg = the two equal-length sides, Base = the third.
@@ -69,12 +71,14 @@ enum class SeedDodeca : int { Rosette = 0, Drift = 1, Quasi = 2 };
 enum class SeedPinwheel : int { Square = 0, Triangle = 1, Rectangle = 2 };
 enum class SeedBinary : int { Bear = 0, Dog = 1 };
 enum class SeedTuebingen : int { Sun = 0, Tile = 1 };
+enum class SeedDanzer : int { Sun = 0, Tile = 1 };
 
 std::vector<Tile> seedP3(SeedP3 seed);
 std::vector<Tile> seedP2(SeedP2 seed);
 std::vector<Tile> seedChair(SeedChair seed);
 std::vector<Tile> seedPinwheel(SeedPinwheel seed);
 std::vector<Tile> seedTuebingen(SeedTuebingen seed);
+std::vector<Tile> seedDanzer(SeedDanzer seed);
 
 // =============================================================================
 // Substitutions
@@ -89,6 +93,15 @@ std::vector<Tile> subdivideChair(const std::vector<Tile>& in);
 // b2], type 0 = obtuse, 1 = acute — but the chiral substitution is carried by
 // the vertex winding and applied through the affine map of the parent frame.
 std::vector<Tile> subdivideTuebingen(const std::vector<Tile>& in);
+
+// Danzer-type 7-fold triangle deflation. Four prototiles, every angle a
+// multiple of pi/7; inflation factor rho = 2cos(pi/7). Each parent deflates
+// into 2/3/4 children at 1/rho scale by the substitution matrix
+// [[1,1,0,0],[1,1,1,0],[0,1,2,1],[0,1,1,1]] (Perron eigenvalue rho^2). Stored
+// like the other triangle families — verts [v0,v1,v2], type 0..3 — with the
+// dissection written in the parent's barycentric frame so the chiral rule
+// reaches reflected tiles through the vertex winding.
+std::vector<Tile> subdivideDanzer(const std::vector<Tile>& in);
 
 // Pinwheel deflation: each 1:2:sqrt(5) triangle becomes five at 1/sqrt(5)
 // scale (Conway / Radin). Reflected tiles arise naturally and are kept.

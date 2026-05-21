@@ -15,6 +15,7 @@
         <item>Ammann–Beenker (8-fold)</item>
         <item>Dodecagonal (rhomb&#8211;square)</item>
         <item>Heptagonal (14-fold)</item>
+        <item>Danzer triangle (7-fold)</item>
         <item>Pinwheel (right triangles)</item>
         <item>Chair (L-trominoes)</item>
     </string-array>
@@ -27,6 +28,7 @@
         <item>5</item>
         <item>3</item>
         <item>6</item>
+        <item>10</item>
         <item>4</item>
         <item>2</item>
     </string-array>
@@ -133,6 +135,15 @@
     </string-array>
     <string-array name="seed_p1_values">
         <item>0</item>
+    </string-array>
+
+    <string-array name="seed_danzer_entries">
+        <item>Sun</item>
+        <item>Triangle</item>
+    </string-array>
+    <string-array name="seed_danzer_values">
+        <item>0</item>
+        <item>1</item>
     </string-array>
 
     <string-array name="preset_entries">

@@ -358,47 +358,100 @@ be 7.
 
 ## Danzer sevenfold tiling
 
-**Summary.** The first substitution tiling achieved with 7-fold symmetry;
-triangle-based.
+**Summary.** The first substitution tiling achieved with 7-fold symmetry: a
+triangle substitution from the Nischke–Danzer F_n construction. Implemented in
+the renderer as the `Danzer` family.
 
 | Property         | Value |
 |------------------|-------|
 | Symmetry order   | 7-fold |
 | Symmetry type    | statistical |
 | Aperiodic        | yes |
-| Prototiles       | triangles (angles multiples of 180°/7) |
+| Prototiles       | 4 — triangles T0–T3, angles multiples of π/7 |
 | Construction     | substitution |
-| Inflation factor | not stated |
-| Attribution      | L. Danzer |
+| Inflation factor | ρ = 2cos(π/7) ≈ 1.80194 |
+| Attribution      | L. Danzer; K.-P. Nischke & L. Danzer 1996 |
 
 ### Prototiles
-Triangle-based (not rhombs). The specific triangles are not detailed in the
-source; for 7-fold they have angles that are multiples of 180°/7.
+Four triangles, every angle a multiple of π/7. Edge lengths are written in
+units of s₁ = sin(π/7), with ρ = 2cos(π/7) = sin(2π/7)/sin(π/7) ≈ 1.80194 and
+σ = sin(3π/7)/sin(π/7) ≈ 2.24698. The two satisfy ρ² = 1 + σ and ρσ = ρ + σ.
+
+| Tile | Angles | Edges {opposite each angle} | Shape |
+|------|--------|-----------------------------|-------|
+| T0 | π/7, π/7, 5π/7 | {1, 1, ρ} | isoceles, apex 5π/7 |
+| T1 | π/7, 2π/7, 4π/7 | {1, ρ, σ} | scalene |
+| T2 | 2π/7, 2π/7, 3π/7 | {ρ, ρ, σ} | isoceles, apex 3π/7 |
+| T3 | π/7, 3π/7, 3π/7 | {1, σ, σ} | isoceles, apex π/7 |
+
+No edge decorations — the substitution alone forces the structure.
 
 ### Construction
-A substitution tiling — historically the first one achieved for 7-fold
-symmetry — built on triangle prototiles. The explicit rule is not reproduced
-in the source.
+Inflation factor ρ. One deflation replaces a tile by 2/3/4 children at 1/ρ
+linear scale; the substitution matrix (rows = parent T0–T3, columns = child
+counts) is
+
+```
+        T0 T1 T2 T3
+   T0 [  1  1  0  0 ]
+   T1 [  1  1  1  0 ]
+   T2 [  0  1  2  1 ]
+   T3 [  0  1  1  1 ]
+```
+
+It is primitive (every entry of M³ is positive) with Perron eigenvalue ρ². The
+prototile areas (proportional to sin(5π/7), ρ·sin(4π/7), ρ²·sin(3π/7),
+σ·sin(3π/7)) form the corresponding left eigenvector, so every deflation
+conserves area exactly. Each inflated prototile dissects into prototiles as a
+gap- and overlap-free triangulation of its boundary polygon:
+
+- infl(T0) = T0 + T1
+- infl(T1) = T1 + T0 + T2
+- infl(T2) = T2 + T2 + T1 + T3
+- infl(T3) = T1 + T3 + T2
+
+Under inflation each edge subdivides as 1 → ρ (no split), ρ → {1, σ}, and
+σ → {ρ, σ}, so every internal vertex of the dissection lands on a prototile
+edge — the tiling is edge-to-edge.
 
 ### Matching rules
-None stated.
+None. The renderer family is the bare substitution; Nischke–Danzer note that
+a local matching rule (a finite set of legal vertex stars) exists for the
+inflation-≈2.802 variant of §6.3, but the renderer does not use matching rules.
 
 ### Symmetry & aperiodicity
-Aperiodic substitution tiling; historically the first sevenfold substitution
-tiling.
+Statistical 7-fold symmetry: tiles occur in orientations that are multiples of
+π/7, and every finite patch recurs in all 14 orientations. The tiling is
+non-periodic — a primitive substitution with an irrational inflation factor
+(ρ = 2cos(π/7), an algebraic integer of degree 3, root of x³ − x² − 2x + 1)
+admits no translation period, since a period lattice would have to map to a
+ρ-scaled sublattice of itself.
 
 ### Variants & relations
-Danzer's best-known tiling is a different, three-dimensional one with
-icosahedral symmetry; this heptagonal tiling is noted as his first sevenfold
-substitution tiling.
+Nischke–Danzer 1996 build a whole family F_n of triangle substitutions for
+every odd n not divisible by 3; n = 7 is the smallest non-trivial case, with
+(n−1)(n−2)/6 = 5 triangles available and Danzer's original §6.3 tiling using
+three of them at inflation μ²_{7,3}/μ_{7,2} = 1 + ρ ≈ 2.802. The renderer's
+four-prototile rule at inflation ρ is a closure-verified member of the same
+F₇ triangle-substitution class (reconstructed and checked for area and
+gap/overlap closure, as the published dissections are given only as figures).
+Danzer's best-known tiling is a separate three-dimensional icosahedral one.
 
 ### History & decoration
-L. Danzer.
+L. Danzer; the construction is formalised in K.-P. Nischke & L. Danzer, "A
+construction of inflation rules based on n-fold symmetry" (1996).
 
 ### Renderer mapping
-Not implemented. A triangle-based 7-fold `Family` candidate, but the source
-gives no explicit rule — implementation would require the rule from Danzer's
-own work, not these PDFs. Behind Harriss as a 7-fold target.
+Implemented as `Family::Danzer` (enum index 10). `seedDanzer` provides two
+seeds — `Sun`, a 14-tile rosette of T3 triangles fanned around the origin
+(14·π/7 = 2π), and `Triangle`, a single centred T2. `subdivideDanzer` carries
+the four-row rule table above, each child written in the parent's barycentric
+frame v0 + s·(v1−v0) + d·(v2−v0) so reflected parents propagate the chiral
+rule through vertex winding (as for the Tübingen family). The `FamilyInfo`
+row sets inflation/deflation rate 1/ρ, wave symmetry 14, and a 4-type / 14-
+orientation `ClassSpec`. Tile count grows by ρ² ≈ 3.25 per generation; the
+generation cap is 7.
 
 ### References
-L. Danzer; quadibloc `heptint.htm`.
+K.-P. Nischke & L. Danzer, "A construction of inflation rules based on n-fold
+symmetry", *Discrete Comput. Geom.* 15 (1996) 221–236. quadibloc `heptint.htm`.

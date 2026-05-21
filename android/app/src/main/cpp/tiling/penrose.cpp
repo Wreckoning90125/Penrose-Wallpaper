@@ -173,6 +173,82 @@ std::vector<Tile> subdivideTuebingen(const std::vector<Tile>& in) {
     return out;
 }
 
+// Danzer-type 7-fold triangle substitution. Four triangle prototiles, every
+// angle a multiple of pi/7 (edges in units of s1 = sin(pi/7)):
+//   T0 = (pi/7,pi/7,5pi/7)    edges {1,1,rho}      v0,v1 base / v2 apex
+//   T1 = (pi/7,2pi/7,4pi/7)   edges {1,rho,sigma}  scalene, v0/v1/v2 = pi,2pi,4pi/7
+//   T2 = (2pi/7,2pi/7,3pi/7)  edges {rho,rho,sigma} v0,v1 base / v2 apex
+//   T3 = (pi/7,3pi/7,3pi/7)   edges {1,sigma,sigma} v0 apex / v1,v2 base
+// with rho = 2cos(pi/7) ~ 1.80194, sigma = sin(3pi/7)/sin(pi/7) ~ 2.24698 and
+// the identities rho^2 = 1+sigma, rho*sigma = rho+sigma. Inflation factor rho:
+// one deflation replaces a tile by 2/3/4 children at 1/rho linear scale. The
+// substitution matrix (rows = parent T0..T3, columns = child counts) is
+//   [[1,1,0,0],[1,1,1,0],[0,1,2,1],[0,1,1,1]]
+// — primitive, Perron eigenvalue rho^2; the prototile areas form its left
+// eigenvector, so every deflation conserves area exactly. The dissection of
+// each inflated prototile is an exact, gap- and overlap-free triangulation
+// into prototiles (a triangulation of the inflated triangle's boundary
+// polygon), verified by area closure and edge-ratio shape. Each child is
+// expressed in the parent's barycentric frame v0 + s*(v1-v0) + d*(v2-v0), so a
+// reflected parent carries the chiral rule onto reflected children with no
+// special handling — the vertex winding is the handedness, as for Tuebingen.
+namespace {
+
+struct DanzerChild { uint8_t type; double s[3], d[3]; };
+
+} // namespace
+
+std::vector<Tile> subdivideDanzer(const std::vector<Tile>& in) {
+    static const double kRho = 2.0 * std::cos(kPi / 7.0);
+    static const double kSig = std::sin(3.0 * kPi / 7.0) / std::sin(kPi / 7.0);
+    const double A = 1.0 / (kRho * kRho);        // 1/rho^2          ~ 0.30798
+    const double B = 1.0 - A;                    // 1 - 1/rho^2      ~ 0.69202
+    const double C = kRho / (kRho + kSig);       // rho/(rho+sigma)  ~ 0.44504
+    const double E = kSig / (kRho + kSig);       // sigma/(rho+sigma) = 1/rho
+
+    // rule[parentType] — children, each given as {childType, three (s,d)
+    // barycentric corners} in the parent's v0/v1/v2 frame.
+    const std::vector<DanzerChild> rule[4] = {
+        { // T0 -> T0 + T1
+            { 0, { 0.0, 0.0, A   }, { 1.0, 0.0, 0.0 } },
+            { 1, { 1.0, A,   0.0 }, { 0.0, 0.0, 1.0 } },
+        },
+        { // T1 -> T1 + T0 + T2
+            { 1, { 0.0, 0.0, C   }, { 0.0, B,   0.0 } },
+            { 0, { C,   0.0, 0.0 }, { 0.0, 1.0, B   } },
+            { 2, { C,   1.0, 0.0 }, { 0.0, 0.0, 1.0 } },
+        },
+        { // T2 -> T2 + T2 + T1 + T3
+            { 2, { 0.0, 0.0, C   }, { B,   0.0, 0.0 } },
+            { 2, { B,   0.0, C   }, { A,   B,   0.0 } },
+            { 1, { C,   1.0, B   }, { 0.0, 0.0, A   } },
+            { 3, { B,   0.0, 0.0 }, { A,   1.0, B   } },
+        },
+        { // T3 -> T1 + T3 + T2
+            { 1, { 0.0, 0.0, C   }, { 0.0, E,   0.0 } },
+            { 3, { 1.0, 0.0, C   }, { 0.0, E,   0.0 } },
+            { 2, { 0.0, 1.0, 0.0 }, { E,   0.0, 1.0 } },
+        },
+    };
+
+    std::vector<Tile> out;
+    out.reserve(in.size() * 4);
+    for (const Tile& t : in) {
+        const float ox = t.x[0], oy = t.y[0];
+        const float ux = t.x[1] - ox, uy = t.y[1] - oy;
+        const float wx = t.x[2] - ox, wy = t.y[2] - oy;
+        for (const DanzerChild& c : rule[t.type & 3]) {
+            float p[6];
+            for (int r = 0; r < 3; ++r) {
+                p[2 * r]     = static_cast<float>(ox + c.s[r] * ux + c.d[r] * wx);
+                p[2 * r + 1] = static_cast<float>(oy + c.s[r] * uy + c.d[r] * wy);
+            }
+            out.push_back(mkTri(c.type, p[0], p[1], p[2], p[3], p[4], p[5]));
+        }
+    }
+    return out;
+}
+
 std::vector<Tile> subdivideChair(const std::vector<Tile>& in) {
     std::vector<Tile> out;
     out.reserve(in.size() * 4);
@@ -312,6 +388,37 @@ std::vector<Tile> seedTuebingen(SeedTuebingen seed) {
         const float p2y = static_cast<float>(std::sin(a2));
         if (i & 1) out.push_back(mkTri(1, 0.0f, 0.0f, p2x, p2y, p1x, p1y));
         else       out.push_back(mkTri(1, 0.0f, 0.0f, p1x, p1y, p2x, p2y));
+    }
+    return out;
+}
+
+std::vector<Tile> seedDanzer(SeedDanzer seed) {
+    std::vector<Tile> out;
+    if (seed == SeedDanzer::Tile) {
+        // A single T2 (2pi/7,2pi/7,3pi/7) triangle, centred on its centroid.
+        static const double kSig =
+            std::sin(3.0 * kPi / 7.0) / std::sin(kPi / 7.0);
+        static const double kRho = 2.0 * std::cos(kPi / 7.0);
+        const double h  = std::sqrt(kRho * kRho - kSig * kSig * 0.25);
+        const double cx = (kSig + kSig * 0.5) / 3.0;
+        const double cy = h / 3.0;
+        const double sc = 0.62;
+        auto X = [&](double x){ return static_cast<float>((x - cx) * sc); };
+        auto Y = [&](double y){ return static_cast<float>((y - cy) * sc); };
+        out.push_back(mkTri(2, X(0.0), Y(0.0), X(kSig), Y(0.0),
+                               X(kSig * 0.5), Y(h)));
+        return out;
+    }
+    // Sun: fourteen T3 triangles, the pi/7 apex of each at the origin, fanning
+    // a full turn (14 * pi/7 = 2pi) on the unit circle. Adjacent tiles share a
+    // leg exactly, so the rosette is gap- and overlap-free.
+    out.reserve(14);
+    for (int i = 0; i < 14; ++i) {
+        const double a1 = kPi * i / 7.0;
+        const double a2 = kPi * (i + 1) / 7.0;
+        out.push_back(mkTri(3, 0.0f, 0.0f,
+            static_cast<float>(std::cos(a1)), static_cast<float>(std::sin(a1)),
+            static_cast<float>(std::cos(a2)), static_cast<float>(std::sin(a2))));
     }
     return out;
 }
@@ -1011,6 +1118,8 @@ const FamilyInfo kFamilyInfo[kFamilyCount] = {
                           { 2, 10, false, 0, 2, false, false } },
     /* P1            */ { 7, 0.6180339887498949f,  5, 0, true,  true,  0,
                           { 4, 10, false, 0, 1, false, false } },
+    /* Danzer        */ { 7, 0.5549581320873713f, 14, 0, true,  false, 2,
+                          { 4, 14, false, 0, 2, false, false } },
 };
 
 // =============================================================================
@@ -1060,6 +1169,12 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
             return tiles;
         }
         case Family::P1: return generateP1(seedIdx, cap);
+        case Family::Danzer: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            auto tiles = seedDanzer(static_cast<SeedDanzer>(s));
+            for (int g = 0; g < cap; ++g) tiles = subdivideDanzer(tiles);
+            return tiles;
+        }
     }
     return {};
 }

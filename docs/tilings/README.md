@@ -133,14 +133,15 @@ These terms have a fixed meaning across all documents here. Use them exactly.
   describe, or link to a source.
 - **Renderer mapping is mandatory.** Every system says, explicitly, whether
   it is implemented in the renderer and what a `Family` entry would cost. The
-  app currently implements ten families — P3, P2 and P1 (see
+  app currently implements eleven families — P3, P2 and P1 (see
   `pentagonal-penrose.md`), the Chair L-tromino tiling (a 4-fold substitution
   not covered by the source PDFs; documented as a renderer note only), the
   de Bruijn rhomb-square dodecagonal, Ammann–Beenker and heptagonal tilings
   (see `dodecagonal.md`, `octagonal.md`, `heptagonal.md` — all three share one
   `generateMultigrid` dualization generator), the Conway–Radin pinwheel (see
-  `pinwheel.md`), and the Godrèche–Lançon binary and Tübingen-triangle tilings
-  (see `pentagonal-binary.md`).
+  `pinwheel.md`), the Godrèche–Lançon binary and Tübingen-triangle tilings
+  (see `pentagonal-binary.md`), and the Danzer sevenfold triangle substitution
+  (see `heptagonal.md`).
 - **Primary source.** Most of this material is synthesised from John Savard's
   tiling series at `http://www.quadibloc.com/math` (page IDs are cited per
   system), cross-checked against the primary academic literature each page

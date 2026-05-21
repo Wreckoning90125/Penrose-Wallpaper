@@ -1,5 +1,6 @@
 package com.penrose.wallpaper.audio
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.annotation.OptIn
@@ -8,6 +9,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.penrose.wallpaper.NativeBridge
+import com.penrose.wallpaper.Settings
 
 /**
  * Foreground service hosting the file-playback ExoPlayer wrapped in a
@@ -97,6 +99,19 @@ class AudioPlaybackService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
+    /**
+     * Publish playback state to the shared settings prefs. The wallpaper
+     * engine observes [Settings.KEY_AUDIO_ACTIVE] and arms its per-frame
+     * render loop while audio is active, so audio-reactive modulation
+     * keeps evaluating on the home screen even with no time-based ripple.
+     */
+    private fun writeAudioActive(active: Boolean) {
+        getSharedPreferences(Settings.PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(Settings.KEY_AUDIO_ACTIVE, active)
+            .apply()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_PLAY -> {
@@ -110,6 +125,7 @@ class AudioPlaybackService : MediaSessionService() {
                 } else if (uri != null) {
                     player?.resume()
                 }
+                if (uri != null) writeAudioActive(true)
             }
             ACTION_STOP -> {
                 // Tear playback down exactly as onTaskRemoved does:
@@ -145,6 +161,10 @@ class AudioPlaybackService : MediaSessionService() {
         lastUri = null
         currentUri = null
         currentDisplayName = null
+        // Clear the audio-active signal so the wallpaper can let its
+        // render loop idle again. onDestroy is the single teardown point
+        // every stop path (ACTION_STOP, onTaskRemoved) funnels through.
+        writeAudioActive(false)
         session?.release()
         session = null
         player?.release()

@@ -283,18 +283,24 @@ class FullScreenActivity : AppCompatActivity(),
     }
 
     override fun onStop() {
-        // Persist the modulation graph here, while the renderer is
-        // fully alive and healthy — NOT during onDestroy's teardown.
-        // onStop is guaranteed to run before onDestroy, so an edited
-        // graph is saved even if the activity is later killed abruptly.
-        // Skip entirely if the surface never came up: saving then would
-        // write the empty default graph over the user's saved one.
-        // Render-thread only: graphSave walks the node map that the
-        // render thread mutates inside handler_.update().
-        if (graphLoadedFromDisk) {
+        // Persist the modulation graph here, while the renderer is fully
+        // alive and healthy — NOT during onDestroy's teardown. Only the
+        // node editor (showGraphOnStart) can have changed the graph; the
+        // plain preview never edits it, so it has nothing to save. Also
+        // skipped if the surface never came up, which would write the
+        // empty default graph over the user's real one. Render-thread
+        // only: graphSave walks the node map handler_.update() mutates.
+        if (graphLoadedFromDisk && showGraphOnStart) {
             session.submitBlocking { ptr ->
                 saveGraphToDiskOnRenderThread(ptr)
             }
+            // Announce the new graph: bump the revision so the running
+            // wallpaper engine reloads the file it was just handed.
+            // Without this, edits made in the editor never reached the
+            // live wallpaper — only a preset load bumped the revision.
+            prefs.edit()
+                .putLong(Settings.KEY_GRAPH_REVISION, System.currentTimeMillis())
+                .apply()
         }
         super.onStop()
     }

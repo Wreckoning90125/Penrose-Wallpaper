@@ -9,6 +9,7 @@ import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.WindowManager
+import com.penrose.wallpaper.audio.AudioPlaybackService
 import kotlin.math.atan2
 import kotlin.math.hypot
 
@@ -298,12 +299,20 @@ class PenroseWallpaperService : WallpaperService() {
         private fun updateChoreographer() {
             // Arm whenever the wallpaper needs a per-frame eval: an
             // active gesture, the time-term of the ripple, or audio
-            // playback (the C++ graph eval is cheap, but skipping it
-            // entirely while everything is quiet keeps the wallpaper
-            // from burning vsyncs on a static image).
+            // playback (skipping it entirely while everything is quiet
+            // keeps the wallpaper from burning vsyncs on a static image).
             val rippleWantsLoop = rippleAmount > 0f &&
                 (rippleMode == RIPPLE_MODE_TIME || rippleMode == RIPPLE_MODE_TIME_PAGE)
-            val wantLoop = visible && (gestureActive || rippleWantsLoop)
+            // While a track plays the modulation graph must keep being
+            // evaluated, or the home-screen wallpaper freezes on a stale
+            // frame and shows no audio reactivity. currentUri is the
+            // audio service's in-memory truth (it clears when the
+            // service or process dies, so it can't get stuck), and the
+            // service's KEY_AUDIO_ACTIVE pref write is what wakes
+            // onSharedPreferenceChanged -> updateChoreographer when
+            // playback starts or stops.
+            val audioActive = AudioPlaybackService.currentUri != null
+            val wantLoop = visible && (gestureActive || rippleWantsLoop || audioActive)
             if (wantLoop) armChoreographer() else disarmChoreographer()
         }
 

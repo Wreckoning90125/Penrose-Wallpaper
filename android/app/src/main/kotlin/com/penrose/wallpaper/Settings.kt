@@ -88,11 +88,19 @@ internal class Settings(
         const val KEY_DEPTH_AMOUNT  = "depth_amount"
 
         // Bumped by PresetStore.applyToPrefs whenever a preset writes a
-        // fresh modulation_graph.json. Read-only signal — listeners
-        // observe the value change and reload the graph from disk.
-        // Decoupling "static settings drift" from "graph file changed"
-        // means slider drags don't trip a full graph teardown.
+        // fresh modulation_graph.json, and by the node editor when it
+        // saves an edited graph. Read-only signal — listeners observe the
+        // value change and reload the graph from disk. Decoupling "static
+        // settings drift" from "graph file changed" means slider drags
+        // don't trip a full graph teardown.
         const val KEY_GRAPH_REVISION = "_graph_revision"
+
+        // Set true by AudioPlaybackService while a track is playing, false
+        // when it stops. Read-only signal — the wallpaper engine arms its
+        // per-frame render loop while audio is active so the modulation
+        // graph keeps evaluating and audio-reactive output stays live even
+        // when no time-based ripple would otherwise drive the loop.
+        const val KEY_AUDIO_ACTIVE = "_audio_active"
 
         // Must equal kMaxColors in cpp/color/color.h — the native float
         // array layout (jni_bridge kFloatCount) depends on the match.

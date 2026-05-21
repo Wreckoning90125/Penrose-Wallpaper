@@ -412,7 +412,10 @@ void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
     float ripA = 0.0f, ripS = 0.0f, bri = 0.0f, dep = 0.0f;
     bool seenA = false, seenS = false, seenB = false, seenD = false;
     for (auto& [uid, node] : handler_.getNodes()) {
-        if (!node) continue;
+        // Skip nodes the user deleted this frame — destroy() only marks
+        // them; handler_.update() sweeps them afterwards. Evaluating one
+        // would feed a stale target for the frame between the two.
+        if (!node || node->toDestroy()) continue;
         auto* fn = static_cast<FlowNode*>(node.get());
         // Targets are the last four kinds in the registry; a single
         // range check is cheaper than a string-compare on category
@@ -462,7 +465,9 @@ std::string Graph::toJson() {
     bool first = true;
     auto& nodes = handler_.getNodes();
     for (const auto& [uid, base] : nodes) {
-        if (!base) continue;
+        // A node deleted this frame is marked toDestroy() but not yet
+        // swept from the map — saving it would resurrect it on reload.
+        if (!base || base->toDestroy()) continue;
         const auto* n = static_cast<const FlowNode*>(base.get());
         if (!first) s << ",";
         first = false;
@@ -483,6 +488,10 @@ std::string Graph::toJson() {
         ImFlow::Pin* outp = link->left();
         ImFlow::Pin* inp  = link->right();
         if (!outp || !inp || !outp->getParent() || !inp->getParent()) continue;
+        // Drop links whose endpoint node was deleted this frame — the
+        // node loop above skipped it, so its uid won't be in the saved
+        // node set and the link would dangle on reload anyway.
+        if (outp->getParent()->toDestroy() || inp->getParent()->toDestroy()) continue;
         if (!first) s << ",";
         first = false;
         s << "{\"src\":" << outp->getParent()->getUID()

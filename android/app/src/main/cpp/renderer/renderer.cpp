@@ -109,12 +109,24 @@ bool Renderer::onSurfaceChanged(int width, int height) {
     if (!deviceReady_ || width <= 0 || height <= 0) return false;
     if ((uint32_t)width == swapchainExtent_.width &&
         (uint32_t)height == swapchainExtent_.height) return true;
+    return rebuildSwapchain();
+}
+
+bool Renderer::rebuildSwapchain() {
+    if (!deviceReady_ || surface_ == VK_NULL_HANDLE) return false;
+    // createSwapchain re-queries VkSurfaceCapabilitiesKHR::currentExtent
+    // for the true (post-rotation) surface size; the width/height args
+    // are only the fallback for the UINT32_MAX case, which Android does
+    // not use — so the last known extent is a safe fallback value.
+    const int w = (swapchainExtent_.width  > 0) ? (int)swapchainExtent_.width  : 1;
+    const int h = (swapchainExtent_.height > 0) ? (int)swapchainExtent_.height : 1;
     vkDeviceWaitIdle(device_);
+    swapchainReady_ = false;
     destroyPerFrameResources();
     destroySwapchain();
-    if (!createSwapchain(width, height)) return false;
-    if (!buildPipelines()) return false;
-    if (!createPerFrameResources()) return false;
+    if (!createSwapchain(w, h))       return false;
+    if (!buildPipelines())            return false;
+    if (!createPerFrameResources())   return false;
     swapchainReady_ = true;
     if (imGuiReady_) {
         const uint32_t imageCount = static_cast<uint32_t>(swapchainImages_.size());
@@ -122,6 +134,21 @@ bool Renderer::onSurfaceChanged(int width, int height) {
         imGuiHost_.onSwapchainChanged(minImageCount, imageCount);
     }
     return true;
+}
+
+void Renderer::syncSwapchainToSurface() {
+    if (!deviceReady_ || surface_ == VK_NULL_HANDLE) return;
+    VkSurfaceCapabilitiesKHR caps{};
+    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, surface_, &caps)
+            != VK_SUCCESS) return;
+    const VkExtent2D ce = caps.currentExtent;
+    // 0 — the surface is not presentable right now (window minimised /
+    // mid-teardown); UINT32_MAX — the surface defers sizing to the
+    // swapchain. Either way there is no surface size to match against.
+    if (ce.width == 0 || ce.height == 0 || ce.width == UINT32_MAX) return;
+    if (ce.width != swapchainExtent_.width || ce.height != swapchainExtent_.height) {
+        rebuildSwapchain();
+    }
 }
 
 void Renderer::onSurfaceDestroyed() {
@@ -275,6 +302,14 @@ void Renderer::considerGrowth() {
 void Renderer::drawFrame() {
     if (!deviceReady_ || !swapchainReady_) return;
 
+    // A device rotation resizes the surface. If the swapchain no longer
+    // matches, rebuild it before drawing so this frame already targets
+    // the correct extent — otherwise the compositor stretches the
+    // stale-orientation swapchain onto the rotated window and the
+    // wallpaper stays distorted until it is re-applied.
+    syncSwapchainToSurface();
+    if (!swapchainReady_) return;
+
     if (settingsDirty_) {
         vkDeviceWaitIdle(device_);
         buildGeometry();
@@ -384,10 +419,25 @@ void Renderer::drawFrame() {
     vkWaitForFences(device_, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
 
     uint32_t imageIndex = 0;
-    VkResult acq = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
-                                         f.imageAvailable, VK_NULL_HANDLE, &imageIndex);
-    if (acq == VK_ERROR_OUT_OF_DATE_KHR) return;
-    if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
+    bool rebuildAfterPresent = false;
+    const VkResult acq = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
+                                               f.imageAvailable, VK_NULL_HANDLE,
+                                               &imageIndex);
+    if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
+        // No image acquired — the swapchain is unusable. Rebuild now
+        // (nothing is pending on it) so the next frame draws clean.
+        rebuildSwapchain();
+        return;
+    }
+    if (acq == VK_SUBOPTIMAL_KHR) {
+        // An image WAS acquired and is drawable; the swapchain just no
+        // longer ideally fits the surface. Draw and present this frame
+        // normally so the acquire semaphore is consumed, THEN rebuild —
+        // tearing the swapchain down here would strand that pending
+        // semaphore signal. The syncSwapchainToSurface check at the top
+        // of the frame normally catches a rotation before this.
+        rebuildAfterPresent = true;
+    } else if (acq != VK_SUCCESS) {
         LOGE("vkAcquireNextImageKHR -> %d", (int)acq);
         return;
     }
@@ -572,10 +622,17 @@ void Renderer::drawFrame() {
     present.pSwapchains = &swapchain_;
     present.pImageIndices = &imageIndex;
     VkResult pr = vkQueuePresentKHR(queue_, &present);
-    if (pr != VK_SUCCESS && pr != VK_ERROR_OUT_OF_DATE_KHR && pr != VK_SUBOPTIMAL_KHR) {
+    currentFrame_ = (currentFrame_ + 1) % kFramesInFlight;
+    if (rebuildAfterPresent ||
+        pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
+        // Either the acquire reported the chain suboptimal (deferred to
+        // here so the frame's semaphore was consumed first), or the
+        // surface changed between acquire and present. Rebuild for the
+        // next frame.
+        rebuildSwapchain();
+    } else if (pr != VK_SUCCESS) {
         LOGE("vkQueuePresentKHR -> %d", (int)pr);
     }
-    currentFrame_ = (currentFrame_ + 1) % kFramesInFlight;
 }
 
 } // namespace penrose

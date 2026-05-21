@@ -123,6 +123,18 @@ private:
     bool createSurface(ANativeWindow* window);
     bool createSwapchain(int width, int height);
     void destroySwapchain();
+    // Tear down and rebuild the swapchain + pipelines + per-frame
+    // resources against the surface's current size. Used both by
+    // onSurfaceChanged and by drawFrame when acquire/present reports
+    // the swapchain stale (e.g. a device rotation the surface
+    // callbacks missed). Returns false if the surface is not presently
+    // usable (0-area); the caller should skip the frame.
+    bool rebuildSwapchain();
+    // Per-frame guard: if the surface's currentExtent no longer matches
+    // the swapchain (a device rotation), rebuild before drawing so the
+    // frame targets the right size instead of being stretched by the
+    // compositor.
+    void syncSwapchainToSurface();
     bool createPerFrameResources();
     void destroyPerFrameResources();
     bool createDescriptorObjects();

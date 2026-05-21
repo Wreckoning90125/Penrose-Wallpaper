@@ -73,11 +73,14 @@ if [ -z "$AAPT2" ]; then
 else
     badging="$("$AAPT2" dump badging "$APK" 2>/dev/null || true)"
     xmltree="$("$AAPT2" dump xmltree --file AndroidManifest.xml "$APK" 2>/dev/null || true)"
-    has_badging() { grep -qF -- "$1" <<<"$badging" && ok "$2" || bad "$2 ($1)"; }
-    has_xml()     { grep -qF -- "$1" <<<"$xmltree" && ok "$2" || bad "$2 ($1)"; }
-    has_badging "package: name='com.penrose.wallpaper'"                 "package id"
-    has_badging "sdkVersion:'36'"                                       "minSdk 36"
-    has_badging "targetSdkVersion:'36'"                                 "targetSdk 36"
+    has_badging()    { grep -qF -- "$1" <<<"$badging" && ok "$2" || bad "$2 ($1)"; }
+    has_badging_re() { grep -qE -- "$1" <<<"$badging" && ok "$2" || bad "$2 (/$1/)"; }
+    has_xml()        { grep -qF -- "$1" <<<"$xmltree" && ok "$2" || bad "$2 ($1)"; }
+    has_badging    "package: name='com.penrose.wallpaper'"              "package id"
+    # aapt2 labels the min-SDK line 'minSdkVersion' on current build-tools
+    # and 'sdkVersion' on older ones — accept either.
+    has_badging_re "(minSdkVersion|sdkVersion):'36'"                    "minSdk 36"
+    has_badging    "targetSdkVersion:'36'"                              "targetSdk 36"
     has_badging "uses-feature: name='android.software.live_wallpaper'"  "live-wallpaper feature"
     has_badging "uses-feature: name='android.hardware.vulkan.version'"  "Vulkan feature"
     has_badging "uses-permission: name='android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK'" \

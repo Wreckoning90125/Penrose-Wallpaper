@@ -25,7 +25,7 @@
         <SeekBarPreference
             android:key="color_count"
             android:title="Colors"
-            android:min="2" android:max="10" android:defaultValue="2"
+            android:min="2" android:max="16" android:defaultValue="2"
             app:showSeekBarValue="true" />
         <SeekBarPreference
             android:key="brightness"

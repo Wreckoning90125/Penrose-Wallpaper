@@ -11,7 +11,7 @@ layout(push_constant) uniform PC {
 } pc;
 
 layout(set = 0, binding = 0, std140) uniform Palette {
-    vec4 palette[10];
+    vec4 palette[16];
     vec4 borderColor;
     vec4 bgColor;
     uvec4 flags;

@@ -94,7 +94,9 @@ internal class Settings(
         // means slider drags don't trip a full graph teardown.
         const val KEY_GRAPH_REVISION = "_graph_revision"
 
-        const val CUSTOM_SLOTS  = 10
+        // Must equal kMaxColors in cpp/color/color.h — the native float
+        // array layout (jni_bridge kFloatCount) depends on the match.
+        const val CUSTOM_SLOTS  = 16
 
         fun customSlotKey(slot: Int, channel: Char): String = "custom_${slot}_${channel}"
 
@@ -109,6 +111,12 @@ internal class Settings(
             0.50f, 0.10f, 150.0f,
             0.50f, 0.10f, 240.0f,
             0.50f, 0.10f, 330.0f,
+            0.70f, 0.15f,   0.0f,
+            0.70f, 0.15f,  45.0f,
+            0.40f, 0.08f, 180.0f,
+            0.40f, 0.08f, 270.0f,
+            0.85f, 0.06f, 100.0f,
+            0.30f, 0.05f, 320.0f,
         )
 
         // All pref reads go through safeStr / safeInt / safeBool /

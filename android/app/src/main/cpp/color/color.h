@@ -47,9 +47,11 @@ ShaderColor oklchToShaderColor(Oklch c, float alpha, bool wideGamutP3, bool line
 // Palette presets
 // =============================================================================
 // Each preset returns up to kMaxColors OKLCH triples for a given K.
-// The renderer reads the first state.colorCount entries.
+// The renderer reads the first state.colorCount entries. 16 slots give the
+// higher-symmetry families (12-fold, 14-fold) enough distinct colours for a
+// full per-orientation or per-ring palette.
 
-constexpr int kMaxColors = 10;
+constexpr int kMaxColors = 16;
 
 enum class Preset : int {
     BW = 0,

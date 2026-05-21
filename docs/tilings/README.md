@@ -119,7 +119,7 @@ These terms have a fixed meaning across all documents here. Use them exactly.
 | [`pentagonal-keplerian.md`](pentagonal-keplerian.md) | 5-fold | Keplerian pentagon/star/boat tilings; boat-eliminated tiling; "pentagons and stars alone" |
 | [`pentagonal-binary.md`](pentagonal-binary.md) | 5-fold | Binary tiling; Mikulla–Roth tiling; Robinson & Tübingen triangle tilings; HBS (hexagon-boat-star) tiling |
 | [`pentagonal-islamic.md`](pentagonal-islamic.md) | 5-fold | Islamic decorated-rhomb tiling; Darb-e-Imam girih recurrence |
-| [`octagonal.md`](octagonal.md) | 8-fold | Ammann–Beenker tiling; Keplerian octagonal tessellation |
+| [`octagonal.md`](octagonal.md) | 8-fold | Ammann–Beenker tiling; Harriss–Lamb canonical substitution tilings; Keplerian octagonal tessellation |
 | [`dodecagonal.md`](dodecagonal.md) | 12-fold | Socolar (butterfly) tiling; Stampfli 12-star / square-triangle; de Bruijn rhomb-square; ship tiling; Keplerian dodecagonal recurrence |
 | [`heptagonal.md`](heptagonal.md) | 7-fold | Keplerian & Dürer-type heptagon attempts; rhomb dualization tilings; Savard binary-style recurrence; Harriss/Goodman-Strauss n-fold rhomb substitution; Danzer sevenfold tiling |
 | [`pinwheel.md`](pinwheel.md) | none (∞ orientations) | Conway–Radin pinwheel tiling; Sadun generalisation |

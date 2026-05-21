@@ -405,5 +405,22 @@ dodecagonal tiling above). Mapping:
   de Bruijn dodecagonal family added it — and would be reused as-is.
 
 ### References
-Johannes Kepler (recurrence technique); Baake, Grimm & Moody, *What is
-Aperiodic Order?*; the Topkapi scroll; quadibloc Keplerian-dodecagonal page.
+The recurrence as documented above is from Savard's quadibloc page; it is
+prose-and-figure, not coordinate-precise, so the renderer mapping stays
+"not implemented" pending a verifiable rule. Resource links to firm it up:
+- J. Kepler, *Harmonices Mundi* (1619), Book II — Kepler's pentagon / star /
+  dodecagon tiling plates, the origin of the term "Keplerian."
+- P. Stampfli, "A dodecagonal quasiperiodic lattice in two dimensions,"
+  *Helvetica Physica Acta* **59** (1986) 1260–1267 — the square-triangle
+  endpoint of the recurrence.
+- F. Gähler, "Crystallography of dodecagonal quasicrystals," in *Quasicrystalline
+  Materials* (World Scientific, 1988) 272–284 — dodecagonal substitution rules.
+- M. Baake, U. Grimm, *Aperiodic Order, Vol. 1: A Mathematical Invitation*
+  (Cambridge University Press, 2013) — dodecagonal substitution tilings
+  catalogued with inflation factors.
+- M. Baake, U. Grimm, R. V. Moody, "What is Aperiodic Order?" (arXiv:math/0203252)
+  — the square-triangle tiling exhibited.
+- Tilings Encyclopedia (D. Frettlöh, E. Harriss, F. Gähler),
+  `tilings.math.uni-bielefeld.de` — the "socolar", "stampfli", "shield" and
+  "square triangle" dodecagonal substitution tilings, with explicit rules.
+- J. Savard, quadibloc Keplerian-dodecagonal page.

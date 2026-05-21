@@ -340,15 +340,19 @@ be 7.
 ### References
 - E. O. Harriss, "Non-Periodic Rhomb Substitution Tilings that Admit Order n
   Rotational Symmetry," *Discrete & Computational Geometry* **34** (2005)
-  523–536.
-- E. O. Harriss, "On Canonical Substitution Tilings," PhD thesis, Imperial
-  College London, 2003.
+  523–536 — the source paper; gives the rule as Fig. 2, no child coordinates.
 - C. Goodman-Strauss, the n=7 rhomb substitution (personal communication;
   reproduced as Fig. 2 of Harriss 2005).
 - C. Goodman-Strauss, "Matching rules and substitution tilings," *Annals of
   Mathematics* **147** (1998) 181–223.
 - G. R. Maloney, "On substitution tilings of the plane with n-fold rotational
   symmetry," arXiv:1409.1828 (2014).
+- Tilings Encyclopedia (D. Frettlöh, E. Harriss, F. Gähler),
+  `tilings.math.uni-bielefeld.de` — carries the worked rule diagram and patch;
+  the practical resource for reconstructing the child geometry.
+- Note: Harriss's PhD thesis *On Canonical Substitution Tilings* (2003) does
+  **not** contain this substitution — it treats cut-and-project (canonical)
+  substitution tilings, a separate family; see `octagonal.md`.
 
 ---
 

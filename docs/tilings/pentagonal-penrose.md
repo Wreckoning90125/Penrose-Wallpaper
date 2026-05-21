@@ -24,13 +24,15 @@ pentagon/star/boat tilings.
 | Aperiodic        | yes |
 | Prototiles       | 6 — pentagon (×3 colour-roles), five-point star, boat, diamond (thin rhomb) |
 | Construction     | substitution + matching-rule |
-| Inflation factor | golden-ratio family (φ per generation) |
+| Inflation factor | φ² ≈ 2.618 per generation |
 | Attribution      | Roger Penrose |
 
 ### Prototiles
 Six tiles, expressible as decorated pentagon / star / boat / diamond shapes.
 The substitution bookkeeping labels them A = blue-green pentagon, B = yellow
-pentagon, C = green pentagon, D = boat, E = star, F = diamond. The drawn
+pentagon, C = green pentagon, D = boat, E = star, F = diamond. The three
+pentagons are the P-5, P-3 and P-2 pentagons — distinguished by whether 5, 3
+or 2 of their five edges adjoin other pentagons. The drawn
 tiles carry interior pentagons/stars/boats positioned only to shape the
 outline (per Kepler-tiling rules, **not** Penrose rules); the operative
 constraint is the edge decoration.

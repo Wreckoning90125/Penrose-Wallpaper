@@ -4,8 +4,10 @@
 
 #include "log.h"
 
+#include <algorithm>
 #include <memory>
 #include <string_view>
+#include <vector>
 
 namespace penrose::graph {
 
@@ -179,6 +181,76 @@ void GraphUi::drawSpawnPopup(Graph& graph) {
 // parameters without selecting them first. Inline sliders make the
 // affordance visible at a glance.
 
+void GraphUi::canvasGridSize(Graph& graph, float& outW, float& outH) const {
+    const ImGuiIO& io = ImGui::GetIO();
+    const float barH = kAppBarHeightDp * densityScale_;
+    const float topY = insetTopPx_ + barH;
+    float scale = graph.handler().getGrid().config().default_zoom;
+    if (scale <= 0.0f) scale = 1.0f;
+    outW = (io.DisplaySize.x - insetLeftPx_ - insetRightPx_) / scale;
+    outH = (io.DisplaySize.y - topY - insetBottomPx_) / scale;
+    if (outW < 1.0f) outW = 1.0f;
+    if (outH < 1.0f) outH = 1.0f;
+}
+
+// Lay the default graph out as a column-major grid sized to the canvas.
+// Runs after handler_.update() so node sizes are known; bails (leaving
+// arrangePending_ set) until every node reports a real size.
+void GraphUi::arrangeNodes(Graph& graph) {
+    auto& nodes = graph.handler().getNodes();
+    std::vector<FlowNode*> ordered;
+    ordered.reserve(nodes.size());
+    float maxW = 0.0f, maxH = 0.0f;
+    for (auto& [uid, node] : nodes) {
+        if (!node || node->toDestroy()) continue;
+        const ImVec2 sz = node->getSize();
+        // getSize() is (0,0) until ImNodeFlow has drawn the node once.
+        if (sz.x <= 1.0f || sz.y <= 1.0f) return;   // retry next frame
+        maxW = std::max(maxW, sz.x);
+        maxH = std::max(maxH, sz.y);
+        ordered.push_back(static_cast<FlowNode*>(node.get()));
+    }
+    arrangePending_ = false;
+    if (ordered.empty()) return;
+    // Sort by NodeKind: every Source kind precedes every Operator kind
+    // precedes every Target kind, so the column-major fill below places
+    // sources in the left columns and targets in the rightmost.
+    std::sort(ordered.begin(), ordered.end(),
+              [](FlowNode* a, FlowNode* b) { return a->kind() < b->kind(); });
+
+    float gridW = 0.0f, gridH = 0.0f;
+    canvasGridSize(graph, gridW, gridH);
+    const float m     = 14.0f;
+    const float cellW = maxW + 34.0f;
+    const float cellH = maxH + 22.0f;
+    const int   cols  = std::max(1, static_cast<int>((gridW - 2.0f * m) / cellW));
+    const int   n     = static_cast<int>(ordered.size());
+    const int   rows  = std::max(1, (n + cols - 1) / cols);
+    for (int i = 0; i < n; ++i) {
+        const int col = i / rows;
+        const int row = i % rows;
+        ordered[i]->setPos(ImVec2(m + col * cellW, m + row * cellH));
+    }
+}
+
+// Pull every node back inside the visible canvas. Runs every frame so a
+// node can be neither dragged nor spawned out of reach; a node already
+// inside its bounds is left untouched so this never fights a live drag.
+void GraphUi::clampNodes(Graph& graph) {
+    float gridW = 0.0f, gridH = 0.0f;
+    canvasGridSize(graph, gridW, gridH);
+    const float m = 6.0f;
+    for (auto& [uid, node] : graph.handler().getNodes()) {
+        if (!node || node->toDestroy()) continue;
+        const ImVec2 sz = node->getSize();
+        if (sz.x <= 1.0f || sz.y <= 1.0f) continue;   // not drawn yet
+        const ImVec2 p = node->getPos();
+        const float cx = std::clamp(p.x, m, std::max(m, gridW - sz.x - m));
+        const float cy = std::clamp(p.y, m, std::max(m, gridH - sz.y - m));
+        if (cx != p.x || cy != p.y) node->setPos(ImVec2(cx, cy));
+    }
+}
+
 void GraphUi::render(Graph& graph) {
     if (!initialized_ || !visible_.load(std::memory_order_relaxed)) return;
 
@@ -228,6 +300,16 @@ void GraphUi::render(Graph& graph) {
     graph.handler().update();
     ImGui::End();
     ImGui::PopStyleVar();
+
+    // Keep the graph reachable. arrangeNodes lays the default graph
+    // into a canvas-fitted grid once (a loaded custom graph keeps its
+    // saved positions — only clamped); clampNodes then runs every
+    // frame so nothing can be dragged or spawned out of bounds.
+    if (arrangePending_) {
+        if (graph.isDefaultLayout()) arrangeNodes(graph);
+        else                         arrangePending_ = false;
+    }
+    clampNodes(graph);
 
     drawToolbar(graph);
     drawSpawnPopup(graph);

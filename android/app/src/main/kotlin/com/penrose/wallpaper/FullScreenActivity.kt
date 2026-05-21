@@ -303,6 +303,17 @@ class FullScreenActivity : AppCompatActivity(),
                 .apply()
         }
         super.onStop()
+        // The node editor does not survive backgrounding: resuming a
+        // half-torn-down ImGui + Vulkan editor surface was unreliable
+        // (blank canvas, or a crash back to the menu). Finish it
+        // instead — the graph was just saved above, so reopening from
+        // the menu restores it into a clean, freshly-built editor.
+        // Consistent and intentional: leaving the editor closes it. A
+        // configuration change (rotation) is exempt — that is an
+        // activity recreate, not the user leaving.
+        if (showGraphOnStart && !isChangingConfigurations() && !isFinishing()) {
+            finish()
+        }
     }
 
     override fun onDestroy() {

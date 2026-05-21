@@ -319,15 +319,16 @@ Graph::Graph() {
     // want to see more of the canvas at once.
     auto& cfg = handler_.getGrid().config();
     cfg.default_zoom = 1.25f;
-    // ImNodeFlow defaults scroll_button to ImGuiMouseButton_Middle,
-    // which has no meaningful touch analogue — on a phone there's no
-    // way to pan the canvas at all. ImGuiMouseButton_Left (button 0)
-    // is what single-finger drag synthesises, and the library gates
-    // panning on `m_hovered && !m_anyItemActive`, so a drag starting
-    // on a node still drags the node (the node becomes the active
-    // item before the pan branch checks); only background-drags
-    // pan. Standard node-editor mobile UX.
-    cfg.scroll_button = ImGuiMouseButton_Left;
+    // Leave scroll_button at ImNodeFlow's default (middle mouse). A
+    // touchscreen never synthesises a middle button, so the canvas
+    // never pans and the scroll offset stays fixed at (0,0). The
+    // editor is therefore a fixed board: GraphUi arranges every node
+    // into the visible canvas and clamps each one inside it every
+    // frame, so panning is neither possible nor needed and no node
+    // can drift out of reach — which is exactly what made the old
+    // left-drag-to-pan setup unusable (nodes stranded off-screen with
+    // no way back).
+    cfg.scroll_button = ImGuiMouseButton_Middle;
     resetToDefault();
 }
 
@@ -351,12 +352,12 @@ void Graph::teardown() {
 
 void Graph::resetToDefault() {
     teardown();
-    // ImNodeFlow's initial scroll is hard-coded to (0,0) and m_scroll
-    // has no public setter, so grid coordinate (0,0) maps to the
-    // canvas TOP-LEFT — not the centre. Every default node lives at
-    // strictly positive coordinates so it falls inside the visible
-    // canvas the first time the user opens the editor. The user can
-    // pan/zoom afterwards.
+    defaultLayout_ = true;
+    // Provisional positions only — GraphUi::arrangeNodes re-lays the
+    // default graph into a grid fitted to the actual canvas once node
+    // sizes are known (the intrinsic sizes are not available until a
+    // node has been drawn once). These coordinates just keep the very
+    // first frame from being a pile-up before that runs.
     //
     // Layout: two columns of sources on the left (8 bands in a 2×4
     // grid + beat/time on a 5th row), one column of targets on the
@@ -629,6 +630,9 @@ bool Graph::fromJson(const std::string& text) {
         ImFlow::Pin* ip = findPinByName(dn->second->getIns(),  l.dstPin);
         if (op && ip) ip->createLink(op);
     }
+    // A graph loaded from disk carries the user's own saved node
+    // positions — the editor must not re-arrange it on top of them.
+    defaultLayout_ = false;
     return true;
 }
 

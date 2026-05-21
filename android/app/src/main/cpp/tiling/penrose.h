@@ -157,9 +157,13 @@ struct FamilyInfo {
     float     deflationRate; // linear tile shrink per generation (borders)
     int       waveSymmetry;  // ripple plane-wave fold count; 0 = radial
     uint8_t   hideSeamMode;  // 0 none, 1 P3 (Base+Base), 2 P2 (Leg+Leg)
-    bool      depthParallax; // apex depth/parallax on triangle tiles
+    bool      depthParallax; // per-tile parallax depth shading is enabled
     bool      centroidFan;   // true: triangulate fills from the centroid
                              // (concave P1 star/boat); false: fan from vertex 0
+    uint8_t   depthVertex;   // triangle families: vertex index carrying the
+                             // apex depth bulge. Unused by the rhomb families
+                             // (bulge runs along the long diagonal) and the
+                             // centroid-fan families (bulge sits at the centre).
     ClassSpec cls;
 };
 

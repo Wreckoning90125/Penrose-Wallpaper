@@ -980,35 +980,36 @@ std::vector<Tile> generateP1(int /*seedIdx*/, int generations) {
 // =============================================================================
 // One row per Family enumerator, in enum order. The renderer, the colour
 // classifier (color.cpp) and the ripple shader all read this table instead of
-// branching on the family. The first five rows carry exactly the values those
-// branches used before the table existed, so P3/P2/Chair/Dodecagonal/Pinwheel
-// are unchanged; AmmannBeenker and Heptagonal are new rows.
+// branching on the family.
 
 const FamilyInfo kFamilyInfo[kFamilyCount] = {
     // maxGen, deflationRate, waveSym, hideSeam, depthParallax, centroidFan,
-    //   cls{ typeBuckets, orientBuckets, orientFromType, angA, angB,
-    //        orientHalfTurn, ringChebyshev }
+    //   depthVertex, cls{ typeBuckets, orientBuckets, orientFromType, angA,
+    //   angB, orientHalfTurn, ringChebyshev }
     // The de Bruijn rhomb families bin orientation mod pi (orientHalfTurn) and
     // so need only N orientBuckets, not 2N — a rhomb edge is undirected.
-    /* P3            */ { 8, 0.6180339887498949f,  5, 1, true,  false,
+    // Every family but the Chair carries parallax depth shading: triangles
+    // bulge at depthVertex, rhombs along their long diagonal, P1 at the
+    // centroid. The Chair L-tromino has no natural depth axis and stays flat.
+    /* P3            */ { 8, 0.6180339887498949f,  5, 1, true,  false, 1,
                           { 2, 10, false, 0, 2, false, false } },
-    /* P2            */ { 8, 0.6180339887498949f,  5, 2, true,  false,
+    /* P2            */ { 8, 0.6180339887498949f,  5, 2, true,  false, 1,
                           { 2, 10, false, 0, 2, false, false } },
-    /* Chair         */ { 7, 0.5f,                 4, 0, false, false,
+    /* Chair         */ { 7, 0.5f,                 4, 0, false, false, 0,
                           { 4,  4, true,  0, 0, false, true  } },
-    /* Dodecagonal   */ { 8, 0.6180339887498949f, 12, 0, false, false,
+    /* Dodecagonal   */ { 8, 0.6180339887498949f, 12, 0, true,  false, 0,
                           { 3,  6, false, 0, 1, true,  false } },
-    /* Pinwheel      */ { 6, 0.4472135954999579f,  0, 0, true,  false,
+    /* Pinwheel      */ { 6, 0.4472135954999579f,  0, 0, true,  false, 1,
                           { 2, 10, false, 0, 2, false, false } },
-    /* AmmannBeenker */ { 8, 0.6180339887498949f,  8, 0, false, false,
+    /* AmmannBeenker */ { 8, 0.6180339887498949f,  8, 0, true,  false, 0,
                           { 2,  4, false, 0, 1, true,  false } },
-    /* Heptagonal    */ { 8, 0.6180339887498949f, 14, 0, false, false,
+    /* Heptagonal    */ { 8, 0.6180339887498949f, 14, 0, true,  false, 0,
                           { 3,  7, false, 0, 1, true,  false } },
-    /* Binary        */ { 8, 0.5257311121191336f,  5, 0, false, false,
+    /* Binary        */ { 8, 0.5257311121191336f,  5, 0, true,  false, 0,
                           { 2,  5, false, 0, 1, true,  false } },
-    /* Tuebingen     */ { 8, 0.6180339887498949f,  5, 0, false, false,
+    /* Tuebingen     */ { 8, 0.6180339887498949f,  5, 0, true,  false, 0,
                           { 2, 10, false, 0, 2, false, false } },
-    /* P1            */ { 7, 0.6180339887498949f,  5, 0, false, true,
+    /* P1            */ { 7, 0.6180339887498949f,  5, 0, true,  true,  0,
                           { 4, 10, false, 0, 1, false, false } },
 };
 

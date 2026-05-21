@@ -1,28 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Display order groups the families by symmetry: the three Penrose
+         systems, the other 5-fold tilings, then ascending fold order, with
+         the pinwheel (infinitely many orientations) and the Chair last. Each
+         <item> here is paired by index with family_values, which carries the
+         Family enum index the C++ side expects — so the menu can be reordered
+         freely without disturbing stored preferences or the enum. -->
     <string-array name="family_entries">
         <item>P3 (rhombi)</item>
         <item>P2 (kites &amp; darts)</item>
-        <item>Chair (L-trominoes)</item>
-        <item>Dodecagonal (rhomb&#8211;square)</item>
-        <item>Pinwheel (right triangles)</item>
-        <item>Ammann–Beenker (8-fold)</item>
-        <item>Heptagonal (14-fold)</item>
-        <item>Binary (Godrèche–Lançon)</item>
-        <item>Tübingen triangle (5-fold)</item>
         <item>P1 (pentagon/star/boat)</item>
+        <item>Tübingen triangle (5-fold)</item>
+        <item>Binary (Godrèche–Lançon)</item>
+        <item>Ammann–Beenker (8-fold)</item>
+        <item>Dodecagonal (rhomb&#8211;square)</item>
+        <item>Heptagonal (14-fold)</item>
+        <item>Pinwheel (right triangles)</item>
+        <item>Chair (L-trominoes)</item>
     </string-array>
     <string-array name="family_values">
         <item>0</item>
         <item>1</item>
-        <item>2</item>
-        <item>3</item>
-        <item>4</item>
-        <item>5</item>
-        <item>6</item>
-        <item>7</item>
-        <item>8</item>
         <item>9</item>
+        <item>8</item>
+        <item>7</item>
+        <item>5</item>
+        <item>3</item>
+        <item>6</item>
+        <item>4</item>
+        <item>2</item>
     </string-array>
 
     <!-- Seeds per family — SettingsFragment swaps these into the seed

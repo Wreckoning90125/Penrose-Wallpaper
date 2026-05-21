@@ -21,27 +21,30 @@ namespace penrose {
 //                  corners. type = 0/1 chirality (mirror image or not).
 //   AmmannBeenker / Heptagonal — de Bruijn rhombi, like Dodecagonal: 4
 //                  vertices in CCW order, type = the rhomb shape.
+//   P1           — pentagon (5), star (10), boat (≤10), diamond (4) in CCW
+//                  order; type 0=pentagon, 1=star, 2=boat, 3=diamond.
 // We pack every shape into the same struct so the renderer can iterate
-// uniformly. `vcount` is 3 for Penrose / pinwheel, 4 for the de Bruijn
-// rhombus families (Dodecagonal, AmmannBeenker, Heptagonal), 6 for Chair.
+// uniformly. `vcount` ranges 3..10 — 3 triangles, 4 rhombs, 6 Chair, 5/10/
+// ≤10/4 for the P1 tiles.
 // =============================================================================
 
 struct Tile {
-    float x[6];
-    float y[6];
-    uint8_t vcount;   // 3 for P3/P2/pinwheel tris, 4 for dodeca rhombs, 6 chair
+    float x[12];
+    float y[12];
+    uint8_t vcount;   // 3 tris, 4 rhombs, 6 chair, up to 10 for the P1 star
     uint8_t type;     // 0=L,1=S Penrose; 0..3 chair; 0..2 dodeca; 0/1 pinwheel
 };
 
 enum class Family : int {
     P3 = 0, P2 = 1, Chair = 2, Dodecagonal = 3, Pinwheel = 4,
     AmmannBeenker = 5, Heptagonal = 6, Binary = 7, Tuebingen = 8,
+    P1 = 9,
 };
 
 // Number of Family enumerators. The JNI layer validates the incoming family
 // index against this; keep it in step with the enum above and with the
 // kFamilyInfo[] table in penrose.cpp.
-constexpr int kFamilyCount = 9;
+constexpr int kFamilyCount = 10;
 
 // Per-family edge classification used by the border seam-hiding rule.
 //   For Penrose: Leg = the two equal-length sides, Base = the third.
@@ -107,6 +110,13 @@ std::vector<Tile> generateMultigrid(int gridCount, int seedIdx, int generations)
 // seed/subdivide pair; `generations` is the recursion depth.
 std::vector<Tile> generateBinary(int seedIdx, int generations);
 
+// Penrose P1 (pentagon / star / boat / diamond). Built by decorating the P3
+// Robinson-triangle substitution: the fat-triangle recursion places three
+// unit pentagons per fat-triangle leaf; deduplicated, the pentagons leave
+// star / boat / diamond gaps, recovered as the closed loops of un-shared
+// pentagon edges. `seedIdx` is unused (the entry is the fixed five-fold sun).
+std::vector<Tile> generateP1(int seedIdx, int generations);
+
 // =============================================================================
 // Edge extraction (one entry per side of every tile)
 // =============================================================================
@@ -148,6 +158,8 @@ struct FamilyInfo {
     int       waveSymmetry;  // ripple plane-wave fold count; 0 = radial
     uint8_t   hideSeamMode;  // 0 none, 1 P3 (Base+Base), 2 P2 (Leg+Leg)
     bool      depthParallax; // apex depth/parallax on triangle tiles
+    bool      centroidFan;   // true: triangulate fills from the centroid
+                             // (concave P1 star/boat); false: fan from vertex 0
     ClassSpec cls;
 };
 

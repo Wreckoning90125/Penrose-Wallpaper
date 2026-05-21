@@ -108,8 +108,19 @@ bool Renderer::buildGeometry() {
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
                 minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
             }
+        } else if (familyInfo(settings_.family).centroidFan) {
+            // Concave polygons (P1 star / boat) — fan from the centroid so
+            // the triangulation stays inside a star-shaped tile.
+            for (int v = 0; v < vc; ++v) {
+                const int w = (v + 1) % vc;
+                fills.push_back(FillVertex{ cx,     cy,     paletteIdx, cx, cy, 0.0f });
+                fills.push_back(FillVertex{ t.x[v], t.y[v], paletteIdx, cx, cy, 0.0f });
+                fills.push_back(FillVertex{ t.x[w], t.y[w], paletteIdx, cx, cy, 0.0f });
+                minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
+                minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
+            }
         } else {
-            // Chair L-trominoes have no natural depth axis — leave flat.
+            // Convex polygons (Chair L-tromino) — fan from vertex 0.
             for (int v = 1; v + 1 < vc; ++v) {
                 fills.push_back(FillVertex{ t.x[0],     t.y[0],     paletteIdx, cx, cy, 0.0f });
                 fills.push_back(FillVertex{ t.x[v],     t.y[v],     paletteIdx, cx, cy, 0.0f });
@@ -136,7 +147,7 @@ bool Renderer::buildGeometry() {
         std::vector<Edge> edges;
         const Family fam = settings_.family;
         const int edgesPerTile =
-            (fam == Family::Chair)          ? 6 :
+            (fam == Family::Chair || fam == Family::P1) ? 6 :
             (fam == Family::Dodecagonal  ||
              fam == Family::AmmannBeenker ||
              fam == Family::Heptagonal    ||

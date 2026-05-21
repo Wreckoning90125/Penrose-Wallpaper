@@ -1,6 +1,8 @@
 #include "tiling/penrose.h"
 
 #include <cmath>
+#include <cstdint>
+#include <unordered_map>
 #include <utility>
 
 namespace penrose {
@@ -737,6 +739,243 @@ std::vector<Tile> generateBinary(int seedIdx, int generations) {
 }
 
 // =============================================================================
+// Penrose P1 — pentagon / star / boat / diamond
+// =============================================================================
+// P1 is built by decorating the P3 Robinson-triangle substitution. The
+// substitution is run as a transform recursion: each fat / thin half-rhomb
+// expands into scaled, rotated child half-rhombs (golden-ratio scale factors
+// 1/phi and 1/phi^2), and every fat-triangle leaf carries three unit
+// pentagons at fixed offsets. Pentagons shared between adjacent leaves are
+// deduplicated; the un-shared pentagon edges then close into star / boat /
+// diamond gaps, recovered as the closed loops of those edges.
+// type 0 = pentagon, 1 = star, 2 = boat, 3 = diamond.
+
+namespace {
+
+// 2x3 affine transform: (x,y) -> (a*x + c*y + e, b*x + d*y + f).
+struct Xf { double a, b, c, d, e, f; };
+const Xf kXfId{ 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+
+// A applied after B (A∘B) — mirrors the node's `base_matrix @ count_xform`.
+inline Xf xfMul(const Xf& A, const Xf& B) {
+    return { A.a*B.a + A.c*B.b,        A.b*B.a + A.d*B.b,
+             A.a*B.c + A.c*B.d,        A.b*B.c + A.d*B.d,
+             A.a*B.e + A.c*B.f + A.e,  A.b*B.e + A.d*B.f + A.f };
+}
+
+// Build one child transform. The linear part is applied scale first, then
+// rotateZ(rz), then an optional reflection across the x-axis (rx); the
+// translation (tx,ty) is applied last:
+//   translate(tx,ty) · reflectX(rx) · rotateZ(rz) · scale(sa).
+inline Xf xfCall(double tx, double ty, double rzDeg, bool rx, double sa) {
+    const double r = rzDeg * kPi / 180.0;
+    const double C = std::cos(r), S = std::sin(r);
+    const double rs = rx ? -1.0 : 1.0;
+    return { C*sa, rs*S*sa, -S*sa, rs*C*sa, tx, ty };
+}
+
+// Substitution geometry: two child x-offsets and the golden-ratio scale
+// factors kS1 = 1/phi and kS2 = 1/phi^2 (since phi^2 = phi + 1).
+const double kThinx = std::sqrt(kPhi + 0.75);
+const double kFatx  = 0.5 * std::sqrt(3.0 - kPhi);
+const double kS1    = 1.0 / kPhi;
+const double kS2    = 1.0 / (1.0 + kPhi);
+
+enum { P1_ENTRY, P1_FAT_PAIR, P1_THIN_SUB, P1_FAT_SUB, P1_THIN_LEAF, P1_FAT_LEAF };
+
+void p1EmitPentagon(const Xf& m, std::vector<Tile>& out) {
+    Tile pe{};
+    pe.vcount = 5;
+    pe.type = 0;
+    for (int k = 0; k < 5; ++k) {
+        const double lx = std::cos(2.0 * kPi * k / 5.0);
+        const double ly = std::sin(2.0 * kPi * k / 5.0);
+        pe.x[k] = static_cast<float>(m.a*lx + m.c*ly + m.e);
+        pe.y[k] = static_cast<float>(m.b*lx + m.d*ly + m.f);
+    }
+    double area = 0.0;
+    for (int k = 0; k < 5; ++k) {
+        const int j = (k + 1) % 5;
+        area += static_cast<double>(pe.x[k])*pe.y[j]
+              - static_cast<double>(pe.x[j])*pe.y[k];
+    }
+    if (area < 0.0) {                                  // force CCW winding
+        Tile r = pe;
+        for (int k = 0; k < 5; ++k) { r.x[k] = pe.x[4-k]; r.y[k] = pe.y[4-k]; }
+        pe = r;
+    }
+    out.push_back(pe);
+}
+
+// Walk the substitution rules, composing each child's transform onto the
+// parent's; emit a pentagon at every fat-triangle leaf. A *_sub rule that
+// exceeds the depth budget `md` switches to its leaf successor.
+void p1Recurse(int rule, const Xf& mat, int depth, int md, std::vector<Tile>& out) {
+    if ((rule == P1_THIN_SUB || rule == P1_FAT_SUB) && depth > md) {
+        p1Recurse(rule == P1_THIN_SUB ? P1_THIN_LEAF : P1_FAT_LEAF, mat, 0, md, out);
+        return;
+    }
+    switch (rule) {
+        case P1_ENTRY: {                               // 5 fat_pair, rz 72*n
+            Xf cx = kXfId;
+            const Xf step = xfCall(0, 0, 72, false, 1.0);
+            for (int n = 0; n < 5; ++n) {
+                cx = xfMul(cx, step);
+                p1Recurse(P1_FAT_PAIR, xfMul(mat, cx), depth + 1, md, out);
+            }
+            break;
+        }
+        case P1_FAT_PAIR:
+            p1Recurse(P1_FAT_SUB, xfMul(mat, xfCall(0,0,0,false,1.0)),  depth+1, md, out);
+            p1Recurse(P1_FAT_SUB, xfMul(mat, xfCall(0,0,36,true,1.0)),  depth+1, md, out);
+            break;
+        case P1_THIN_SUB:
+            p1Recurse(P1_THIN_SUB, xfMul(mat, xfCall(-kThinx,0.5,108,false,kS1)), depth+1, md, out);
+            p1Recurse(P1_FAT_SUB,  xfMul(mat, xfCall(0,0,108,true,1.0)),          depth+1, md, out);
+            break;
+        case P1_FAT_SUB:
+            p1Recurse(P1_THIN_SUB, xfMul(mat, xfCall(0,kPhi-1.0,-144,false,kS2)),    depth+1, md, out);
+            p1Recurse(P1_FAT_SUB,  xfMul(mat, xfCall(kFatx,kPhi/2.0,144,false,kS1)), depth+1, md, out);
+            p1Recurse(P1_FAT_SUB,  xfMul(mat, xfCall(0,kPhi,0,true,kS1)),            depth+1, md, out);
+            break;
+        case P1_THIN_LEAF:                             // thin leaves carry no pentagon
+            break;
+        case P1_FAT_LEAF:
+            p1EmitPentagon(xfMul(mat, xfCall(0,kPhi-1.0,18,false,kS2)), out);
+            p1EmitPentagon(xfMul(mat, xfCall((kPhi-1.0)*kFatx,kPhi-0.5,-18,false,kS2)), out);
+            p1EmitPentagon(xfMul(mat, xfCall(0,0,-18,false,kS2)), out);
+            break;
+    }
+}
+
+inline int64_t p1Key(float x, float y) {
+    const int64_t qx = static_cast<int64_t>(std::lround(x * 1.0e5f));
+    const int64_t qy = static_cast<int64_t>(std::lround(y * 1.0e5f));
+    return (qx << 32) ^ (qy & 0xffffffffLL);
+}
+
+inline double p1Area(const float* x, const float* y, int n) {
+    double a = 0.0;
+    for (int i = 0; i < n; ++i) {
+        const int j = (i + 1) % n;
+        a += static_cast<double>(x[i])*y[j] - static_cast<double>(x[j])*y[i];
+    }
+    return a;
+}
+
+} // namespace
+
+std::vector<Tile> generateP1(int /*seedIdx*/, int generations) {
+    const int md = generations < 1 ? 1 : generations;
+
+    // ---- 1. run the recursion, collecting the decorating pentagons --------
+    std::vector<Tile> pent;
+    p1Recurse(P1_ENTRY, kXfId, 0, md, pent);
+
+    // ---- 2. deduplicate the shared pentagons ------------------------------
+    std::vector<Tile> out;
+    out.reserve(pent.size());
+    {
+        std::unordered_map<int64_t, char> seen;
+        seen.reserve(pent.size() * 2);
+        for (const Tile& pe : pent) {
+            double cx = 0.0, cy = 0.0;
+            for (int k = 0; k < 5; ++k) { cx += pe.x[k]; cy += pe.y[k]; }
+            if (seen.emplace(p1Key(static_cast<float>(cx*0.2),
+                                   static_cast<float>(cy*0.2)), 1).second)
+                out.push_back(pe);
+        }
+    }
+    const size_t pentCount = out.size();
+
+    // ---- 3. fill the star / boat / diamond gaps ---------------------------
+    struct DEdge { int64_t a, b; float ax, ay, bx, by; };
+    std::vector<DEdge> dir;
+    dir.reserve(pentCount * 5);
+    std::unordered_map<int64_t, int> ecount;
+    ecount.reserve(pentCount * 6);
+    auto eKey = [](int64_t a, int64_t b) {
+        return a < b ? a*1000003LL + b : b*1000003LL + a;
+    };
+    for (size_t p = 0; p < pentCount; ++p) {
+        const Tile& pe = out[p];
+        for (int k = 0; k < 5; ++k) {
+            const int j = (k + 1) % 5;
+            dir.push_back(DEdge{ p1Key(pe.x[k],pe.y[k]), p1Key(pe.x[j],pe.y[j]),
+                                 pe.x[k],pe.y[k], pe.x[j],pe.y[j] });
+            ecount[eKey(dir.back().a, dir.back().b)]++;
+        }
+    }
+    std::vector<DEdge> gap;                            // un-shared, reversed
+    for (const DEdge& e : dir)
+        if (ecount[eKey(e.a,e.b)] == 1)
+            gap.push_back(DEdge{ e.b,e.a, e.bx,e.by, e.ax,e.ay });
+    std::unordered_multimap<int64_t,int> outAt;
+    outAt.reserve(gap.size() * 2);
+    for (int i = 0; i < static_cast<int>(gap.size()); ++i)
+        outAt.emplace(gap[i].a, i);
+    std::vector<int> nxt(gap.size(), -1);
+    for (int i = 0; i < static_cast<int>(gap.size()); ++i) {
+        const double inx = gap[i].bx - gap[i].ax;
+        const double iny = gap[i].by - gap[i].ay;
+        int best = -1;
+        double bestAng = 1e18;
+        auto rg = outAt.equal_range(gap[i].b);
+        for (auto it = rg.first; it != rg.second; ++it) {
+            const int n = it->second;
+            if (n == i) continue;
+            const double ox = gap[n].bx - gap[n].ax;
+            const double oy = gap[n].by - gap[n].ay;
+            double ang = std::atan2(inx*oy - iny*ox, -inx*ox - iny*oy);
+            if (ang < 0.0) ang += 2.0 * kPi;
+            if (ang < bestAng) { bestAng = ang; best = n; }
+        }
+        nxt[i] = best;
+    }
+    std::vector<char> used(gap.size(), 0);
+    for (int s = 0; s < static_cast<int>(gap.size()); ++s) {
+        if (used[s] || nxt[s] < 0) continue;
+        std::vector<int> loop;
+        int c = s;
+        bool ok = true;
+        while (!used[c]) {
+            used[c] = 1;
+            loop.push_back(c);
+            c = nxt[c];
+            if (c < 0) { ok = false; break; }
+            if (loop.size() > 400) { ok = false; break; }
+        }
+        if (!ok || c != s) continue;
+        const int n = static_cast<int>(loop.size());
+        if (n < 4 || n > 10) continue;
+        float lx[10], ly[10];
+        for (int i = 0; i < n; ++i) { lx[i] = gap[loop[i]].ax; ly[i] = gap[loop[i]].ay; }
+        if (p1Area(lx, ly, n) <= 0.0) continue;        // CW loop = outer boundary
+        Tile g{};
+        g.vcount = static_cast<uint8_t>(n);
+        g.type = (n == 4) ? 3 : (n == 5) ? 0 : (n == 10) ? 1 : 2;
+        for (int i = 0; i < n; ++i) { g.x[i] = lx[i]; g.y[i] = ly[i]; }
+        out.push_back(g);
+    }
+
+    // ---- 4. normalise the patch into the unit disk ------------------------
+    double maxR2 = 0.0;
+    for (const Tile& t : out)
+        for (int k = 0; k < t.vcount; ++k) {
+            const double rr = static_cast<double>(t.x[k])*t.x[k]
+                            + static_cast<double>(t.y[k])*t.y[k];
+            if (rr > maxR2) maxR2 = rr;
+        }
+    const double inv = maxR2 > 1e-12 ? 1.0 / std::sqrt(maxR2) : 1.0;
+    for (Tile& t : out)
+        for (int k = 0; k < t.vcount; ++k) {
+            t.x[k] = static_cast<float>(t.x[k] * inv);
+            t.y[k] = static_cast<float>(t.y[k] * inv);
+        }
+    return out;
+}
+
+// =============================================================================
 // Per-family descriptor table
 // =============================================================================
 // One row per Family enumerator, in enum order. The renderer, the colour
@@ -746,29 +985,31 @@ std::vector<Tile> generateBinary(int seedIdx, int generations) {
 // are unchanged; AmmannBeenker and Heptagonal are new rows.
 
 const FamilyInfo kFamilyInfo[kFamilyCount] = {
-    // maxGen, deflationRate,        waveSym, hideSeam, depthParallax,
+    // maxGen, deflationRate, waveSym, hideSeam, depthParallax, centroidFan,
     //   cls{ typeBuckets, orientBuckets, orientFromType, angA, angB,
     //        orientHalfTurn, ringChebyshev }
     // The de Bruijn rhomb families bin orientation mod pi (orientHalfTurn) and
     // so need only N orientBuckets, not 2N — a rhomb edge is undirected.
-    /* P3            */ { 8, 0.6180339887498949f,  5, 1, true,
+    /* P3            */ { 8, 0.6180339887498949f,  5, 1, true,  false,
                           { 2, 10, false, 0, 2, false, false } },
-    /* P2            */ { 8, 0.6180339887498949f,  5, 2, true,
+    /* P2            */ { 8, 0.6180339887498949f,  5, 2, true,  false,
                           { 2, 10, false, 0, 2, false, false } },
-    /* Chair         */ { 7, 0.5f,                 4, 0, false,
+    /* Chair         */ { 7, 0.5f,                 4, 0, false, false,
                           { 4,  4, true,  0, 0, false, true  } },
-    /* Dodecagonal   */ { 8, 0.6180339887498949f, 12, 0, false,
+    /* Dodecagonal   */ { 8, 0.6180339887498949f, 12, 0, false, false,
                           { 3,  6, false, 0, 1, true,  false } },
-    /* Pinwheel      */ { 6, 0.4472135954999579f,  0, 0, true,
+    /* Pinwheel      */ { 6, 0.4472135954999579f,  0, 0, true,  false,
                           { 2, 10, false, 0, 2, false, false } },
-    /* AmmannBeenker */ { 8, 0.6180339887498949f,  8, 0, false,
+    /* AmmannBeenker */ { 8, 0.6180339887498949f,  8, 0, false, false,
                           { 2,  4, false, 0, 1, true,  false } },
-    /* Heptagonal    */ { 8, 0.6180339887498949f, 14, 0, false,
+    /* Heptagonal    */ { 8, 0.6180339887498949f, 14, 0, false, false,
                           { 3,  7, false, 0, 1, true,  false } },
-    /* Binary        */ { 8, 0.5257311121191336f,  5, 0, false,
+    /* Binary        */ { 8, 0.5257311121191336f,  5, 0, false, false,
                           { 2,  5, false, 0, 1, true,  false } },
-    /* Tuebingen     */ { 8, 0.6180339887498949f,  5, 0, false,
+    /* Tuebingen     */ { 8, 0.6180339887498949f,  5, 0, false, false,
                           { 2, 10, false, 0, 2, false, false } },
+    /* P1            */ { 7, 0.6180339887498949f,  5, 0, false, true,
+                          { 4, 10, false, 0, 1, false, false } },
 };
 
 // =============================================================================
@@ -817,6 +1058,7 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
             for (int g = 0; g < cap; ++g) tiles = subdivideTuebingen(tiles);
             return tiles;
         }
+        case Family::P1: return generateP1(seedIdx, cap);
     }
     return {};
 }

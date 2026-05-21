@@ -28,38 +28,42 @@ pentagon/star/boat tilings.
 | Attribution      | Roger Penrose |
 
 ### Prototiles
-Six tiles, expressible as decorated pentagon / star / boat / diamond shapes.
-The substitution bookkeeping labels them A = blue-green pentagon, B = yellow
-pentagon, C = green pentagon, D = boat, E = star, F = diamond. The three
-pentagons are the P-5, P-3 and P-2 pentagons — distinguished by whether 5, 3
-or 2 of their five edges adjoin other pentagons. The drawn
-tiles carry interior pentagons/stars/boats positioned only to shape the
-outline (per Kepler-tiling rules, **not** Penrose rules); the operative
-constraint is the edge decoration.
+Six tiles, all of unit edge length and all interior angles a multiple of 36°:
+- three regular **pentagons**, geometrically identical and distinguished only
+  by matching context — P-5, P-3 and P-2 have respectively 5, 3 and 2 of their
+  five edges adjoining other pentagons;
+- a **star** — the pentacle, i.e. the {5/2} star polygon (10 edges, alternating
+  36° points and 252° reflex vertices);
+- a **boat** — a half-pentacle, roughly three-fifths of a star (three of its
+  five points);
+- a **diamond** — the thin 36°/144° golden rhomb.
 
 ### Construction
-One generation of the substitution (parent → child counts):
+P1 is a decoration of the P3 rhomb tiling; its linear inflation factor is φ².
+A reproducible construction:
 
-| Parent | Children |
-|--------|----------|
-| A | 1A, 5B |
-| B | 1A, 3B, 2C, 3F |
-| C | 1A, 1B, 4C, 2F |
-| D | 3C, 3D, 1E |
-| E | 5C, 5D, 1E |
-| F | 1C, 1D, 1F |
+1. Generate P3 — the two golden Robinson triangles, **acute** (36°-72°-72°)
+   and **obtuse** (108°-36°-36°), under their φ-inflation substitution
+   (`subdivideP3`). Take the short side of each triangle as length 1.
+2. In every **obtuse** triangle place three regular pentagons of circumradius
+   φ⁻² ≈ 0.382: one centred on a 36° corner; one centred on the long side
+   (length φ) at fraction φ⁻² of its length from that corner; one centred on a
+   short side at fraction φ⁻¹ of its length from the other 36° corner. Each
+   pentagon is oriented edge-parallel to the triangle side it sits against, so
+   the decorations of two obtuse triangles sharing an edge place coincident
+   pentagons.
+3. Identify the coincident pentagons. The pentagons then cover the plane
+   except for three residual gap shapes — pentacle (star), half-pentacle
+   (boat) and thin 36° rhomb (diamond) — which are the other three prototiles.
 
-Two recurrence schemes exist. The **first-order** rule is *not* a true
-recurrence — it leaves the diamond (F) orientation unspecified. The
-**second-order** rule fully determines diamond orientation and is the one to
-use. Iterating from a single A pentagon, generation tile-counts grow
-A: 1, 1, 6, 36, 231, 1586, … with limiting tile-frequency ratios numerically
-A:B:C:D:E:F = 1 : 2.17288 : 3.94273 : 1.115611 : 0.5134249 : 2.024296.
+Equivalently P1 has a direct six-prototile composition: each prototile equals a
+patch of smaller P1 tiles scaled up by φ² (Grünbaum & Shephard §10.3).
 
 ### Matching rules
-Edge-shape-derived rules, shown as colours on the elementary shapes. Even the
-largest legal clusters cannot be assembled by geometric fit alone — the
-colour/edge rules must be obeyed. These rules force aperiodicity.
+Each edge carries one of three projection/indentation profiles (labelled
+0, 1, 2); an edge may meet only its own profile. For the three pentagons this
+is exactly the P-5/P-3/P-2 context distinction. Geometric fit alone admits
+periodic tilings — the edge profiles are what force aperiodicity.
 
 ### Symmetry & aperiodicity
 Aperiodic — Penrose's first aperiodic set. Forced by the edge-shape matching
@@ -79,15 +83,22 @@ historical bridge between Kepler's decorative pentagon tilings and the
 mathematically sharp P2/P3.
 
 ### Renderer mapping
-Not implemented and not recommended as a `Family`. Six prototiles with
-colour-coded edge rules is far more state than the renderer's substitution
-engine carries for P2/P3. If ever wanted, model it as a 6-symbol substitution
-matrix (table above) with a per-tile orientation field; the second-order rule
-is mandatory or diamonds float.
+Implemented — `Family::P1` (`generateP1` in `tiling/penrose.cpp`), exactly the
+Construction recipe above. The P3 substitution is run as a transform recursion
+so every obtuse triangle carries an exact frame; its three pentagons are
+emitted, coincident pentagons are deduplicated, and the star / boat / diamond
+gaps are recovered as the closed loops of un-shared pentagon edges — a 10-edge
+loop is a star, a 4-edge loop a diamond, any other a boat. Tiles store `type`
+0 = pentagon, 1 = star, 2 = boat, 3 = diamond, with `vcount` up to 10; the
+concave star and boat are triangulated from the centroid (`centroidFan`).
+`waveSymmetry` 5 is shared with P2/P3. The substitution harness checks the
+result is gap-free and overlap-free with every edge shared by at most two
+tiles.
 
 ### References
-Roger Penrose (original set); external archive of Penrose's original six
-tiles; quadibloc `penrose.htm`.
+Roger Penrose, *Bull. Inst. Math. Appl.* **10** (1974) 266 (the original
+six-tile set); Grünbaum & Shephard, *Tilings and Patterns* (1987) §10.3
+(the six-prototile composition); quadibloc `penrose.htm`.
 
 ---
 

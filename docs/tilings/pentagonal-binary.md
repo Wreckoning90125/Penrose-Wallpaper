@@ -53,7 +53,8 @@ boundary of an infinitely-recurred region is a fractal curve (dimension ≈
 point-colouring rules. Adjacent tiles meet so compatible corner marks
 coincide; white = large-atom site, black = small-atom site. These rules are
 **not strong enough to force the recurrence, and not strong enough to force
-aperiodicity** — that is the headline fact.
+aperiodicity** — that is the headline fact. Super-tile rhombs assembled from
+small binary rhombs need obey no matching rules among themselves.
 
 ### Symmetry & aperiodicity
 **Aperiodic: not-forced.** The same two rhombs under the binary rules can
@@ -61,10 +62,6 @@ produce the aperiodic binary tiling, *or* a Penrose rhomb tiling, *or* a
 recursive self-similar tiling, *or* a periodic tiling (the thick rhomb alone
 tiles periodically). Aperiodicity requires matching rules beyond the binary
 ones.
-
-### Matching rules — addendum
-Super-tile rhombs built from small binary rhombs need obey no matching rules
-among themselves.
 
 ### Variants & relations
 Mikulla–Roth tiling (below). Using the thin rhomb as a "diamond", one can
@@ -268,9 +265,6 @@ Baake, M., Kramer, P., Schlottmann, M. & Lück, R., "Planar patterns with
 fivefold symmetry as sections of periodic structures in 4-space", *Int. J.
 Mod. Phys. B* **4** (1990) 2217 (the substitution, Fig. 4.6); quadibloc
 `pen02.htm`.
-
-### References
-Tübingen quasicrystal group; quadibloc `pen02.htm`.
 
 ---
 

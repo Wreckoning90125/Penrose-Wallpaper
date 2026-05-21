@@ -302,11 +302,14 @@ void Renderer::drawFrame() {
     float audioBeat = 0.0f;
     globalAudioAnalyzer().snapshot(audioBands, audioBeat);
 
-    // Modulation graph: evaluate against the latest audio + clock and
-    // write the result back into the override slots the UBO patch below
-    // reads. Seeded with the user's baselines so an unconnected output
-    // keeps the slider value (Graph::evaluate skips Targets whose input
-    // pin has no upstream link).
+    // Modulation graph: evaluate against the latest audio + clock. The
+    // result lands in the fx* members the UBO patch below uploads —
+    // never back into settings_. settings_ stays the pristine user
+    // baseline; seeding the graph from it every frame (rather than from
+    // last frame's modulated output) is what stops a connected target
+    // from accumulating without bound. Graph::evaluate leaves a target
+    // untouched when its input pin has no upstream link, so an empty
+    // graph reproduces the slider values exactly.
     {
         graph::EvalContext gctx{};
         for (int i = 0; i < 8; ++i) gctx.bands[i] = audioBands[i];
@@ -318,10 +321,10 @@ void Renderer::drawFrame() {
         gres.brightness   = settings_.brightness;
         gres.depthAmount  = settings_.depthAmount;
         graph_.evaluate(gctx, gres);
-        settings_.rippleAmount = gres.rippleAmount;
-        settings_.rippleSpeed  = gres.rippleSpeed;
-        settings_.brightness   = gres.brightness;
-        settings_.depthAmount  = gres.depthAmount;
+        fxRippleAmount_ = gres.rippleAmount;
+        fxRippleSpeed_  = gres.rippleSpeed;
+        fxBrightness_   = gres.brightness;
+        fxDepthAmount_  = gres.depthAmount;
     }
 
     // Lazily bring ImGui up only when the editor is actually wanted.
@@ -355,14 +358,14 @@ void Renderer::drawFrame() {
     if (paletteUboMapped_) {
         float anim[4] = {
             time_,
-            settings_.rippleAmount,
+            fxRippleAmount_,
             static_cast<float>(familyInfo(settings_.family).waveSymmetry),
             pageOffset_,
         };
         float effects[4] = {
-            settings_.brightness,
-            settings_.depthAmount,
-            settings_.rippleSpeed,
+            fxBrightness_,
+            fxDepthAmount_,
+            fxRippleSpeed_,
             static_cast<float>(settings_.rippleKind),
         };
         // Reuse the same snapshot taken above the graph eval.

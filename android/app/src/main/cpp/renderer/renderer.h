@@ -207,6 +207,18 @@ private:
     bool settingsDirty_ = true;
     LiveView view_{};
 
+    // Graph-modulated effective values. settings_ holds the pristine
+    // user baseline (sliders); the modulation graph reads that baseline
+    // each frame and the result lands here, in the values the UBO patch
+    // actually uploads. Kept separate from settings_ so the graph never
+    // feeds its own previous-frame output back as this frame's input —
+    // writing the result into settings_ made every modulated target run
+    // away (brightness pinned to white within a second).
+    float fxRippleAmount_ = 0.3f;
+    float fxRippleSpeed_  = 1.0f;
+    float fxBrightness_   = 1.0f;
+    float fxDepthAmount_  = 0.3f;
+
     // Effective generation for the currently-built geometry. Equal to
     // settings_.generation in Locked pan mode; grows past it in Generative
     // mode as the user drags.

@@ -47,6 +47,12 @@ class FullScreenActivity : AppCompatActivity(),
 
     private var showGraphOnStart: Boolean = false
 
+    // True once surfaceCreated has queued loadGraphFromDisk. onStop only
+    // persists the graph when this is set — otherwise an activity that
+    // is stopped before the surface ever came up would save the empty
+    // default graph straight over the user's saved one. Main-thread only.
+    private var graphLoadedFromDisk: Boolean = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
@@ -112,6 +118,7 @@ class FullScreenActivity : AppCompatActivity(),
                     loadGraphFromDisk(ptr)
                     if (showGraphOnStart) NativeBridge.graphSetVisible(ptr, true)
                 }
+                graphLoadedFromDisk = true
                 // Choreographer.postFrameCallback must be called from a
                 // thread with a Looper. SurfaceHolder.Callback fires on
                 // main; do the arming here, not inside session.submit
@@ -275,25 +282,33 @@ class FullScreenActivity : AppCompatActivity(),
         }
     }
 
+    override fun onStop() {
+        // Persist the modulation graph here, while the renderer is
+        // fully alive and healthy — NOT during onDestroy's teardown.
+        // onStop is guaranteed to run before onDestroy, so an edited
+        // graph is saved even if the activity is later killed abruptly.
+        // Skip entirely if the surface never came up: saving then would
+        // write the empty default graph over the user's saved one.
+        // Render-thread only: graphSave walks the node map that the
+        // render thread mutates inside handler_.update().
+        if (graphLoadedFromDisk) {
+            session.submitBlocking { ptr ->
+                saveGraphToDiskOnRenderThread(ptr)
+            }
+        }
+        super.onStop()
+    }
+
     override fun onDestroy() {
         // Defuse any pending long-press timer first — its runnable
         // captures the session and would otherwise fire up to
-        // LONG_PRESS_MS after destroy.
+        // LONG_PRESS_MS after destroy. The graph itself was already
+        // persisted in onStop; session.shutdown() is fired by the
+        // lifecycle observer during super.onDestroy() below.
         cancelLongPress()
         uiHandler.removeCallbacksAndMessages(null)
         disarmChoreographer()
         prefs.unregisterOnSharedPreferenceChangeListener(this)
-        // Save MUST happen on the render thread before shutdown
-        // drains the executor — graphSave reads handler_.getNodes()
-        // which the render thread mutates inside handler_.update(),
-        // so running it from any other thread is a data race.
-        // session.shutdown() is fired by the lifecycle observer
-        // during super.onDestroy() below; submitBlocking runs first
-        // here, so the save lands on the dispatcher ahead of the
-        // observer's shutdown.
-        session.submitBlocking { ptr ->
-            saveGraphToDiskOnRenderThread(ptr)
-        }
         super.onDestroy()
     }
 

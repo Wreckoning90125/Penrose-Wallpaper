@@ -4,6 +4,7 @@
 
 #include "log.h"
 
+#include <memory>
 #include <string_view>
 
 namespace penrose::graph {
@@ -26,6 +27,20 @@ FlowNode* selectedNode(Graph& graph) {
     for (auto& [uid, node] : graph.handler().getNodes()) {
         if (!node || node->toDestroy()) continue;
         if (node->isSelected()) return static_cast<FlowNode*>(node.get());
+    }
+    return nullptr;
+}
+
+// First selected link, or nullptr. ImNodeFlow selects a link when the
+// user taps its curve; the only built-in way to then delete it is the
+// hardware Delete key, which a touchscreen has not got — so the toolbar
+// Delete button has to cover it. A shared_ptr is returned (not a raw
+// Link*) so the link stays alive across the deleteLink() call that
+// resets its owning input pin.
+std::shared_ptr<ImFlow::Link> selectedLink(Graph& graph) {
+    for (const auto& weak : graph.handler().getLinks()) {
+        auto link = weak.lock();
+        if (link && link->isSelected()) return link;
     }
     return nullptr;
 }
@@ -72,7 +87,8 @@ void GraphUi::drawToolbar(Graph& graph) {
     // Four buttons equally spaced across the bar. Width per slot =
     // (bar usable width) / 4; height = bar height minus inset on both
     // sides so taps near the top/bottom edge still land inside.
-    FlowNode* sel = selectedNode(graph);
+    FlowNode* selNode = selectedNode(graph);
+    std::shared_ptr<ImFlow::Link> selLink = selectedLink(graph);
     const float usableW = io.DisplaySize.x - 2.0f * inset;
     const float slotW   = usableW * 0.25f;
     const float btnW    = slotW - inset;
@@ -89,8 +105,16 @@ void GraphUi::drawToolbar(Graph& graph) {
     if (barButton("Add", true, 0)) {
         openSpawnPopup_ = true;
     }
-    if (barButton("Delete", sel != nullptr, 1) && sel) {
-        sel->destroy();
+    // Delete removes whatever is selected: a tapped connection (just
+    // that link) takes priority over a selected node, so the user can
+    // unwire without destroying the node. Deleting a node drops its
+    // links too — ImNodeFlow's OutPin destructor severs them.
+    if (barButton("Delete", selNode != nullptr || selLink != nullptr, 1)) {
+        if (selLink) {
+            if (ImFlow::Pin* in = selLink->right()) in->deleteLink();
+        } else if (selNode) {
+            selNode->destroy();
+        }
     }
     if (barButton("Reset", true, 2)) {
         graph.resetToDefault();

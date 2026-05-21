@@ -80,7 +80,13 @@ the tiling dual to the infinite "Sun" P2 tiling.
 ### History & decoration
 The six tiles literally resemble Kepler's pentagon, star, and boat. P1 is the
 historical bridge between Kepler's decorative pentagon tilings and the
-mathematically sharp P2/P3.
+mathematically sharp P2/P3. Kepler's *Harmonices Mundi* (1619) already showed
+that the gaps left by a pentagon packing fill with pentagrams, decagons and
+related shapes, and gave a finite patch he labelled "Aa"; P1 can be viewed as
+a completion of Kepler's Aa pattern. Traces of the same pentagon arrangement
+appear in Albrecht Dürer's work. Penrose (1974) acknowledged Kepler's
+inspiration and supplied the matching rules that turn the decorative
+arrangement into a forced aperiodic set.
 
 ### Renderer mapping
 Implemented — `Family::P1` (`generateP1` in `tiling/penrose.cpp`), exactly the
@@ -129,19 +135,59 @@ half** — every dart is bisected by the recurrence — which makes the rule
 visually confusing but well-defined. A recurrence also exists for the P3
 rhomb pair, so P2 and P3 are related at multiple relative scales.
 
+Deflation (= inflation = composition/decomposition) is a subdivision rule
+applied generation by generation. The half-kite and half-dart deflations are
+valid only inside a larger pattern, not on single tiles; the simple
+subdivision rule leaves small holes near the patch edge, so additional
+forcing rules are needed to fill them. A deflation table tracks the children
+of each piece across generations:
+
+| Piece     | Generation 1 | Generation 2 | Generation 3 |
+|-----------|--------------|--------------|--------------|
+| Half-kite | subdivides each generation per the kite-and-dart rule |||
+| Half-dart | subdivides each generation per the kite-and-dart rule |||
+| Sun       | grows into a larger Sun patch each generation |||
+| Star      | grows into a larger Star patch each generation |||
+
+Counting tiles, the substitution acts on the (large, small) population vector.
+For P2 (large = kite A_L, small = dart A_S) and analogously for the P3 thick
+and thin rhombs:
+
+    φⁿ (A_L, A_S)ᵀ = [[2,1],[1,1]]ⁿ (A_L, A_S)ᵀ
+    [[2,1],[1,1]]ⁿ = [[F_{2n+1}, F_{2n}], [F_{2n}, F_{2n-1}]]
+
+where F_n is the nth Fibonacci number. The kite : dart count ratio (and the
+thick : thin rhomb ratio in P3) therefore tends to φ.
+
+**Up-down generation** is an alternative construction of a P2 (or P3) tiling
+directly from the inflation/deflation hierarchy. Together with Ammann bars,
+pentagrids and cut-and-project it is one of several distinct parameterizations
+of the Penrose tilings.
+
 ### Matching rules
 Coloured edge markings must match across shared edges. Exactly **seven legal
 vertex configurations**, named by Conway: Sun, Star, Ace, Deuce, Jack, Queen,
 King. (Note: some published vertex-type diagrams draw the King vertex
-illegally — verify against Conway.)
+illegally — verify against Conway.) Two of the seven — **Star** and **Sun** —
+have full 5-fold dihedral symmetry; the other five have a single reflection
+axis. Apart from the Ace and the Sun, every vertex figure *forces* additional
+tiles. The **Ace** (Conway's name) looks like an enlarged kite but does not
+tile the same way. A dart's concave vertex is necessarily filled by two kites;
+two kites meeting along a short edge force two darts.
 
 ### Symmetry & aperiodicity
 Aperiodic. Any finite patch recurs infinitely often in every kite-and-dart
 tiling — "from the finite point of view there is only one Penrose tiling" —
-yet there are uncountably many distinct infinite P2 tilings. The Sun and Star
-infinite tilings have exact 5-fold symmetry about their single centre.
-Crucially, the patch-reappearance distance is bounded by a low multiple of
-the patch size (unlike Keplerian tilings — see `pentagonal-keplerian.md`).
+yet there are uncountably many distinct infinite P2 tilings (the number of
+distinct P2 tilings is uncountably infinite, and no finite patch determines
+the whole tiling or the viewer's position in it). The Sun and Star infinite
+tilings have exact 5-fold symmetry about their single centre. A P2 tiling has
+**at most one** centre of global five-fold symmetry — two such centres would,
+by symmetry, generate ever closer centres, a contradiction — and exactly two
+P2 tilings have global pentagonal symmetry, the one centred on a Sun vertex
+and the one centred on a Star vertex. Crucially, the patch-reappearance
+distance is bounded by a low multiple of the patch size (unlike Keplerian
+tilings — see `pentagonal-keplerian.md`).
 
 ### Variants & relations
 Relates to P1 by the pentagon/star/boat decomposition; relates to P3 — but
@@ -197,6 +243,14 @@ crossing lines; a 36° crossing yields a thin rhomb, a 72° crossing a thick
 one. de Bruijn (1981) proved the dual obeys the Penrose matching rules
 exactly when Σγₖ is an integer.
 
+de Bruijn (1981) gave **two** constructions: the *multigrid method* above (the
+Penrose tiling as the dual graph of an arrangement of five families of
+parallel lines) and the *cut-and-project method* (the Penrose tiling as a 2D
+projection of a slice through a five-dimensional cubic lattice). Baake,
+Kramer, Schlottmann & Zeidler (1990) further derived both the Penrose tiling
+and the Tübingen triangle tiling as sections of the four-dimensional 5-cell
+honeycomb.
+
 ### Matching rules
 Edge rules (conventionally arrows, two arrow types) force aperiodicity.
 **Eight** distinct legal vertex types occur (versus seven for P2). In the
@@ -227,6 +281,20 @@ tilings — fivefold, but not governed by the Penrose matching rules.
 The decorated-rhomb Islamic motif (see `pentagonal-islamic.md`) is built to
 sit on a P3 rhomb arrangement, carrying girih strapwork onto an aperiodic
 substrate.
+
+P2 and P3 were obtained by reducing Penrose's original six-tile P1 set to two
+prototiles; the P3 rhomb tiling was independently discovered by Robert Ammann
+in 1976. Penrose and Conway investigated the tilings, the substitution
+property accounting for their hierarchical structure, and they were publicized
+by Martin Gardner in his "Mathematical Games" column, *Scientific American*,
+January 1977.
+
+Architectural realisations of the Penrose (rhomb) tiling include: the Miami
+University terrazzo Penrose tiling in the Bachelor Hall courtyard (1979); the
+IIIT Allahabad "Penrose Geometry" buildings (from 2001); the Bayliss Building
+atrium at the University of Western Australia; the Andrew Wiles Building of
+Oxford Mathematics (2013); Keskuskatu street, Helsinki (2014); and the
+Salesforce Transit Center, San Francisco (2018).
 
 ### Renderer mapping
 Implemented — `Family::P3`, the renderer's default family. Two-rhomb
@@ -428,6 +496,8 @@ arguing it explains *why* quasicrystals form: if the decagon represents an
 energetically preferred atomic cluster, free-energy minimisation maximises
 its density and so forces quasiperiodicity. The quasi-unit-cell picture was
 later tested experimentally against Al–Ni–Co decagonal quasicrystals.
+Aperiodicity means there is no Bloch theorem for such a quasicrystal, yet its
+spectra can still be computed with rigorous error control.
 
 ### Renderer mapping
 Not implemented, and not a natural `Family`: a covering is not a tiling — the

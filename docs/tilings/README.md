@@ -27,6 +27,11 @@ baseline.
    order. A system with nothing to say under a heading writes `None.` or
    `n/a` rather than dropping the heading.
 4. A new symmetry family means a new file, registered in the Index below.
+5. Three **reference docs** are not symmetry families and do not use the
+   system template: `catalogue.md` (the flat list of every known aperiodic
+   prototile set), `bibliography.md` (the master source list, structured by
+   this tree), and `hyperbolic-and-tooling.md` (the H²/Escher/crystallographic
+   overlap and the external-tooling boundary). They are listed in the Index.
 
 ## Document template
 
@@ -123,7 +128,11 @@ These terms have a fixed meaning across all documents here. Use them exactly.
 | [`dodecagonal.md`](dodecagonal.md) | 12-fold | Socolar (butterfly) tiling; Stampfli 12-star / square-triangle; de Bruijn rhomb-square; ship tiling; Keplerian dodecagonal recurrence |
 | [`heptagonal.md`](heptagonal.md) | 7-fold | Keplerian & Dürer-type heptagon attempts; rhomb dualization tilings; Savard binary-style recurrence; Harriss/Goodman-Strauss n-fold rhomb substitution; Danzer sevenfold tiling |
 | [`pinwheel.md`](pinwheel.md) | none (∞ orientations) | Conway–Radin pinwheel tiling; Sadun generalisation |
-| [`periodic-reference.md`](periodic-reference.md) | periodic | Cairo tiling; conventional periodic tilings and the 17 wallpaper groups (contrast baseline) |
+| [`periodic-reference.md`](periodic-reference.md) | periodic | Cairo tiling; conventional periodic tilings and the 17 wallpaper groups; the 15 monohedral convex pentagonal tilings (contrast baseline) |
+| [`catalogue.md`](catalogue.md) | reference | Flat catalogue of every known aperiodic prototile set (E²/H²/E³), and which the renderer covers |
+| [`bibliography.md`](bibliography.md) | reference | Master source list for the whole tree, structured by these files |
+| [`hyperbolic-and-tooling.md`](hyperbolic-and-tooling.md) | reference | Hyperbolic (H²) tilings, the Escher / hyperbolic-crochet lineage, EPINET, and the crystallographic-tooling boundary |
+| [`ROADMAP.md`](ROADMAP.md) | reference | Ranked candidate additions for future work — families, docs, tooling |
 
 ## Conventions
 

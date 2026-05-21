@@ -213,9 +213,10 @@ Robinson triangle tiling; the parent of the Mikulla–Roth tiling.
 | Attribution      | Baake, Kramer, Schlottmann, Lück (Tübingen group, 1990) |
 
 ### Prototiles
-Acute and obtuse golden isosceles triangles, the same triangle family as the
-Robinson triangles. Vertices are large-atom sites in the Mikulla–Roth
-derivation.
+Acute and obtuse golden isosceles triangles — the Robinson triangles, the same
+triangle family as the Robinson triangle tiling. The inflation factor is the
+golden mean φ = a/b = (1 + √5)/2 ≈ 1.618, the ratio of the triangles' long to
+short edge. Vertices are large-atom sites in the Mikulla–Roth derivation.
 
 ### Construction
 A substitution similar to — but distinct from — the Robinson triangle
@@ -232,7 +233,12 @@ of oriented triangles"):
 
 Because each prototile is mirror-symmetric but its substitution is not, a
 triangle and its mirror deflate to mirror-image clusters — left- and
-right-handed tiles are genuinely distinct and must be tracked.
+right-handed tiles are genuinely distinct and must be tracked; in the
+substitution rule the handedness is carried by colour.
+
+The Tübingen triangle tiling is also obtainable by cut-and-project on the
+four-dimensional 5-cell honeycomb (Baake, Kramer, Schlottmann & Zeidler 1990),
+the same higher-dimensional structure that yields the Penrose tiling.
 
 ### Matching rules
 Triangle-orientation (handedness) rules as encoded by the recurrence diagram.
@@ -242,10 +248,15 @@ Aperiodic substitution tiling.
 
 ### Variants & relations
 Sibling of the Robinson triangle tiling; generates the Mikulla–Roth binary
-tiling when vertices/centres are marked with atoms.
+tiling when vertices/centres are marked with atoms. Although its prototiles
+are Robinson triangles, its relation to Penrose differs from the Robinson
+triangle tiling's: the Penrose rhomb tilings are **locally derivable** from
+the Tübingen triangle tiling, but not the reverse.
 
 ### History & decoration
-Named for quasicrystal research at Tübingen.
+Discovered and studied by a research group in Tübingen, Germany — hence the
+name. With the Penrose rhombs it is one of the classical candidate tilings for
+modelling 5- and 10-fold quasicrystals.
 
 ### Renderer mapping
 Implemented — `Family::Tuebingen` (`subdivideTuebingen` / `seedTuebingen` in

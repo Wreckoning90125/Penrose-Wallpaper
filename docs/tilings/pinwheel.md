@@ -120,7 +120,11 @@ tiling). The diffraction spectrum is circularly symmetric.
   when it is rational the construction yields a substitution tiling of any
   prescribed finite rotational order. Sadun also admits variants using copies
   of the triangle at more than one size.
-- **Quaquaversal tiling** (Conway & Radin 1995) is the three-dimensional
+- **Pinwheel fractal.** Iterating the Conway five-copy division of the
+  triangle T but *discarding the middle triangle* at every step leaves a
+  fractal — the "pinwheel fractal" — of Hausdorff dimension
+  d = ln4 / ln√5 = log₅16 ≈ 1.7227.
+- **Quaquaversal tiling** (Conway & Radin 1998) is the three-dimensional
   analogue: a single prism inflates into eight copies, the inflation
   including rotations by 2π/4 and 2π/3 about perpendicular axes. There the
   multiplicity of orientations comes from the *non-commutativity* of those
@@ -144,6 +148,11 @@ pinwheel substitution within hours. Finding matching rules that force it took
 Radin roughly two further years (Radin 1994). The tiling is named for the
 pinwheel toy whose blades turn about a stick, and is the standard textbook
 example of a tiling with a circularly symmetric diffraction pattern.
+
+Federation Square in Melbourne uses the pinwheel tiling across its
+sandstone, zinc and glass façades: a triangular tile groups into 5-tile
+panels, which in turn group into mega-panels. The Atrium there uses a
+"3-dimensionalised" pinwheel grid as a portal frame.
 
 ### Renderer mapping
 Implemented — `Family::Pinwheel` (`subdividePinwheel` / `seedPinwheel` in

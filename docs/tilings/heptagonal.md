@@ -219,56 +219,136 @@ quadibloc `heptint.htm`.
 
 ---
 
-## Harriss heptagonal substitution tiling
+## Harriss / Goodman-Strauss n-fold rhomb substitution
 
-**Summary.** A *complete*, rhomb-only 7-fold substitution tiling. The proof
-that genuine aperiodic heptagonal rhomb tilings exist.
+**Summary.** A rhomb-only substitution tiling with order-n rotational
+symmetry. Goodman-Strauss devised the n=7 rule; Harriss generalised it to
+every n. The first proof that rhomb substitution tilings exist with scaling
+factors of arbitrarily high algebraic degree — beyond what cut-and-project
+can reach.
 
 | Property         | Value |
 |------------------|-------|
-| Symmetry order   | 7-fold |
-| Symmetry type    | statistical |
+| Symmetry order   | 7-fold (the tiling space is closed under order-14 rotation) |
+| Symmetry type    | statistical (single-centre order-7 for the singular seeds) |
 | Aperiodic        | yes |
-| Prototiles       | the 7-fold rhombs only (no triangles) |
-| Construction     | substitution (complete) |
-| Inflation factor | not stated numerically |
-| Attribution      | E. O. Harriss |
+| Prototiles       | 3 — the 7-fold rhombs T₁, T₂, T₃ (plus marked variants R, P, Q) |
+| Construction     | substitution (non-volume-hierarchic) |
+| Inflation factor | 2 + 2·cos(π/7) ≈ 3.801937 |
+| Attribution      | Chaim Goodman-Strauss (n=7 rule); Edmund Harriss (general n) |
 
 ### Prototiles
-Only rhomb shapes — the 7-fold rhombs, no triangles. The source diagram
-legends a small green rhomb and a magenta rhomb, with worked expansion
-patches (horizontal cluster, vertical cluster, diamond cluster).
+The three rhombs of unit edge whose vertex angles are integer multiples of
+π/7. Writing T_k for the rhomb with the two angle values kπ/7 and (7−k)π/7:
+- **T₁** — π/7 (≈25.714°) / 6π/7 (≈154.286°): a thin sliver.
+- **T₂** — 2π/7 (≈51.429°) / 5π/7 (≈128.571°): a medium rhomb.
+- **T₃** — 3π/7 (≈77.143°) / 4π/7 (≈102.857°): a fat, near-square rhomb.
+
+T_k and T_{7−k} are the same shape, so k ∈ {1,2,3} exhausts the prototiles.
+The substitution additionally distinguishes *marked* copies of these shapes
+— R, P, Q (see Construction) — that carry different edge decorations and
+substitute differently, so a complete rule tracks six labels, not three
+shapes. Construction convention: build on the seven unit directions
+e_j = (cos(jπ/7), sin(jπ/7)), j = 0..6; a rhomb is the unit parallelogram
+spanned by two of them, and its type k is their index difference folded
+into {1,2,3}.
 
 ### Construction
-A complete substitution rule: each rhomb prototile's one-generation expansion
-into a cluster of smaller rhombs is fully specified. Inflation factor not
-given numerically in the source.
+A primitive substitution: the inflated rhomb is dissected into smaller
+rhombs of the same three shapes. The linear inflation factor is
+
+    λ = 2 + 2·cos(π/7) = 3.801937…
+
+derived from the edge rule — one unit edge is replaced by two parallel unit
+edges plus two unit edges turned by ±π/7, total length 2 + 2·cos(π/7). λ is
+a degree-3 algebraic integer (a Perron number); its conjugates are
+2 + 2·cos(3π/7) ≈ 2.445 and 2 + 2·cos(5π/7) ≈ 0.753. A conjugate exceeds 1,
+so λ is **not** a Pisot number — which is why (Harriss) these tilings cannot
+be produced by cut-and-project for n ≥ 7.
+
+The substitution is **not volume-hierarchic**: the children do not fill a
+clean enlarged rhomb. Each edge of the inflated rhomb is distorted by a
+central "dimple" — a V-notch of apex angle π/7 — pointing alternately inward
+and outward around the rhomb (which is why T_k and T_{7−k}, once marked,
+differ). The marked tiles are **R** (the dimples differ between the two
+pairs of opposite edges), **P** (three dimples out, one in) and **Q** (three
+in, one out). The dissection is fixed uniquely by two constraints: every
+child edge obeys the same dimple rule, and the rhomb angles meeting at each
+interior vertex sum to 2π.
+
+Per-parent child counts (Harriss, Table 1). Master row, 2 ≤ p ≤ n−2: a rhomb
+T_p expands to 6·T_p + 1·T_{p−2} + 1·T_{p+2} + 4·T_{n−p−1} + 4·T_{n−p+1}.
+For n=7 the thin-rhomb row is T₁ → 5·T₁ + 1·T₃ + 4·T₂ (ten children). The
+one-generation expansions of T₁, T₂, T₃ are the three patches in the source
+rule diagram.
 
 ### Matching rules
-None stated explicitly — a substitution tiling using only rhombs.
+None are needed to *generate* the tiling — it is a substitution. The dimpled
+edges function as a built-in matching rule that keeps the children packed
+without overlap (being non-volume-hierarchic, the rule could not pack a plain
+rhomb). Dimple apex angle π/7; the inward/outward assignment alternates
+around each rhomb.
 
 ### Symmetry & aperiodicity
-A genuine aperiodic substitution tiling with 7-fold symmetry. Demonstrates
-that heptagonal tilings using only rhombs (no triangles) exist. The 7-fold
-character is present but "not as unmistakably obvious as one might like" —
-statistical, not visually prominent.
+The translational local-isomorphism class of the substitution is closed
+under rotation by π/7 — order-14 (2n) rotational symmetry of the tiling
+*space* (statistical symmetry). Generic individual tilings have no exact
+rotation centre. Seeding the substitution with the thin rhomb T₁ arranged
+around a point produces a *singular* tiling with exact order-7 rotational
+symmetry about that point; seeding with T₅ (= T₂) gives order-7 without
+mirror symmetry. The substitution is primitive — iteration carries every
+tile to every tile in every orientation — and λ is an algebraic Perron
+number that is not a root of unity, so no tiling it produces is periodic.
 
 ### Variants & relations
-Contrasted with Savard's chop-into-triangles workaround above (which needs
-triangles); Harriss's uses rhombs only.
+Goodman-Strauss gave the rule only for n=7 (unpublished). Harriss generalised
+it to every n: rhombs with angles kπ/n, a substitution closed under order-2n
+rotation, inflation 2 + 2·cos(π/n). n=4 reuses the Ammann–Beenker rhombs but
+does not generate Ammann–Beenker tilings; n=5 likewise differs from Penrose.
+The n → n+2 rules form one continuous family ("rods joined by hinges").
+Contrast the de Bruijn rhomb dualization heptagonal tilings above — the same
+rhomb shapes obtained by projection, with quadratic scaling; Harriss's are
+substitution tilings with higher-degree scaling, provably outside
+cut-and-project for n ≥ 7. A separate, later construction (Maloney 2014)
+reaches n-fold substitution tilings by a different route (Kannan–Soroker
+polygon tiling plus Kenyon's method).
 
 ### History & decoration
-A published mathematical result on aperiodic heptagonal tilings.
+Chaim Goodman-Strauss devised the n=7 rhomb substitution and communicated it
+privately; it was never published, surviving only as a figure reproduced in
+Harriss's work. Edmund Harriss generalised it to arbitrary n in his Imperial
+College PhD thesis (2003) and in *Discrete & Computational Geometry* 34
+(2005) 523–536.
 
 ### Renderer mapping
-Not implemented. The **only viable 7-fold `Family` candidate** from the
-source material: complete, rhomb-only, genuinely aperiodic. Cost — the 7-fold
-character is visually subtle, so it would read as a less obviously
-"symmetric" wallpaper than P3 or a dodecagonal family. The ripple shader
-needs a 7-fold wave-sum branch. Low priority behind the dodecagonal work.
+Not implemented, and not implementable from the documented data alone. The
+sources fix the prototiles, the inflation factor λ = 2 + 2·cos(π/7), and the
+exact per-parent child *counts* (Harriss Table 1) — but they give the actual
+dissection only as figures (Harriss Fig. 2 and 7–9), never as child
+coordinates. Because the substitution is not volume-hierarchic, the children
+fill a dimpled region rather than a plain rhomb, so the area-conservation and
+gap/overlap-closure checks that verify the renderer's other substitutions
+(P1, P2, P3, pinwheel, Tübingen, binary) do not apply directly. A faithful
+`Family` would require: digitising Harriss Fig. 2 into a child list of
+(label, edge-direction pair, translation, orientation); tracking six labels
+(T₁, T₂, T₃ and the marked R, P, Q); modelling the π/7 dimple on every edge;
+and verifying each patch against the 2π interior-vertex condition. That
+reconstruction is a research task in its own right — deferred until the child
+geometry can be pinned down and verified on-device. `waveSymmetry` would
+be 7.
 
 ### References
-E. O. Harriss (paper giving the recurrence); quadibloc `heptint.htm`.
+- E. O. Harriss, "Non-Periodic Rhomb Substitution Tilings that Admit Order n
+  Rotational Symmetry," *Discrete & Computational Geometry* **34** (2005)
+  523–536.
+- E. O. Harriss, "On Canonical Substitution Tilings," PhD thesis, Imperial
+  College London, 2003.
+- C. Goodman-Strauss, the n=7 rhomb substitution (personal communication;
+  reproduced as Fig. 2 of Harriss 2005).
+- C. Goodman-Strauss, "Matching rules and substitution tilings," *Annals of
+  Mathematics* **147** (1998) 181–223.
+- G. R. Maloney, "On substitution tilings of the plane with n-fold rotational
+  symmetry," arXiv:1409.1828 (2014).
 
 ---
 

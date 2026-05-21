@@ -121,7 +121,7 @@ These terms have a fixed meaning across all documents here. Use them exactly.
 | [`pentagonal-islamic.md`](pentagonal-islamic.md) | 5-fold | Islamic decorated-rhomb tiling; Darb-e-Imam girih recurrence |
 | [`octagonal.md`](octagonal.md) | 8-fold | Ammann–Beenker tiling; Keplerian octagonal tessellation |
 | [`dodecagonal.md`](dodecagonal.md) | 12-fold | Socolar (butterfly) tiling; Stampfli 12-star / square-triangle; de Bruijn rhomb-square; ship tiling; Keplerian dodecagonal recurrence |
-| [`heptagonal.md`](heptagonal.md) | 7-fold | Keplerian & Dürer-type heptagon attempts; rhomb dualization tilings; Harriss substitution; Danzer sevenfold tiling |
+| [`heptagonal.md`](heptagonal.md) | 7-fold | Keplerian & Dürer-type heptagon attempts; rhomb dualization tilings; Savard binary-style recurrence; Harriss/Goodman-Strauss n-fold rhomb substitution; Danzer sevenfold tiling |
 | [`pinwheel.md`](pinwheel.md) | none (∞ orientations) | Conway–Radin pinwheel tiling; Sadun generalisation |
 | [`periodic-reference.md`](periodic-reference.md) | periodic | Cairo tiling; conventional periodic tilings and the 17 wallpaper groups (contrast baseline) |
 

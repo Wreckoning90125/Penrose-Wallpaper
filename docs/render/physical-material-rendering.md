@@ -26,7 +26,7 @@ architecture and drop the slider farm — see §4.
 | C — sheen / clearcoat / iridescence / anisotropy lobes | **done** | `d2e43ea`, `7933d4d` |
 | D — key + fill + ambient lights | **done** | `ea43bf6` |
 | E — HDR offscreen + bloom + AgX tonemap | todo | — |
-| F — parameterized look: settings, presets, modulation, border merge | in progress | material→UBO migration done (`43be608`) |
+| F — parameterized look: settings, modulation, presets, border merge | in progress | UBO migration, sliders + graph targets done (`43be608`, `087bb55`, `bd02c76`); presets + border merge remain |
 
 Phase A landed: `FillVertex` carries a per-triangle edge-distance basis
 (`inBary`); `fill.frag` lifts a bevel chamfer height field from it, derives the
@@ -311,23 +311,26 @@ encode, so AgX is applied once, in linear, regardless of the swapchain path.
 - **Done when:** bright tiles and wave crests bloom; the composite pass owns
   tonemap + encode; `fill.frag` writes linear HDR.
 
-### Phase F — parameterized look: settings, presets, modulation, border merge
+### Phase F — parameterized look: settings, modulation, presets, border merge
 
-The material is fully in the UBO (done — `MaterialParams` → `PaletteUbo`,
-commit `43be608`). Phase F connects it to the user and the graph.
+The material is fully in the UBO (`MaterialParams` → `PaletteUbo`, `43be608`).
 
-- **Settings + presets.** `MaterialParams` becomes a persisted settings
-  record. A Material preset picker beside the palette picker seeds it
-  (`Matte`, `Ceramic`, `Pearl`, `Brushed metal`, `Lacquer`, `Oil-slick`); the
-  settings drawer exposes the fields, grouped (Surface / Lobes / Lighting).
-  `updatePaletteUbo` packs the live settings in place of the defaults.
-- **Modulation sources.** The node graph already evaluates against audio
-  bands, the beat, and a clock. Add the home-screen pan offset as a fourth
-  source, and expose every material parameter as a graph target whose value
-  *adds onto* its settings base. The per-frame UBO patch writes the modulated
-  result. The wallpaper then sits exactly as set, or breathes to a clock,
-  sways with home-screen panning, or pulses to sound — the user's choice, and
-  every look is reachable with no audio at all.
+- ✓ **Settings sliders** (`087bb55`, `bd02c76`). Eight headline controls —
+  roughness, metalness, iridescence, sheen, clearcoat, anisotropy, emissive
+  glow, surface relief — are persisted `Settings` floats with a slider each on
+  a Material settings screen. The wallpaper renders exactly as the sliders are
+  set, with no audio: the static-look requirement.
+- ✓ **Modulation** (`087bb55`). Each of the eight is a node-graph Target
+  whose value *adds onto* its slider base, and the home-screen page-scroll
+  offset is a new graph Source alongside the audio bands, beat, and clock. The
+  per-frame UBO patch writes the modulated result. The surface can sit still,
+  breathe to a clock, sway with panning, or pulse to sound — the user's
+  choice; an unwired target leaves the slider base untouched.
+- **Material presets.** Named `MaterialParams` bundles (`Matte`, `Ceramic`,
+  `Pearl`, `Brushed metal`, `Lacquer`, `Oil-slick`) selectable like the
+  palette presets — one tap to seed all of the material at once, including
+  the parameters the eight sliders do not individually expose (light rig,
+  film thickness, sheen tint).
 - **Border merge.** Draw the border inside `fill.frag` as a `smoothstep` on
   the Phase-A `edgeDist`; remove the `border.*` shaders, the `BorderVertex`
   path, and the border pipeline. One pipeline draws fill + border.

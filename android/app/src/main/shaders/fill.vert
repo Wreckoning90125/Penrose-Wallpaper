@@ -27,6 +27,7 @@ layout(location = 0) flat out uint vColorIdx;
 layout(location = 1) flat out float vRipple;
 layout(location = 2)      out float vDepth;
 layout(location = 3)      out vec3 vBary;
+layout(location = 4)      out vec2 vWaveGrad;
 
 const float TWO_PI = 6.2831853072;
 
@@ -81,6 +82,7 @@ void main() {
 
     vec2 displacedPos = inPos;
     float phiCenter = 0.0;
+    vWaveGrad = vec2(0.0);
 
     if (amp > 0.0) {
         float omegaT    = ubo.anim.x * 0.4 * speed;
@@ -98,6 +100,11 @@ void main() {
             // 0.006 keeps full-amplitude motion at ~3.6% of world span. The
             // ripple-amount slider further attenuates.
             displacedPos += grad * amp * 0.006;
+            // Same gradient, handed to the fragment shader as the wave
+            // field's analytic slope — there it bends the shading normal
+            // so the ripple catches the light instead of only modulating
+            // brightness. Amplitude-scaled so a zero slider means flat.
+            vWaveGrad = grad * amp;
         }
     }
 

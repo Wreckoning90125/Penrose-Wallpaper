@@ -16,6 +16,7 @@ layout(location = 0) flat in uint vColorIdx;
 layout(location = 1) flat in float vRipple;
 layout(location = 2)      in float vDepth;
 layout(location = 3)      in vec3 vBary;
+layout(location = 4)      in vec2 vWaveGrad;
 layout(location = 0) out vec4 outColor;
 
 const float PI = 3.14159265359;
@@ -31,6 +32,7 @@ const float PI = 3.14159265359;
 // visible departure from the previous flat look.
 const float kBevelWidth    = 0.30;   // edge-distance span of the chamfer
 const float kBevelStrength = 1.05;   // tan of the chamfer's peak slope
+const float kWaveHeight    = 0.12;   // ripple slope → shading-normal tilt
 const float kRoughness     = 0.55;
 const float kMetalness     = 0.0;
 const float kAmbient       = 0.32;
@@ -66,21 +68,31 @@ void main() {
     float rippleMod  = 1.0 + vRipple;
     vec3 albedo = clamp(c.rgb * brightness * depthMod * rippleMod, 0.0, 1.0);
 
-    // Bevel surface normal. edgeDist is 0 on every tile boundary edge and
-    // rises toward the tile interior; its screen-space gradient points
-    // inward, perpendicular to the nearest edge. The chamfer normal tilts
-    // away from that direction, by an amount fading from the edge
-    // (kBevelStrength) to the plateau (0).
+    // Shading normal. The height field is the sum of two terms with clean
+    // gradients: the per-tile bevel and the quasicrystal ripple. `slope`
+    // accumulates -dH/d(x,y); the normal is normalize(vec3(slope, 1)).
+    //
+    // Wave term: vWaveGrad is the ripple field's analytic slope, computed
+    // once in the vertex shader. Folding it into the normal makes the
+    // ripple a lit undulation across the whole tile, not just a brightness
+    // ripple — and it applies on the plateau too, where the bevel is flat.
+    vec2 slope = -vWaveGrad * kWaveHeight;
+
+    // Bevel term: edgeDist is 0 on every tile boundary edge and rises
+    // toward the tile interior; its screen-space gradient points inward,
+    // perpendicular to the nearest edge. The chamfer normal tilts away
+    // from that direction, fading from the edge (kBevelStrength) to the
+    // plateau (0).
     float edgeDist = min(min(vBary.x, vBary.y), vBary.z);
     vec2  g    = vec2(dFdx(edgeDist), dFdy(edgeDist));
     float gLen = length(g);
-    vec3  N    = vec3(0.0, 0.0, 1.0);
     if (gLen > 1e-7) {
         vec2  inward = g / gLen;
         float e      = clamp(edgeDist / kBevelWidth, 0.0, 1.0);
         float tilt   = kBevelStrength * cos(e * (PI * 0.5));
-        N = normalize(vec3(-inward * tilt, 1.0));
+        slope += -inward * tilt;
     }
+    vec3 N = normalize(vec3(slope, 1.0));
 
     // Principled single-key BRDF in tangent space (+z toward the viewer).
     vec3  V = vec3(0.0, 0.0, 1.0);

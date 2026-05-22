@@ -199,6 +199,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 }
                 .setNegativeButton(android.R.string.cancel, null)
                 .show()
+            true
         }
     }
 

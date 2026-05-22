@@ -170,7 +170,11 @@ vec3 evalIridescence(float outerIor, float filmIor, float cosTheta1,
 float dGGXaniso(float NdotH, float TdotH, float BdotH, float at, float ab) {
     float a2 = at * ab;
     vec3  f  = vec3(ab * TdotH, at * BdotH, a2 * NdotH);
-    float w2 = a2 / max(dot(f, f), 1e-7);
+    // dot(f,f) is the squared length of H expressed in the T/B/N basis,
+    // weighted by the roughnesses — provably positive, so it is divided
+    // straight. A max() guard here would floor the denominator on glossy
+    // surfaces and flatten the specular peak.
+    float w2 = a2 / dot(f, f);
     return a2 * w2 * w2 / PI;
 }
 

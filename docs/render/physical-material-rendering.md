@@ -26,7 +26,7 @@ architecture and drop the slider farm — see §4.
 | C — sheen / clearcoat / iridescence / anisotropy lobes | **done** | `d2e43ea`, `7933d4d` |
 | D — key + fill + ambient lights | **done** | `ea43bf6` |
 | E — HDR offscreen + bloom + AgX tonemap | todo | — |
-| F — parameterized look: settings, modulation, presets, border merge | in progress | UBO migration, sliders + graph targets done (`43be608`, `087bb55`, `bd02c76`); presets + border merge remain |
+| F — parameterized look: settings, modulation, presets, border merge | in progress | UBO migration, 13 sliders + graph targets, light rig, material presets done (`43be608`–`497fe06`); border merge remains |
 
 Phase A landed: `FillVertex` carries a per-triangle edge-distance basis
 (`inBary`); `fill.frag` lifts a bevel chamfer height field from it, derives the
@@ -315,25 +315,32 @@ encode, so AgX is applied once, in linear, regardless of the swapchain path.
 
 The material is fully in the UBO (`MaterialParams` → `PaletteUbo`, `43be608`).
 
-- ✓ **Settings sliders** (`087bb55`, `bd02c76`). Eight headline controls —
-  roughness, metalness, iridescence, sheen, clearcoat, anisotropy, emissive
-  glow, surface relief — are persisted `Settings` floats with a slider each on
-  a Material settings screen. The wallpaper renders exactly as the sliders are
+- ✓ **Settings sliders** (`087bb55`, `bd02c76`, `497fe06`). Thirteen controls
+  on a Material settings screen: eight material — roughness, metalness,
+  iridescence, sheen, clearcoat, anisotropy, emissive glow, surface relief —
+  and five lighting — angle, elevation, intensity, warmth, ambient. The
+  renderer derives the full key/fill/ambient rig from the five
+  (`applyLightControls`). The wallpaper renders exactly as the sliders are
   set, with no audio: the static-look requirement.
-- ✓ **Modulation** (`087bb55`). Each of the eight is a node-graph Target
-  whose value *adds onto* its slider base, and the home-screen page-scroll
-  offset is a new graph Source alongside the audio bands, beat, and clock. The
-  per-frame UBO patch writes the modulated result. The surface can sit still,
-  breathe to a clock, sway with panning, or pulse to sound — the user's
-  choice; an unwired target leaves the slider base untouched.
-- **Material presets.** Named `MaterialParams` bundles (`Matte`, `Ceramic`,
-  `Pearl`, `Brushed metal`, `Lacquer`, `Oil-slick`) selectable like the
-  palette presets — one tap to seed all of the material at once, including
-  the parameters the eight sliders do not individually expose (light rig,
-  film thickness, sheen tint).
+- ✓ **Modulation** (`087bb55`, `497fe06`). Each of the thirteen is a
+  node-graph Target whose value *adds onto* its slider base, and the
+  home-screen page-scroll offset is a new graph Source alongside the audio
+  bands, beat, and clock. The per-frame UBO patch writes the modulated
+  result. The surface can sit still, breathe to a clock, sway with panning,
+  or pulse to sound; an unwired target leaves the slider base untouched.
+- ✓ **Material presets** (`497fe06`). Six built-in bundles — `Matte`,
+  `Ceramic`, `Pearl`, `Brushed metal`, `Lacquer`, `Oil-slick`. Picking one is
+  a one-shot apply: its values are written into `SharedPreferences`, the
+  Material screen re-inflates so every slider re-binds to them, and the
+  preset is done — no stored "active preset" state, no toggle. Because the
+  light rig is now slider-backed too, a preset never moves anything the user
+  cannot then see and tune.
 - **Border merge.** Draw the border inside `fill.frag` as a `smoothstep` on
   the Phase-A `edgeDist`; remove the `border.*` shaders, the `BorderVertex`
   path, and the border pipeline. One pipeline draws fill + border.
+- **Shader-rendered preset thumbnails** (optional). Render each preset's
+  material to a small offscreen sample so the picker shows the look, not just
+  a name. A real render-to-texture pass — its own focused task.
 - **Done when:** every look is reachable from the settings UI with no audio;
   presets seed it; the graph layers audio / clock / pan on top; one pipeline
   draws fill + border.

@@ -181,14 +181,25 @@ void GraphUi::drawSpawnPopup(Graph& graph) {
 // parameters without selecting them first. Inline sliders make the
 // affordance visible at a glance.
 
+// Visible-canvas size in ImNodeFlow grid units. ImNodeFlow's canvas is a
+// BeginChild filling the host window's content region: getGrid().size() is
+// that child's pixel size and getGrid().scale() the live zoom, so
+// size / scale is the grid-unit extent a node must stay within. Reading
+// the live values keeps this correct whether or not the host window has
+// been resized.
+//
+// This must NOT use config().default_zoom: ContainedContext::m_scale is
+// latched from default_zoom once, at construction — before Graph's ctor
+// raises default_zoom — and afterwards only wheel-zoom or the reset-zoom
+// key move it, neither reachable by touch. The live scale is therefore
+// 1.0; dividing by default_zoom (1.25) shrank the canvas 20% and the
+// right/bottom node clamp stopped that far short of the real edge.
 void GraphUi::canvasGridSize(Graph& graph, float& outW, float& outH) const {
-    const ImGuiIO& io = ImGui::GetIO();
-    const float barH = kAppBarHeightDp * densityScale_;
-    const float topY = insetTopPx_ + barH;
-    float scale = graph.handler().getGrid().config().default_zoom;
+    const ImVec2 px = graph.handler().getGrid().size();
+    float scale = graph.handler().getGrid().scale();
     if (scale <= 0.0f) scale = 1.0f;
-    outW = (io.DisplaySize.x - insetLeftPx_ - insetRightPx_) / scale;
-    outH = (io.DisplaySize.y - topY - insetBottomPx_) / scale;
+    outW = px.x / scale;
+    outH = px.y / scale;
     if (outW < 1.0f) outW = 1.0f;
     if (outH < 1.0f) outH = 1.0f;
 }

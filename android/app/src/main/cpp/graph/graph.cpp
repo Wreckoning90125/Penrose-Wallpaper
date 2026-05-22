@@ -323,17 +323,17 @@ Graph::Graph() {
     // open. Let the library own its window; we just position the
     // toolbar / parameter sheet on top afterwards.
     //
-    // Bump the initial zoom so the default layout reads at thumb-
-    // comfortable size on a phone — at zoom=1 the per-node text and
-    // socket targets are small enough that interaction feels fiddly.
-    // ImNodeFlow's m_scale latches from config().default_zoom at
-    // first ContainedContext::begin(), so setting this BEFORE the
-    // first update() call (i.e. here, in the ctor) is correct.
-    // Clamped at the library's zoom_max (2.0) by ImNodeFlow itself
-    // on pinch; the user can pinch down to zoom_min (0.3) if they
-    // want to see more of the canvas at once.
+    // ImNodeFlow's live zoom (ContainedContext::m_scale) is latched from
+    // default_zoom once, when the ContainedContext is constructed — which
+    // happens before this ctor body runs. Raising default_zoom here does
+    // NOT change the editor scale; ContainedContext::begin() never re-reads
+    // it. default_zoom only retargets the reset-zoom key, which a
+    // touchscreen never presses. The editor therefore runs at scale 1.0;
+    // node legibility is the layout's job (graph_ui.cpp arrangeNodes plus
+    // the per-node sizing in this file), not a canvas zoom. Kept explicit
+    // and equal to the real scale so a stray reset-zoom can't desync it.
     auto& cfg = handler_.getGrid().config();
-    cfg.default_zoom = 1.25f;
+    cfg.default_zoom = 1.0f;
     // Leave scroll_button at ImNodeFlow's default (middle mouse). A
     // touchscreen never synthesises a middle button, so the canvas
     // never pans and the scroll offset stays fixed at (0,0). The

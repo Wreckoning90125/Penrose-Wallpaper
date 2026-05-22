@@ -24,9 +24,9 @@ architecture and drop the slider farm — see §4.
 | A — edge-distance attribute, bevel+wave normal, base BRDF | **done** | `50c7599`, `dba42ef` |
 | B — per-tile material identity, field-driven channels, bulge normal | **done** | `73ba5aa` + bulge commit |
 | C — sheen / clearcoat / iridescence / anisotropy lobes | **done** | `d2e43ea`, `7933d4d` |
-| D — key + fill + ambient lights, light tint, tonemap | todo | — |
-| E — HDR offscreen + bloom | todo | — |
-| F — border merge + curated audio-graph wiring | todo | — |
+| D — key + fill + ambient lights | **done** | `ea43bf6` |
+| E — HDR offscreen + bloom + AgX tonemap | todo | — |
+| F — border merge + Material preset picker + audio-graph wiring | todo | — |
 
 Phase A landed: `FillVertex` carries a per-triangle edge-distance basis
 (`inBary`); `fill.frag` lifts a bevel chamfer height field from it, derives the
@@ -218,10 +218,10 @@ is fixed in the shader. The material is expressive because the *tiling* and the
 
 **Storage.** Per-tile `type` / `orientation` / `ring` reach the shader as one
 `vec4` vertex attribute, `inTileMat`, written by `buildGeometry()` (Phase B).
-The `X_base` constants stay `fill.frag` `const`s; Phase D appends them as
-`PaletteUbo` `vec4` rows (std140, all vec4-aligned — see Risks for the
-shared-include mitigation) when it grows the UBO for the light uniforms, and
-the Phase F preset picker drives those rows.
+The material and light `X_base` constants stay `fill.frag` `const`s through
+Phases B–D. Phase F's preset picker migrates them to `PaletteUbo` `vec4` rows
+(std140, all vec4-aligned — see Risks for the shared-include mitigation) and
+drives them; nothing is plumbed through the UBO while it is static.
 
 ---
 
@@ -274,25 +274,30 @@ Viewer GLSL (commits `d2e43ea`, `7933d4d`):
 The lobe `X_base` values are `fill.frag` `const`s; Phase D moves the material
 and light block into `PaletteUbo`, and the Phase F preset picker drives it.
 
-### Phase D — lights + tonemap
+### Phase D — key + fill + ambient lights — done
 
-- **Lights.** Replace Phase A's single hard-coded `const` light with a key
-  directional + fill point + ambient, each an OKLCH-tinted colour, positions
-  from azimuth/elevation. Store light vectors + colours in `PaletteUbo`;
-  `updatePaletteUbo()` writes them. Key azimuth is the one light slider; the
-  rest are preset constants.
-- **Tonemap.** Apply **AgX** in `fill.frag` before the existing OKLCH/P3 encode
-  so specular, clearcoat, and emissive highlights resolve instead of clipping.
-  AgX is preferred over the reference's ACES for its lower hue-shift on
-  saturated colours — it protects the authored OKLCH palette. ACES filmic is an
-  acceptable fallback. (Promoted to a real post pass in Phase E.)
-- **Done when:** the key light sweeps highlights as its azimuth changes; the
-  10-bit P3 swapchain shows smooth tonemapped rolloff with no banding.
+`fill.frag`'s single hard-coded key light is replaced by a key + fill +
+ambient rig, and the per-light BRDF is factored into `shadeLight()` —
+anisotropic GGX + iridescent Fresnel, Lambert diffuse, Charlie sheen, and the
+clearcoat lobe, evaluated once per light (commit `ea43bf6`). The fill is
+dimmer, cooler, and opposite the key — bounce light; the ambient is a faint
+tinted flat term. The iridescent Fresnel is view-only, so it is evaluated once
+and shared by both lights. Intensities are recalibrated so a flat non-metal
+plateau still reproduces its palette colour.
 
-### Phase E — HDR offscreen + bloom
+The tonemap is **not** done in-shader. AgX needs a linear working space, and
+`fill.frag` writes directly to a swapchain that is either hardware-sRGB or
+already-encoded P3 — an in-shader tonemap would be wrong on the P3 path. It
+belongs in Phase E's composite pass, which owns a linear HDR buffer and the
+single encode. Light and material constants stay `fill.frag` `const`s;
+Phase F migrates them to `PaletteUbo`.
 
-Promote tonemapping from in-shader to a real post chain so highlights and
-emissive tile-cores glow.
+### Phase E — HDR offscreen + bloom + AgX tonemap
+
+A real post chain so specular and clearcoat glints and emissive ripple crests
+resolve and glow instead of clipping. This is also where tonemapping correctly
+belongs — the composite pass owns a linear HDR buffer and the single colour
+encode, so AgX is applied once, in linear, regardless of the swapchain path.
 
 - Add an `R16G16B16A16_SFLOAT` offscreen colour attachment sized to the
   swapchain; the fill and border pipelines render into it as linear HDR.
@@ -328,16 +333,16 @@ emissive tile-cores glow.
 
 | File | Phase(s) | Change |
 |------|----------|--------|
-| `render_state.h` | A✓, B | `FillVertex` (+`inBary`✓, +`inTileMat`); `PaletteUbo` (+material/light rows) |
-| `renderer_vulkan.cpp` | A✓, B, E, F | vertex attrs; offscreen + bloom + composite pipelines; drop border pipeline |
-| `renderer_geometry.cpp` | A✓, B, F | edge basis✓; `inTileMat` from `classify()`; UBO material/light writes; drop border build |
-| `renderer.cpp` | E, F | `drawFrame` multi-pass sequence; graph targets |
-| `shaders/fill.vert` | A✓, B | pass `inBary`✓, `vWaveGrad`✓; pass `inTileMat` |
-| `shaders/fill.frag` | A✓, B, C, D, F | bevel+wave normal✓, base BRDF✓; channels, lobes, lights, tonemap, border |
-| `shaders/uniforms.glsl` (new) | B | shared uniform block, `#include`d (see Risks) |
+| `render_state.h` | A✓ B✓ F | `FillVertex` `inBary` + `inTileMat` done; `PaletteUbo` material/light rows (F) |
+| `renderer_vulkan.cpp` | A✓ B✓ E F | vertex attributes done; offscreen + bloom + composite pipelines (E); drop border pipeline (F) |
+| `renderer_geometry.cpp` | A✓ B✓ F | edge basis + `inTileMat` done; UBO writes, drop border build (F) |
+| `renderer.cpp` | E F | multi-pass `drawFrame` (E); audio-graph targets (F) |
+| `shaders/fill.vert` | A✓ B✓ | `inBary`, `inBulge`, `vWaveGrad`, `inTileMat` — done |
+| `shaders/fill.frag` | A✓ B✓ C✓ D✓ F | normal, channels, four lobes, key/fill/ambient lights done; border merge (F) |
+| `shaders/uniforms.glsl` (new) | F | shared uniform block, `#include`d, added with the UBO migration |
 | `shaders/border.*` | F | removed |
-| `shaders/bloom_down/up.frag`, `composite.frag` (new) | E | post chain |
-| node-graph params + Android UI | B, F | Material preset picker; curated modulation targets |
+| `shaders/bloom_down/up.frag`, `composite.frag` (new) | E | post chain + AgX tonemap |
+| node-graph params + Android UI | F | Material preset picker; curated audio-modulation targets |
 
 ---
 
@@ -346,7 +351,7 @@ emissive tile-cores glow.
 - **The uniform block is duplicated across four shaders.** Any `PaletteUbo`
   change must land identically in `fill.vert`, `fill.frag`, `border.vert`,
   `border.frag` or std140 offsets drift and every uniform reads garbage.
-  Phase B factors the block into a shared `shaders/uniforms.glsl` and
+  Phase F factors the block into a shared `shaders/uniforms.glsl` and
   `#include`s it — `glslc` resolves `#include` relative to the source file by
   default, so no build-script change is needed beyond adding `*.glsl` to the
   shader task's input-tracking glob (so an edit retriggers compilation) while
@@ -362,9 +367,9 @@ emissive tile-cores glow.
   If a low-end tier is ever needed, gate the heavier lobes behind a preset flag.
 - `tools/verify_tilings.cpp` is unaffected — tiling topology never changes; the
   new attributes are pure shading data.
-- Material params currently live as `fill.frag` `const`s. They must move to the
-  UBO in Phase B *before* audio/sliders can reach them; until then, editing the
-  look means editing the shader.
+- Material and light params live as `fill.frag` `const`s. Phase F migrates them
+  to the UBO; until then, editing the look means editing the shader and they
+  cannot be driven by audio or sliders.
 
 ---
 

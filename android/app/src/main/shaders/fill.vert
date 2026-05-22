@@ -3,7 +3,9 @@
 layout(location = 0) in vec2 inPos;
 layout(location = 1) in uint inColorIdx;
 layout(location = 2) in vec2 inCenter;
-layout(location = 3) in float inDepth;
+layout(location = 3) in vec2 inBulge;
+layout(location = 4) in vec3 inBary;
+layout(location = 5) in vec4 inTileMat;
 
 layout(push_constant) uniform PC {
     vec4 view0;
@@ -24,7 +26,10 @@ layout(set = 0, binding = 0, std140) uniform Palette {
 
 layout(location = 0) flat out uint vColorIdx;
 layout(location = 1) flat out float vRipple;
-layout(location = 2)      out float vDepth;
+layout(location = 2) flat out vec2 vBulgeGrad;
+layout(location = 3)      out vec3 vBary;
+layout(location = 4)      out vec2 vWaveGrad;
+layout(location = 5) flat out vec4 vTileMat;
 
 const float TWO_PI = 6.2831853072;
 
@@ -69,7 +74,9 @@ vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float symF) {
 
 void main() {
     vColorIdx = inColorIdx;
-    vDepth = inDepth;
+    vBulgeGrad = inBulge;
+    vBary = inBary;
+    vTileMat = inTileMat;
 
     float amp = ubo.anim.y;
     float waveSym = ubo.anim.z;
@@ -78,6 +85,7 @@ void main() {
 
     vec2 displacedPos = inPos;
     float phiCenter = 0.0;
+    vWaveGrad = vec2(0.0);
 
     if (amp > 0.0) {
         float omegaT    = ubo.anim.x * 0.4 * speed;
@@ -95,6 +103,11 @@ void main() {
             // 0.006 keeps full-amplitude motion at ~3.6% of world span. The
             // ripple-amount slider further attenuates.
             displacedPos += grad * amp * 0.006;
+            // Same gradient, handed to the fragment shader as the wave
+            // field's analytic slope — there it bends the shading normal
+            // so the ripple catches the light instead of only modulating
+            // brightness. Amplitude-scaled so a zero slider means flat.
+            vWaveGrad = grad * amp;
         }
     }
 

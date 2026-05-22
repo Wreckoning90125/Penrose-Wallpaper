@@ -53,6 +53,59 @@ struct EdgeKeyHash {
     }
 };
 
+// Edge-distance barycentric basis for one emitted triangle. p0/p1/p2 are
+// the tile-polygon vertex indices of the triangle's three corners, or -1
+// for the centroid of a centroid-fan. A triangle edge is a real tile
+// boundary only when both its endpoints are polygon vertices adjacent on
+// the tile perimeter; interior fan / centroid-spoke edges get their
+// barycentric component pinned to 1 at every vertex so the fragment
+// shader's min(bary) never dips to 0 along a seam that is not a tile edge.
+struct Bary3 { float v[3][3]; };
+
+inline Bary3 computeBary(int vcount, int p0, int p1, int p2) {
+    Bary3 b;
+    for (int v = 0; v < 3; ++v)
+        for (int c = 0; c < 3; ++c)
+            b.v[v][c] = (v == c) ? 1.0f : 0.0f;
+    const int p[3] = { p0, p1, p2 };
+    for (int k = 0; k < 3; ++k) {
+        // The edge opposite vertex k joins the other two corners.
+        const int a = p[(k + 1) % 3];
+        const int c = p[(k + 2) % 3];
+        bool boundary = false;
+        if (a >= 0 && c >= 0) {
+            int d = a - c;
+            if (d < 0) d = -d;
+            boundary = (d == 1 || d == vcount - 1);
+        }
+        if (!boundary)
+            for (int v = 0; v < 3; ++v) b.v[v][k] = 1.0f;
+    }
+    return b;
+}
+
+// Unit model-space gradient direction of the parallax-depth field over the
+// triangle (p0,p1,p2) with per-vertex depths d0,d1,d2 — the direction the
+// tile's bulge/pit normal tilts. The depth field is linear over the
+// triangle, so the gradient is the exact constant solving the 2x2 system
+// [e1;e2]·grad = (d1-d0, d2-d0). Returns (0,0) for a degenerate triangle or
+// a depth-flat tile (the Chair family).
+inline void bulgeDir(float p0x, float p0y, float p1x, float p1y,
+                     float p2x, float p2y, float d0, float d1, float d2,
+                     float& gx, float& gy) {
+    gx = 0.0f; gy = 0.0f;
+    const float e1x = p1x - p0x, e1y = p1y - p0y;
+    const float e2x = p2x - p0x, e2y = p2y - p0y;
+    const float det = e1x * e2y - e1y * e2x;
+    if (std::fabs(det) < 1e-12f) return;
+    const float inv = 1.0f / det;
+    const float a = d1 - d0, b = d2 - d0;
+    const float rx = ( e2y * a - e1y * b) * inv;
+    const float ry = (-e2x * a + e1x * b) * inv;
+    const float rl = std::sqrt(rx * rx + ry * ry);
+    if (rl > 1e-9f) { gx = rx / rl; gy = ry / rl; }
+}
+
 inline bool hideSeam(Family fam, EdgeKind k1, EdgeKind k2) {
     switch (familyInfo(fam).hideSeamMode) {
         case 1:  return k1 == EdgeKind::Base && k2 == EdgeKind::Base;  // P3
@@ -83,6 +136,18 @@ bool Renderer::buildGeometry() {
     std::vector<FillVertex> fills;
     fills.reserve(tiles.size() * 6);
 
+    // One push site for the fill mesh — keeps the per-branch emit loops from
+    // spelling out the full 14-float vertex. (bgx,bgy) is the triangle's
+    // bulge-tilt direction; bary3 is the vertex's row of the edge-distance
+    // basis; mat4 is the per-tile material identity. The latter two are
+    // shared by all of a triangle's vertices.
+    auto pushFill = [&fills](float x, float y, uint32_t idx, float cx, float cy,
+                             float bgx, float bgy, const float* bary3, const float* mat4) {
+        fills.push_back(FillVertex{ x, y, idx, cx, cy, bgx, bgy,
+                                    bary3[0], bary3[1], bary3[2],
+                                    mat4[0], mat4[1], mat4[2], mat4[3] });
+    };
+
     float minX =  1e9f, minY =  1e9f;
     float maxX = -1e9f, maxY = -1e9f;
 
@@ -102,6 +167,22 @@ bool Renderer::buildGeometry() {
         // for a P1 tile, so every family but the flat Chair reads as 3-D.
         const FamilyInfo& fi = familyInfo(settings_.family);
         const float dsign = (t.type == 0) ? +1.0f : -1.0f;
+
+        // Per-tile material identity (location 5, see render_state.h):
+        // type normalised over the family's distinct kinds, the unit
+        // direction of the classifier edge as orientation, and the
+        // centroid radius. Shared by all of this tile's fill vertices.
+        const ClassSpec& cs = fi.cls;
+        const float typeNorm = (cs.typeBuckets > 1)
+            ? static_cast<float>(t.type) / static_cast<float>(cs.typeBuckets - 1)
+            : 0.0f;
+        const float odx  = t.x[cs.angB] - t.x[cs.angA];
+        const float ody  = t.y[cs.angB] - t.y[cs.angA];
+        const float olen = std::sqrt(odx * odx + ody * ody);
+        const float ocos = (olen > 1e-6f) ? odx / olen : 1.0f;
+        const float osin = (olen > 1e-6f) ? ody / olen : 0.0f;
+        const float mat[4] = { typeNorm, ocos, osin, std::sqrt(cx * cx + cy * cy) };
+
         if (vc == 3) {
             // Triangle tiles: one vertex carries the bulge, the other two
             // sit at the midline. For the Penrose rhomb halves and the
@@ -109,8 +190,12 @@ bool Renderer::buildGeometry() {
             // the apex, vertex 0 — fi.depthVertex selects it.
             float depths[3] = { 0.0f, 0.0f, 0.0f };
             if (fi.depthParallax) depths[fi.depthVertex] = dsign;
+            const Bary3 bary = computeBary(3, 0, 1, 2);
+            float bgx, bgy;
+            bulgeDir(t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2],
+                     depths[0], depths[1], depths[2], bgx, bgy);
             for (int v = 0; v < 3; ++v) {
-                fills.push_back(FillVertex{ t.x[v], t.y[v], paletteIdx, cx, cy, depths[v] });
+                pushFill(t.x[v], t.y[v], paletteIdx, cx, cy, bgx, bgy, bary.v[v], mat);
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
                 minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
             }
@@ -122,9 +207,14 @@ bool Renderer::buildGeometry() {
             const float cd = fi.depthParallax ? dsign : 0.0f;
             for (int v = 0; v < vc; ++v) {
                 const int w = (v + 1) % vc;
-                fills.push_back(FillVertex{ cx,     cy,     paletteIdx, cx, cy, cd });
-                fills.push_back(FillVertex{ t.x[v], t.y[v], paletteIdx, cx, cy, 0.0f });
-                fills.push_back(FillVertex{ t.x[w], t.y[w], paletteIdx, cx, cy, 0.0f });
+                // Corners: centroid (-1), polygon vertex v, polygon vertex w.
+                const Bary3 bary = computeBary(vc, -1, v, w);
+                float bgx, bgy;
+                bulgeDir(cx, cy, t.x[v], t.y[v], t.x[w], t.y[w],
+                         cd, 0.0f, 0.0f, bgx, bgy);
+                pushFill(cx,     cy,     paletteIdx, cx, cy, bgx, bgy, bary.v[0], mat);
+                pushFill(t.x[v], t.y[v], paletteIdx, cx, cy, bgx, bgy, bary.v[1], mat);
+                pushFill(t.x[w], t.y[w], paletteIdx, cx, cy, bgx, bgy, bary.v[2], mat);
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
                 minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
             }
@@ -143,9 +233,14 @@ bool Renderer::buildGeometry() {
                     depth[1] = depth[3] = dsign;
             }
             for (int v = 1; v + 1 < vc; ++v) {
-                fills.push_back(FillVertex{ t.x[0],     t.y[0],     paletteIdx, cx, cy, depth[0] });
-                fills.push_back(FillVertex{ t.x[v],     t.y[v],     paletteIdx, cx, cy, depth[v] });
-                fills.push_back(FillVertex{ t.x[v + 1], t.y[v + 1], paletteIdx, cx, cy, depth[v + 1] });
+                // Corners: polygon vertices 0, v, v+1.
+                const Bary3 bary = computeBary(vc, 0, v, v + 1);
+                float bgx, bgy;
+                bulgeDir(t.x[0], t.y[0], t.x[v], t.y[v], t.x[v + 1], t.y[v + 1],
+                         depth[0], depth[v], depth[v + 1], bgx, bgy);
+                pushFill(t.x[0],     t.y[0],     paletteIdx, cx, cy, bgx, bgy, bary.v[0], mat);
+                pushFill(t.x[v],     t.y[v],     paletteIdx, cx, cy, bgx, bgy, bary.v[1], mat);
+                pushFill(t.x[v + 1], t.y[v + 1], paletteIdx, cx, cy, bgx, bgy, bary.v[2], mat);
             }
             for (int v = 0; v < vc; ++v) {
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);

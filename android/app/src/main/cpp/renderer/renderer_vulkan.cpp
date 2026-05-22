@@ -408,8 +408,8 @@ bool Renderer::buildPipelines() {
     fillAttrs[2].format   = VK_FORMAT_R32G32_SFLOAT;
     fillAttrs[2].offset   = offsetof(FillVertex, cx);
     fillAttrs[3].location = 3; fillAttrs[3].binding = 0;
-    fillAttrs[3].format   = VK_FORMAT_R32_SFLOAT;
-    fillAttrs[3].offset   = offsetof(FillVertex, depth);
+    fillAttrs[3].format   = VK_FORMAT_R32G32_SFLOAT;
+    fillAttrs[3].offset   = offsetof(FillVertex, bgx);
     fillAttrs[4].location = 4; fillAttrs[4].binding = 0;
     fillAttrs[4].format   = VK_FORMAT_R32G32B32_SFLOAT;
     fillAttrs[4].offset   = offsetof(FillVertex, bx);

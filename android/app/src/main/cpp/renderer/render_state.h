@@ -20,9 +20,15 @@ namespace penrose {
 //   location 0: vec2  inPos
 //   location 1: uint  inColorIdx
 //   location 2: vec2  inCenter  (tile centroid)
-//   location 3: float inDepth   (parallax depth, [-1, +1])
+//   location 3: vec2  inBulge   (parallax-bulge normal-tilt direction)
 //   location 4: vec3  inBary    (edge-distance basis — see buildGeometry)
 //   location 5: vec4  inTileMat (per-tile material identity — see buildGeometry)
+//
+// inBulge is the unit model-space gradient direction of the parallax-depth
+// field over the triangle — constant per triangle because that field is
+// linear. The fragment shader tilts the shading normal along it, so the
+// per-tile bulge is real shading relief, not a brightness fake. Zero when
+// the triangle has no depth gradient (the flat Chair family).
 //
 // inBary is a per-triangle barycentric basis (vertex k → unit component k).
 // The fragment shader takes min(bary) as the distance to the nearest tile
@@ -41,7 +47,7 @@ struct FillVertex {
     float    x, y;
     uint32_t colorIdx;
     float    cx, cy;
-    float    depth;
+    float    bgx, bgy;
     float    bx, by, bz;
     float    mtype, mox, moy, mring;
 };

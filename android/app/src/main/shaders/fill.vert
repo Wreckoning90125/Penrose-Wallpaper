@@ -3,7 +3,7 @@
 layout(location = 0) in vec2 inPos;
 layout(location = 1) in uint inColorIdx;
 layout(location = 2) in vec2 inCenter;
-layout(location = 3) in float inDepth;
+layout(location = 3) in vec2 inBulge;
 layout(location = 4) in vec3 inBary;
 layout(location = 5) in vec4 inTileMat;
 
@@ -26,7 +26,7 @@ layout(set = 0, binding = 0, std140) uniform Palette {
 
 layout(location = 0) flat out uint vColorIdx;
 layout(location = 1) flat out float vRipple;
-layout(location = 2)      out float vDepth;
+layout(location = 2) flat out vec2 vBulgeGrad;
 layout(location = 3)      out vec3 vBary;
 layout(location = 4)      out vec2 vWaveGrad;
 layout(location = 5) flat out vec4 vTileMat;
@@ -74,7 +74,7 @@ vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float symF) {
 
 void main() {
     vColorIdx = inColorIdx;
-    vDepth = inDepth;
+    vBulgeGrad = inBulge;
     vBary = inBary;
     vTileMat = inTileMat;
 

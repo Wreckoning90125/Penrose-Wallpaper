@@ -22,7 +22,7 @@ architecture and drop the slider farm — see §4.
 | Phase | State | Commit |
 |-------|-------|--------|
 | A — edge-distance attribute, bevel+wave normal, base BRDF | **done** | `50c7599`, `dba42ef` |
-| B — material channels from the tiling's own fields | **in progress** | `inTileMat` + roughness/metalness/emissive done; bulge-normal + UBO migration remain |
+| B — per-tile material identity, field-driven channels, bulge normal | **done** | `73ba5aa` + bulge commit |
 | C — sheen / clearcoat / iridescence / anisotropy lobes | todo | — |
 | D — key + fill + ambient lights, light tint, tonemap | todo | — |
 | E — HDR offscreen + bloom | todo | — |
@@ -217,11 +217,11 @@ is fixed in the shader. The material is expressive because the *tiling* and the
 *audio* are expressive, not because the user tunes 50 numbers.
 
 **Storage.** Per-tile `type` / `orientation` / `ring` reach the shader as one
-`vec4` vertex attribute, `inTileMat`, written by `buildGeometry()` (done in
-Phase B). The `X_base` constants stay `fill.frag` `const`s until the Material
-preset picker needs to drive them; that step appends them as `PaletteUbo`
-`vec4` rows (std140, all vec4-aligned — see Risks for the shared-include
-mitigation). Nothing is plumbed through the UBO while it is static.
+`vec4` vertex attribute, `inTileMat`, written by `buildGeometry()` (Phase B).
+The `X_base` constants stay `fill.frag` `const`s; Phase D appends them as
+`PaletteUbo` `vec4` rows (std140, all vec4-aligned — see Risks for the
+shared-include mitigation) when it grows the UBO for the light uniforms, and
+the Phase F preset picker drives those rows.
 
 ---
 
@@ -230,28 +230,26 @@ mitigation). Nothing is plumbed through the UBO while it is static.
 Phase A is done (§0). Each remaining phase is one commit-sized, on-device-
 verifiable step; phase N renders correctly on its own.
 
-### Phase B — material channels from the tiling's own fields
+### Phase B — per-tile material identity, field-driven channels, bulge normal — done
 
-- ✓ **`inTileMat` attribute** (`50c7599`+ — committed). `vec4 inTileMat` on
-  `FillVertex` = `(typeNorm, orientCos, orientSin, ring)`, written per tile in
-  `buildGeometry()` from the tile `type` and the `ClassSpec` classifier edge;
-  `fillAttrs` 5→6.
-- ✓ **`fill.frag` channels** (committed). `roughness = base + mod·seam` (seam =
-  `1 − smoothstep` of `edgeDist`), `metalness = base + mod·inTileMat.x`, and an
-  `emissive` term from the ripple crest. The ripple no longer modulates albedo;
-  it is carried by the normal (Phase A) and this emissive term.
-- **Complete the normal** (remaining). Fold the parallax bulge into the shading
-  normal and retire the `depthMod` albedo fake. The bulge gradient is screen-
-  space-zoom-dependent like the bevel; it needs the same normalised-direction
-  treatment, or a per-tile bulge-magnitude term — a deliberate small step, not
-  the half-baked `dFdx(vDepth)` version.
-- **UBO migration** (remaining, rides with the Material preset picker). The
-  `X_base` constants are `fill.frag` `const`s today; they move into `PaletteUbo`
-  when the preset picker exists to drive them — there is no value plumbing them
-  through the UBO while they are static.
-- **Done when:** seam valleys read rougher; alternating tile types read as
-  different metals; ripple crests glow. *(Channels done; normal completion and
-  UBO migration outstanding.)*
+- **`inTileMat` attribute.** `vec4 inTileMat` on `FillVertex` = type normalised
+  over the family's distinct kinds, the unit `(cos,sin)` of the `ClassSpec`
+  classifier edge, and the centroid radius — written per tile in
+  `buildGeometry()`; `fillAttrs` 5→6.
+- **Field-driven channels.** `fill.frag` keys physical channels off the
+  tiling's own fields: `roughness = base + mod·seam` (seam = `1 − smoothstep`
+  of `edgeDist`) for a worn-edge read; `metalness = base + mod·inTileMat.x` so
+  distinct tile types read as distinct metals; an `emissive` term glows on the
+  ripple crest.
+- **Bulge in the normal.** The parallax-depth field is linear over each
+  triangle, so its model-space gradient is exact and constant per triangle.
+  `buildGeometry()` solves the 2×2 system for that gradient direction;
+  `fill.frag` tilts the shading normal along it. The bulge is real shading
+  relief — and neither it nor the ripple modulates albedo any more.
+
+The material `X_base` constants live as `fill.frag` `const`s. Phase D moves
+them into `PaletteUbo` alongside the light uniforms it adds there; the Phase F
+Material preset picker then writes those rows.
 
 ### Phase C — sheen, clearcoat, iridescence, anisotropy
 

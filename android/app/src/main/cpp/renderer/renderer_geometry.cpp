@@ -84,6 +84,28 @@ inline Bary3 computeBary(int vcount, int p0, int p1, int p2) {
     return b;
 }
 
+// Unit model-space gradient direction of the parallax-depth field over the
+// triangle (p0,p1,p2) with per-vertex depths d0,d1,d2 — the direction the
+// tile's bulge/pit normal tilts. The depth field is linear over the
+// triangle, so the gradient is the exact constant solving the 2x2 system
+// [e1;e2]·grad = (d1-d0, d2-d0). Returns (0,0) for a degenerate triangle or
+// a depth-flat tile (the Chair family).
+inline void bulgeDir(float p0x, float p0y, float p1x, float p1y,
+                     float p2x, float p2y, float d0, float d1, float d2,
+                     float& gx, float& gy) {
+    gx = 0.0f; gy = 0.0f;
+    const float e1x = p1x - p0x, e1y = p1y - p0y;
+    const float e2x = p2x - p0x, e2y = p2y - p0y;
+    const float det = e1x * e2y - e1y * e2x;
+    if (std::fabs(det) < 1e-12f) return;
+    const float inv = 1.0f / det;
+    const float a = d1 - d0, b = d2 - d0;
+    const float rx = ( e2y * a - e1y * b) * inv;
+    const float ry = (-e2x * a + e1x * b) * inv;
+    const float rl = std::sqrt(rx * rx + ry * ry);
+    if (rl > 1e-9f) { gx = rx / rl; gy = ry / rl; }
+}
+
 inline bool hideSeam(Family fam, EdgeKind k1, EdgeKind k2) {
     switch (familyInfo(fam).hideSeamMode) {
         case 1:  return k1 == EdgeKind::Base && k2 == EdgeKind::Base;  // P3
@@ -115,12 +137,13 @@ bool Renderer::buildGeometry() {
     fills.reserve(tiles.size() * 6);
 
     // One push site for the fill mesh — keeps the per-branch emit loops from
-    // spelling out the full 13-float vertex. bary3 is the vertex's row of the
-    // edge-distance basis; mat4 is the per-tile material identity, shared by
-    // all of a tile's vertices.
+    // spelling out the full 14-float vertex. (bgx,bgy) is the triangle's
+    // bulge-tilt direction; bary3 is the vertex's row of the edge-distance
+    // basis; mat4 is the per-tile material identity. The latter two are
+    // shared by all of a triangle's vertices.
     auto pushFill = [&fills](float x, float y, uint32_t idx, float cx, float cy,
-                             float depth, const float* bary3, const float* mat4) {
-        fills.push_back(FillVertex{ x, y, idx, cx, cy, depth,
+                             float bgx, float bgy, const float* bary3, const float* mat4) {
+        fills.push_back(FillVertex{ x, y, idx, cx, cy, bgx, bgy,
                                     bary3[0], bary3[1], bary3[2],
                                     mat4[0], mat4[1], mat4[2], mat4[3] });
     };
@@ -168,8 +191,11 @@ bool Renderer::buildGeometry() {
             float depths[3] = { 0.0f, 0.0f, 0.0f };
             if (fi.depthParallax) depths[fi.depthVertex] = dsign;
             const Bary3 bary = computeBary(3, 0, 1, 2);
+            float bgx, bgy;
+            bulgeDir(t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2],
+                     depths[0], depths[1], depths[2], bgx, bgy);
             for (int v = 0; v < 3; ++v) {
-                pushFill(t.x[v], t.y[v], paletteIdx, cx, cy, depths[v], bary.v[v], mat);
+                pushFill(t.x[v], t.y[v], paletteIdx, cx, cy, bgx, bgy, bary.v[v], mat);
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
                 minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
             }
@@ -183,9 +209,12 @@ bool Renderer::buildGeometry() {
                 const int w = (v + 1) % vc;
                 // Corners: centroid (-1), polygon vertex v, polygon vertex w.
                 const Bary3 bary = computeBary(vc, -1, v, w);
-                pushFill(cx,     cy,     paletteIdx, cx, cy, cd,   bary.v[0], mat);
-                pushFill(t.x[v], t.y[v], paletteIdx, cx, cy, 0.0f, bary.v[1], mat);
-                pushFill(t.x[w], t.y[w], paletteIdx, cx, cy, 0.0f, bary.v[2], mat);
+                float bgx, bgy;
+                bulgeDir(cx, cy, t.x[v], t.y[v], t.x[w], t.y[w],
+                         cd, 0.0f, 0.0f, bgx, bgy);
+                pushFill(cx,     cy,     paletteIdx, cx, cy, bgx, bgy, bary.v[0], mat);
+                pushFill(t.x[v], t.y[v], paletteIdx, cx, cy, bgx, bgy, bary.v[1], mat);
+                pushFill(t.x[w], t.y[w], paletteIdx, cx, cy, bgx, bgy, bary.v[2], mat);
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
                 minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
             }
@@ -206,9 +235,12 @@ bool Renderer::buildGeometry() {
             for (int v = 1; v + 1 < vc; ++v) {
                 // Corners: polygon vertices 0, v, v+1.
                 const Bary3 bary = computeBary(vc, 0, v, v + 1);
-                pushFill(t.x[0],     t.y[0],     paletteIdx, cx, cy, depth[0],     bary.v[0], mat);
-                pushFill(t.x[v],     t.y[v],     paletteIdx, cx, cy, depth[v],     bary.v[1], mat);
-                pushFill(t.x[v + 1], t.y[v + 1], paletteIdx, cx, cy, depth[v + 1], bary.v[2], mat);
+                float bgx, bgy;
+                bulgeDir(t.x[0], t.y[0], t.x[v], t.y[v], t.x[v + 1], t.y[v + 1],
+                         depth[0], depth[v], depth[v + 1], bgx, bgy);
+                pushFill(t.x[0],     t.y[0],     paletteIdx, cx, cy, bgx, bgy, bary.v[0], mat);
+                pushFill(t.x[v],     t.y[v],     paletteIdx, cx, cy, bgx, bgy, bary.v[1], mat);
+                pushFill(t.x[v + 1], t.y[v + 1], paletteIdx, cx, cy, bgx, bgy, bary.v[2], mat);
             }
             for (int v = 0; v < vc; ++v) {
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);

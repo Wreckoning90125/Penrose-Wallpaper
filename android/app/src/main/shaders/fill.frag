@@ -14,7 +14,7 @@ layout(set = 0, binding = 0, std140) uniform Palette {
 
 layout(location = 0) flat in uint vColorIdx;
 layout(location = 1) flat in float vRipple;
-layout(location = 2)      in float vDepth;
+layout(location = 2) flat in vec2 vBulgeGrad;
 layout(location = 3)      in vec3 vBary;
 layout(location = 4)      in vec2 vWaveGrad;
 layout(location = 5) flat in vec4 vTileMat;
@@ -35,6 +35,7 @@ const float PI = 3.14159265359;
 const float kBevelWidth    = 0.30;   // edge-distance span of the chamfer
 const float kBevelStrength = 1.05;   // tan of the chamfer's peak slope
 const float kWaveHeight    = 0.12;   // ripple slope → shading-normal tilt
+const float kBulgeTilt     = 0.70;   // parallax-bulge normal tilt at depth 1
 const float kRoughBase     = 0.50;   // plateau roughness
 const float kRoughMod      = 0.35;   // extra roughness in the seam valleys
 const float kMetalBase     = 0.0;
@@ -64,22 +65,27 @@ void main() {
     if (idx >= 16u) idx = 15u;
     vec4 c = ubo.palette[idx];
 
-    // Albedo: palette RGB with master brightness and the per-tile parallax
-    // gradient. The quasicrystal ripple no longer modulates albedo — it is
-    // carried by the shading normal (vWaveGrad) and the emissive term below.
+    // Albedo: palette RGB with master brightness only. The parallax bulge
+    // and the quasicrystal ripple no longer modulate albedo — both are
+    // carried by the shading normal, the ripple also by the emissive term.
     float brightness = ubo.effects.x;
-    float depthMod   = 1.0 + ubo.effects.y * vDepth;
-    vec3 albedo = clamp(c.rgb * brightness * depthMod, 0.0, 1.0);
+    vec3 albedo = clamp(c.rgb * brightness, 0.0, 1.0);
 
     // Edge distance: 0 on every tile boundary edge, rising toward the tile
     // interior. Drives both the bevel normal and the seam roughness.
     float edgeDist = min(min(vBary.x, vBary.y), vBary.z);
 
     // Shading normal. `slope` accumulates -dH/d(x,y) for a height field that
-    // is the sum of the ripple and the bevel; N = normalize(vec3(slope, 1)).
-    // The ripple term applies everywhere; the bevel term tilts the chamfer
-    // away from the inward edge-distance gradient, fading edge → plateau.
-    vec2 slope = -vWaveGrad * kWaveHeight;
+    // is the sum of the ripple, the parallax bulge, and the bevel;
+    // N = normalize(vec3(slope, 1)). The ripple and bulge terms apply
+    // everywhere; the bevel term tilts the chamfer away from the inward
+    // edge-distance gradient, fading edge → plateau.
+    //
+    // Bulge: vBulgeGrad is the unit model-space gradient direction of the
+    // tile's depth field — -gradient tilts the normal off the bulge, so each
+    // tile reads as a raised dome / sunk pit. Zero for the flat Chair family.
+    vec2 slope = -vWaveGrad * kWaveHeight
+               - vBulgeGrad * (ubo.effects.y * kBulgeTilt);
     vec2  g    = vec2(dFdx(edgeDist), dFdy(edgeDist));
     float gLen = length(g);
     if (gLen > 1e-7) {

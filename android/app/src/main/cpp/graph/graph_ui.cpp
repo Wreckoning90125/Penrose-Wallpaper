@@ -341,6 +341,25 @@ void GraphUi::render(Graph& graph) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::Begin("##GraphEditorHost", nullptr, kHostFlags);
     graph.handler().update();
+    // ImGui still creates this window's bottom-right resize grip, and it
+    // still hit-tests (resize grips use ImGuiButtonFlags_FlattenChildren,
+    // so a touch lands on the grip even through ImNodeFlow's canvas
+    // child) — but that child is opaque and is painted over the grip, so
+    // the handle went invisible. Redraw it on the foreground draw list,
+    // above the canvas, at the same corner so the affordance is findable.
+    // The grip underneath does the actual resize; canvasGridSize reads
+    // the live canvas, so the node clamp re-fits a resized window.
+    {
+        const ImVec2 br = ImGui::GetWindowPos() + ImGui::GetWindowSize();
+        const float  s  = 24.0f * densityScale_;
+        ImDrawList*  fg = ImGui::GetForegroundDrawList();
+        fg->AddTriangleFilled(ImVec2(br.x - s, br.y),
+                              ImVec2(br.x, br.y - s), br,
+                              IM_COL32(150, 170, 185, 230));
+        fg->AddTriangle(ImVec2(br.x - s, br.y),
+                        ImVec2(br.x, br.y - s), br,
+                        IM_COL32(228, 235, 240, 235), 1.5f);
+    }
     ImGui::End();
     ImGui::PopStyleVar();
 

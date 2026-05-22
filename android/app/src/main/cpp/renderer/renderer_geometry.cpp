@@ -448,6 +448,9 @@ void Renderer::updatePaletteUbo() {
     m.iridescence   = settings_.matIridescence;
     m.emissive      = settings_.matEmissive;
     m.bevelStrength = settings_.matRelief;
+    applyLightControls(m, settings_.lightAngle, settings_.lightElevation,
+                       settings_.lightIntensity, settings_.lightWarmth,
+                       settings_.lightAmbient);
     writeMaterialRows(&ubo.matNormal[0], m);
 
     std::memcpy(paletteUboMapped_, &ubo, sizeof(ubo));

@@ -240,6 +240,11 @@ private:
     float fxMatIridescence_ = 0.45f;
     float fxMatEmissive_    = 0.60f;
     float fxMatRelief_      = 1.05f;
+    float fxLightAngle_     = 230.0f;
+    float fxLightElevation_ = 55.0f;
+    float fxLightIntensity_ = 1.00f;
+    float fxLightWarmth_    = 0.50f;
+    float fxLightAmbient_   = 0.22f;
 
     // Effective generation for the currently-built geometry. Equal to
     // settings_.generation in Locked pan mode; grows past it in Generative

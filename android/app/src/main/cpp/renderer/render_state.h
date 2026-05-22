@@ -12,6 +12,7 @@
 
 #include "color/color.h"  // kMaxColors lives there
 
+#include <cmath>
 #include <cstdint>
 
 namespace penrose {
@@ -151,6 +152,37 @@ inline void writeMaterialRows(float* d, const MaterialParams& m) {
     d[38] = m.fillColor[2];   d[39] = 0.0f;
     d[40] = m.ambientColor[0]; d[41] = m.ambientColor[1];
     d[42] = m.ambientColor[2]; d[43] = m.ambient;
+}
+
+// Derive the key/fill/ambient rig in a MaterialParams from the five
+// user-facing lighting controls. Key azimuth+elevation place the key; the
+// fill sits opposite at half elevation; warmth (0 cool .. 1 warm) tints the
+// key warm and the fill cool around a neutral midpoint.
+inline void applyLightControls(MaterialParams& m, float angleDeg, float elevDeg,
+                               float intensity, float warmth, float ambient) {
+    const float kD2R = 3.14159265358979f / 180.0f;
+    const float az = angleDeg * kD2R;
+    const float el = elevDeg  * kD2R;
+    const float ce = std::cos(el), se = std::sin(el);
+    m.keyDir[0] = ce * std::cos(az);
+    m.keyDir[1] = ce * std::sin(az);
+    m.keyDir[2] = se;
+    const float az2 = az + 3.14159265358979f;
+    const float el2 = el * 0.5f;
+    const float ce2 = std::cos(el2);
+    m.fillDir[0] = ce2 * std::cos(az2);
+    m.fillDir[1] = ce2 * std::sin(az2);
+    m.fillDir[2] = std::sin(el2);
+    m.keyIntensity  = intensity * 0.76f;
+    m.fillIntensity = intensity * 0.27f;
+    const float w = (warmth - 0.5f) * 2.0f;  // -1 cool .. +1 warm
+    m.keyColor[0] = 1.0f;
+    m.keyColor[1] = 0.98f - 0.05f * w;
+    m.keyColor[2] = 0.96f - 0.13f * w;
+    m.fillColor[0] = 0.86f - 0.06f * w;
+    m.fillColor[1] = 0.91f - 0.01f * w;
+    m.fillColor[2] = 1.00f;
+    m.ambient = ambient;
 }
 
 } // namespace penrose

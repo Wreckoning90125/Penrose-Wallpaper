@@ -49,6 +49,11 @@ enum class NodeKind : uint16_t {
     OutMatIridescence,
     OutMatEmissive,
     OutMatRelief,
+    OutLightAngle,
+    OutLightElevation,
+    OutLightIntensity,
+    OutLightWarmth,
+    OutLightAmbient,
 
     // Appended after the target block so existing saved-graph node indices
     // never shift. A Source by category despite its enum position.
@@ -79,7 +84,8 @@ struct EvalResult {
     float rippleSpeed  = 1.0f;
     float brightness   = 1.0f;
     float depthAmount  = 0.3f;
-    // Material targets — order matches the OutMat* NodeKind block.
+    // Material + lighting targets — order matches the OutMat* / OutLight*
+    // NodeKind block.
     float matRoughness   = 0.50f;
     float matMetalness   = 0.40f;
     float matSheen       = 0.35f;
@@ -88,6 +94,11 @@ struct EvalResult {
     float matIridescence = 0.45f;
     float matEmissive    = 0.60f;
     float matRelief      = 1.05f;
+    float lightAngle     = 230.0f;
+    float lightElevation = 55.0f;
+    float lightIntensity = 1.00f;
+    float lightWarmth    = 0.50f;
+    float lightAmbient   = 0.22f;
 };
 
 // FlowNode is the common base for every modulation node in the editor.

@@ -364,6 +364,11 @@ void Renderer::drawFrame() {
         gres.matIridescence = settings_.matIridescence;
         gres.matEmissive    = settings_.matEmissive;
         gres.matRelief      = settings_.matRelief;
+        gres.lightAngle     = settings_.lightAngle;
+        gres.lightElevation = settings_.lightElevation;
+        gres.lightIntensity = settings_.lightIntensity;
+        gres.lightWarmth    = settings_.lightWarmth;
+        gres.lightAmbient   = settings_.lightAmbient;
         graph_.evaluate(gctx, gres);
         fxRippleAmount_ = gres.rippleAmount;
         fxRippleSpeed_  = gres.rippleSpeed;
@@ -377,6 +382,11 @@ void Renderer::drawFrame() {
         fxMatIridescence_ = gres.matIridescence;
         fxMatEmissive_    = gres.matEmissive;
         fxMatRelief_      = gres.matRelief;
+        fxLightAngle_     = gres.lightAngle;
+        fxLightElevation_ = gres.lightElevation;
+        fxLightIntensity_ = gres.lightIntensity;
+        fxLightWarmth_    = gres.lightWarmth;
+        fxLightAmbient_   = gres.lightAmbient;
     }
 
     // Lazily bring ImGui up only when the editor is actually wanted.
@@ -443,6 +453,8 @@ void Renderer::drawFrame() {
         fxMat.iridescence   = fxMatIridescence_;
         fxMat.emissive      = fxMatEmissive_;
         fxMat.bevelStrength = fxMatRelief_;
+        applyLightControls(fxMat, fxLightAngle_, fxLightElevation_,
+                           fxLightIntensity_, fxLightWarmth_, fxLightAmbient_);
         writeMaterialRows(
             reinterpret_cast<float*>(base + offsetof(PaletteUbo, matNormal)),
             fxMat);

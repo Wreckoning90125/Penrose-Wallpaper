@@ -7,6 +7,11 @@
         android:title="← Back"
         android:summary="" />
 
+    <Preference
+        android:key="material_preset_pick"
+        android:title="Material preset"
+        android:summary="Apply a built-in look — writes the sliders below, then you tune from there" />
+
     <PreferenceCategory android:title="Material">
         <SeekBarPreference
             android:key="mat_roughness"
@@ -55,6 +60,39 @@
             android:title="Surface relief"
             android:summary="Depth of the beveled chamfer"
             android:min="0" android:max="200" android:defaultValue="105"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Lighting">
+        <SeekBarPreference
+            android:key="light_angle"
+            android:title="Light angle"
+            android:summary="Key-light azimuth, degrees"
+            android:min="0" android:max="360" android:defaultValue="230"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="light_elevation"
+            android:title="Light elevation"
+            android:summary="Key-light height, degrees"
+            android:min="0" android:max="90" android:defaultValue="55"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="light_intensity"
+            android:title="Light intensity"
+            android:summary="Master key + fill brightness"
+            android:min="0" android:max="200" android:defaultValue="100"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="light_warmth"
+            android:title="Warmth"
+            android:summary="Cool to warm — warms the key, cools the fill"
+            android:min="0" android:max="100" android:defaultValue="50"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="light_ambient"
+            android:title="Ambient"
+            android:summary="Flat fill on the unlit side"
+            android:min="0" android:max="100" android:defaultValue="22"
             app:showSeekBarValue="true" />
     </PreferenceCategory>
 </PreferenceScreen>

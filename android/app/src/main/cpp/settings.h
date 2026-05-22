@@ -78,6 +78,15 @@ struct Settings {
     float  matEmissive    = 0.60f;
     float  matRelief      = 1.05f;
 
+    // Lighting rig controls. The renderer derives the key/fill directions,
+    // colours and intensities from these five (see applyLightControls);
+    // like the material knobs they are slider bases the graph can drive.
+    float  lightAngle     = 230.0f;  // key azimuth, degrees
+    float  lightElevation = 55.0f;   // key elevation, degrees
+    float  lightIntensity = 1.00f;   // master key+fill scale
+    float  lightWarmth    = 0.50f;   // 0 cool .. 0.5 neutral .. 1 warm
+    float  lightAmbient   = 0.22f;   // flat ambient level
+
     // Custom palette — used when `preset == Preset::Custom`. 10 OKLCH
     // triples; only the first `colorCount` are actually consumed.
     Oklch  customOklch[kMaxColors] = {

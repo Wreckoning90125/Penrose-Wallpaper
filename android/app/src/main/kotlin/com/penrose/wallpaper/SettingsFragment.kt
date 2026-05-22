@@ -14,6 +14,7 @@ import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.SeekBarPreference
 import com.penrose.wallpaper.audio.AudioPlaybackService
+import com.penrose.wallpaper.preset.MaterialPresets
 import com.penrose.wallpaper.preset.PresetStore
 
 /**
@@ -80,9 +81,12 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 bindAudioRowActions()
                 updateAudioSummary()
             }
+            ScreenKey.Material -> {
+                bindBack()
+                bindMaterialPresetRow()
+            }
             ScreenKey.Borders,
             ScreenKey.Motion,
-            ScreenKey.Material,
             ScreenKey.Background,
             ScreenKey.CustomPalette -> bindBack()
         }
@@ -167,6 +171,34 @@ class SettingsFragment : PreferenceFragmentCompat(),
         findPreference<Preference>("nav_back")?.setOnPreferenceClickListener {
             loadScreen(ScreenKey.Main)
             true
+        }
+    }
+
+    /**
+     * The Material-preset row. Picking a preset is a one-shot apply: its
+     * values are written into SharedPreferences and the screen re-inflates
+     * so every slider re-binds to the new values. There is no stored
+     * "active preset" — the preset just seeds the sliders and is done.
+     */
+    private fun bindMaterialPresetRow() {
+        findPreference<Preference>("material_preset_pick")?.setOnPreferenceClickListener {
+            val ctx = requireContext()
+            val presets = MaterialPresets.all
+            AlertDialog.Builder(ctx)
+                .setTitle("Material preset")
+                .setItems(presets.map { it.name }.toTypedArray()) { _, which ->
+                    val prefs = preferenceManager.sharedPreferences
+                        ?: return@setItems
+                    val editor = prefs.edit()
+                    for ((key, value) in presets[which].values) {
+                        editor.putInt(key, value)
+                    }
+                    editor.apply()
+                    loadScreen(ScreenKey.Material)
+                    Toast.makeText(ctx, presets[which].name, Toast.LENGTH_SHORT).show()
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
         }
     }
 

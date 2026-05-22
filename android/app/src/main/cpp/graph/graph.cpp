@@ -52,6 +52,11 @@ const NodeDescriptor kDescriptors[] = {
     { NodeKind::OutMatIridescence,"Iridescence",        "Target"   },
     { NodeKind::OutMatEmissive,  "Emissive glow",       "Target"   },
     { NodeKind::OutMatRelief,    "Surface relief",      "Target"   },
+    { NodeKind::OutLightAngle,     "Light angle",       "Target"   },
+    { NodeKind::OutLightElevation, "Light elevation",   "Target"   },
+    { NodeKind::OutLightIntensity, "Light intensity",   "Target"   },
+    { NodeKind::OutLightWarmth,     "Light warmth",     "Target"   },
+    { NodeKind::OutLightAmbient,    "Ambient level",    "Target"   },
     { NodeKind::SrcPageScroll,   "Home-screen scroll",  "Source"   },
 };
 static_assert(sizeof(kDescriptors) / sizeof(kDescriptors[0])
@@ -413,8 +418,8 @@ uint64_t Graph::addNode(NodeKind kind, float x, float y) {
     return spawn(handler_, kind, ImVec2(x, y), this);
 }
 
-// The contiguous Target block, OutRippleAmount .. OutMatRelief inclusive.
-constexpr int kTargetCount = static_cast<int>(NodeKind::OutMatRelief)
+// The contiguous Target block, OutRippleAmount .. OutLightAmbient inclusive.
+constexpr int kTargetCount = static_cast<int>(NodeKind::OutLightAmbient)
                            - static_cast<int>(NodeKind::OutRippleAmount) + 1;
 
 void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
@@ -454,12 +459,16 @@ void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
         &out.rippleAmount, &out.rippleSpeed, &out.brightness, &out.depthAmount,
         &out.matRoughness, &out.matMetalness, &out.matSheen, &out.matClearcoat,
         &out.matAnisotropy, &out.matIridescence, &out.matEmissive, &out.matRelief,
+        &out.lightAngle, &out.lightElevation, &out.lightIntensity,
+        &out.lightWarmth, &out.lightAmbient,
     };
     const float lo[kTargetCount] = {
         0.0f, 0.1f, 0.0f, 0.0f,  0.05f, 0.0f, 0.0f, 0.0f,  -1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
     };
     const float hi[kTargetCount] = {
         1.0f, 3.0f, 2.0f, 1.0f,  1.0f,  1.0f, 2.0f, 1.0f,   1.0f, 1.0f, 2.0f, 2.0f,
+        360.0f, 90.0f, 2.0f, 1.0f, 1.0f,
     };
     for (int i = 0; i < kTargetCount; ++i)
         if (seen[i]) *slot[i] = std::clamp(*slot[i] + add[i], lo[i], hi[i]);

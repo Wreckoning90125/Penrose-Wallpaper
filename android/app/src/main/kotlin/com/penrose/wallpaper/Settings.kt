@@ -44,6 +44,11 @@ internal class Settings(
     val matIridescence: Float,
     val matEmissive: Float,
     val matRelief: Float,
+    val lightAngle: Float,
+    val lightElevation: Float,
+    val lightIntensity: Float,
+    val lightWarmth: Float,
+    val lightAmbient: Float,
     val customOklch: FloatArray,
 ) {
     fun toNative(): Pair<IntArray, FloatArray> {
@@ -58,6 +63,7 @@ internal class Settings(
             brightness, depthAmount, rippleSpeed,
             matRoughness, matMetalness, matSheen, matClearcoat,
             matAnisotropy, matIridescence, matEmissive, matRelief,
+            lightAngle, lightElevation, lightIntensity, lightWarmth, lightAmbient,
         )
         val floats = FloatArray(baseFloats.size + customOklch.size)
         baseFloats.copyInto(floats)
@@ -108,6 +114,14 @@ internal class Settings(
         const val KEY_MAT_IRIDESCENCE = "mat_iridescence"
         const val KEY_MAT_EMISSIVE    = "mat_emissive"
         const val KEY_MAT_RELIEF      = "mat_relief"
+
+        // Lighting rig slider bases. Angle / elevation are stored as plain
+        // degrees; the other three as 0..N integers divided by 100.
+        const val KEY_LIGHT_ANGLE     = "light_angle"
+        const val KEY_LIGHT_ELEVATION = "light_elevation"
+        const val KEY_LIGHT_INTENSITY = "light_intensity"
+        const val KEY_LIGHT_WARMTH    = "light_warmth"
+        const val KEY_LIGHT_AMBIENT   = "light_ambient"
 
         // Bumped by PresetStore.applyToPrefs whenever a preset writes a
         // fresh modulation_graph.json, and by the node editor when it
@@ -209,6 +223,11 @@ internal class Settings(
                 matIridescence = safeInt(prefs, KEY_MAT_IRIDESCENCE, 45) / 100f,
                 matEmissive    = safeInt(prefs, KEY_MAT_EMISSIVE, 60) / 100f,
                 matRelief      = safeInt(prefs, KEY_MAT_RELIEF, 105) / 100f,
+                lightAngle     = safeInt(prefs, KEY_LIGHT_ANGLE, 230).toFloat(),
+                lightElevation = safeInt(prefs, KEY_LIGHT_ELEVATION, 55).toFloat(),
+                lightIntensity = safeInt(prefs, KEY_LIGHT_INTENSITY, 100) / 100f,
+                lightWarmth    = safeInt(prefs, KEY_LIGHT_WARMTH, 50) / 100f,
+                lightAmbient   = safeInt(prefs, KEY_LIGHT_AMBIENT, 22) / 100f,
                 customOklch  = custom,
             )
         }

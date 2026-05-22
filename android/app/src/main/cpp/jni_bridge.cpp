@@ -28,9 +28,10 @@ inline Renderer* asRenderer(jlong ptr) { return reinterpret_cast<Renderer*>(ptr)
 //            brightness, depthAmount, rippleSpeed,
 //            matRoughness, matMetalness, matSheen, matClearcoat,
 //            matAnisotropy, matIridescence, matEmissive, matRelief,
+//            lightAngle, lightElevation, lightIntensity, lightWarmth, lightAmbient,
 //            custom_0_L, custom_0_C, custom_0_H, ..., custom_9_L, custom_9_C, custom_9_H]
 constexpr int kIntCount = 11;
-constexpr int kFloatCount = 16 + 8 + 3 * kMaxColors;
+constexpr int kFloatCount = 16 + 8 + 5 + 3 * kMaxColors;
 
 Settings decodeSettings(const jint* ints, const jfloat* floats) {
     Settings s{};
@@ -73,7 +74,12 @@ Settings decodeSettings(const jint* ints, const jfloat* floats) {
     s.matIridescence = floats[21];
     s.matEmissive    = floats[22];
     s.matRelief      = floats[23];
-    int base = 24;
+    s.lightAngle     = floats[24];
+    s.lightElevation = floats[25];
+    s.lightIntensity = floats[26];
+    s.lightWarmth    = floats[27];
+    s.lightAmbient   = floats[28];
+    int base = 29;
     for (int i = 0; i < kMaxColors; ++i) {
         s.customOklch[i] = { floats[base + 3 * i + 0],
                              floats[base + 3 * i + 1],

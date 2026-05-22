@@ -86,6 +86,11 @@ void GraphUi::drawToolbar(Graph& graph) {
                  ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoCollapse |
                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
 
+    // The app-bar buttons are big touch targets; at the default font the
+    // labels look lost in them. Scale this window's text up so Add /
+    // Delete / Reset / Close fill their buttons and read at a glance.
+    ImGui::SetWindowFontScale(1.7f);
+
     // Four buttons equally spaced across the bar. Width per slot =
     // (bar usable width) / 4; height = bar height minus inset on both
     // sides so taps near the top/bottom edge still land inside.
@@ -204,43 +209,70 @@ void GraphUi::canvasGridSize(Graph& graph, float& outW, float& outH) const {
     if (outH < 1.0f) outH = 1.0f;
 }
 
-// Lay the default graph out as a column-major grid sized to the canvas.
-// Runs after handler_.update() so node sizes are known; bails (leaving
+// Lay the default graph out in three zones: every Source in a left-hand
+// column, every Target in a right-hand column flush with the canvas
+// edge, and Operators down the centre lane between them. Sources begin a
+// chain and Targets end one, so signal flows left to right and the
+// middle stays clear for the operators a user wires in. Runs after
+// handler_.update() so node sizes are known; bails (leaving
 // arrangePending_ set) until every node reports a real size.
 void GraphUi::arrangeNodes(Graph& graph) {
-    auto& nodes = graph.handler().getNodes();
-    std::vector<FlowNode*> ordered;
-    ordered.reserve(nodes.size());
-    float maxW = 0.0f, maxH = 0.0f;
-    for (auto& [uid, node] : nodes) {
+    std::vector<FlowNode*> src, ops, tgt;
+    float srcW = 0.0f, opW = 0.0f, tgtW = 0.0f, nodeH = 0.0f;
+    for (auto& [uid, node] : graph.handler().getNodes()) {
         if (!node || node->toDestroy()) continue;
         const ImVec2 sz = node->getSize();
         // getSize() is (0,0) until ImNodeFlow has drawn the node once.
         if (sz.x <= 1.0f || sz.y <= 1.0f) return;   // retry next frame
-        maxW = std::max(maxW, sz.x);
-        maxH = std::max(maxH, sz.y);
-        ordered.push_back(static_cast<FlowNode*>(node.get()));
+        auto* fn = static_cast<FlowNode*>(node.get());
+        nodeH = std::max(nodeH, sz.y);
+        const std::string_view cat = descriptor(fn->kind()).category;
+        if (cat == "Operator")    { ops.push_back(fn); opW  = std::max(opW,  sz.x); }
+        else if (cat == "Target") { tgt.push_back(fn); tgtW = std::max(tgtW, sz.x); }
+        else                      { src.push_back(fn); srcW = std::max(srcW, sz.x); }
     }
     arrangePending_ = false;
-    if (ordered.empty()) return;
-    // Sort by NodeKind: every Source kind precedes every Operator kind
-    // precedes every Target kind, so the column-major fill below places
-    // sources in the left columns and targets in the rightmost.
-    std::sort(ordered.begin(), ordered.end(),
-              [](FlowNode* a, FlowNode* b) { return a->kind() < b->kind(); });
+    if (src.empty() && ops.empty() && tgt.empty()) return;
+
+    // Order within a zone: bands ascend by kind, targets follow the enum.
+    auto byKind = [](FlowNode* a, FlowNode* b) { return a->kind() < b->kind(); };
+    std::sort(src.begin(), src.end(), byKind);
+    std::sort(ops.begin(), ops.end(), byKind);
+    std::sort(tgt.begin(), tgt.end(), byKind);
 
     float gridW = 0.0f, gridH = 0.0f;
     canvasGridSize(graph, gridW, gridH);
-    const float m     = 14.0f;
-    const float cellW = maxW + 34.0f;
-    const float cellH = maxH + 22.0f;
-    const int   cols  = std::max(1, static_cast<int>((gridW - 2.0f * m) / cellW));
-    const int   n     = static_cast<int>(ordered.size());
-    const int   rows  = std::max(1, (n + cols - 1) / cols);
-    for (int i = 0; i < n; ++i) {
-        const int col = i / rows;
-        const int row = i % rows;
-        ordered[i]->setPos(ImVec2(m + col * cellW, m + row * cellH));
+    const float m    = 24.0f;             // canvas margin
+    const float hGap = 46.0f;             // gap between columns
+    const float rowH = nodeH + 30.0f;     // stacked-node pitch
+    const int   fit  = std::max(1, static_cast<int>((gridH - 2.0f * m) / rowH));
+
+    // Column-major fill: `list` laid top-down from (x0, m), wrapping to a
+    // fresh column every `fit` nodes, columns colW + hGap apart.
+    auto fill = [&](const std::vector<FlowNode*>& list, float x0, float colW) {
+        const int n    = static_cast<int>(list.size());
+        const int rows = std::min(fit, std::max(1, n));
+        for (int i = 0; i < n; ++i)
+            list[i]->setPos(ImVec2(x0 + (i / rows) * (colW + hGap),
+                                   m  + (i % rows) * rowH));
+    };
+    // Columns `list` needs at the current fit.
+    auto colsFor = [&](const std::vector<FlowNode*>& list) {
+        const int n    = static_cast<int>(list.size());
+        const int rows = std::min(fit, std::max(1, n));
+        return (n + rows - 1) / rows;
+    };
+
+    // Sources hug the left; Targets hug the right; Operators centre in
+    // whatever lane is left between the two blocks.
+    fill(src, m, srcW);
+    if (!tgt.empty()) {
+        const float blockW = colsFor(tgt) * (tgtW + hGap) - hGap;
+        fill(tgt, std::max(m, gridW - m - blockW), tgtW);
+    }
+    if (!ops.empty()) {
+        const float blockW = colsFor(ops) * (opW + hGap) - hGap;
+        fill(ops, std::max(m, (gridW - blockW) * 0.5f), opW);
     }
 }
 

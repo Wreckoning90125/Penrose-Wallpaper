@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <memory>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
@@ -70,18 +71,60 @@ inline float clamp01(float v) { return std::clamp(v, 0.0f, 1.0f); }
 // per-instance pin layout + behaviour rather than a class explosion.
 // -----------------------------------------------------------------------------
 
+// The eight audio-band sources, ordered sub-bass -> air.
+inline bool isBandKind(NodeKind k) {
+    return k >= NodeKind::SrcBand0 && k <= NodeKind::SrcBand7;
+}
+
+// Header colours for the band nodes, low to high — a spectrum ramp
+// (indigo -> teal -> green -> amber -> red) so a glance reads frequency.
+const ImU32 kBandHeader[8] = {
+    IM_COL32( 63,  68, 156, 255),
+    IM_COL32( 54, 108, 178, 255),
+    IM_COL32( 48, 152, 168, 255),
+    IM_COL32( 56, 158,  96, 255),
+    IM_COL32(120, 164,  58, 255),
+    IM_COL32(196, 158,  52, 255),
+    IM_COL32(202, 110,  46, 255),
+    IM_COL32(190,  68,  72, 255),
+};
+
+// Pixel width of the widest band label. Each band node pads its body to
+// this so the eight render as one uniform-width column.
+inline float widestBandLabelWidth() {
+    float w = 0.0f;
+    for (int b = 0; b < 8; ++b) {
+        const auto k = static_cast<NodeKind>(
+            static_cast<int>(NodeKind::SrcBand0) + b);
+        w = std::max(w, ImGui::CalcTextSize(descriptor(k).label).x);
+    }
+    return w;
+}
+
 class SourceNode : public FlowNode {
 public:
     SourceNode(NodeKind k, Graph* g) : FlowNode(k, g) {
         setTitle(descriptor(k).label);
         if (k == NodeKind::SrcConstant) p0 = 0.5f;
+        // Colour-code the band nodes by frequency. Other sources keep the
+        // library default (addNode assigns it when the ctor sets none).
+        if (isBandKind(k)) {
+            const int b = static_cast<int>(k)
+                        - static_cast<int>(NodeKind::SrcBand0);
+            setStyle(std::make_shared<ImFlow::NodeStyle>(
+                kBandHeader[b], ImColor(233, 241, 244, 255), 6.5f));
+        }
         addOUT<float>("out")->behaviour([this] { return sample(); });
     }
 
-    // Inline slider for SrcConstant — every other source pulls its
-    // value from the EvalContext (audio bands / beat / time) and has
-    // nothing to tune.
+    // Band nodes pad their body to a shared width; SrcConstant gets an
+    // inline value slider; the remaining sources (beat / time / page
+    // scroll) pull straight from the EvalContext and have nothing to tune.
     void draw() override {
+        if (isBandKind(kind_)) {
+            ImGui::Dummy(ImVec2(widestBandLabelWidth(), 0.0f));
+            return;
+        }
         if (kind_ != NodeKind::SrcConstant) return;
         ImGui::SetNextItemWidth(160.0f);
         ImGui::SliderFloat("##value", &p0, 0.0f, 1.0f, "value %.2f");

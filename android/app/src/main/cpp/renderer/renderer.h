@@ -230,6 +230,16 @@ private:
     float fxRippleSpeed_  = 1.0f;
     float fxBrightness_   = 1.0f;
     float fxDepthAmount_  = 0.3f;
+    // Graph-modulated material controls — slider baseline from settings_,
+    // result after Graph::evaluate. Written to the UBO per frame.
+    float fxMatRoughness_   = 0.50f;
+    float fxMatMetalness_   = 0.40f;
+    float fxMatSheen_       = 0.35f;
+    float fxMatClearcoat_   = 0.45f;
+    float fxMatAnisotropy_  = 0.40f;
+    float fxMatIridescence_ = 0.45f;
+    float fxMatEmissive_    = 0.60f;
+    float fxMatRelief_      = 1.05f;
 
     // Effective generation for the currently-built geometry. Equal to
     // settings_.generation in Locked pan mode; grows past it in Generative

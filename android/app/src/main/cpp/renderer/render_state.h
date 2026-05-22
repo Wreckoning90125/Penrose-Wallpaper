@@ -125,4 +125,32 @@ struct PaletteUbo {
     float    ambient[4];      // ambientColor.rgb, ambientAmount
 };
 
+// Pack a MaterialParams into the 11 trailing PaletteUbo rows. `d` points at
+// PaletteUbo::matNormal[0]; the rows are contiguous, so 44 floats are
+// written. Used by both updatePaletteUbo (cold) and the per-frame patch.
+inline void writeMaterialRows(float* d, const MaterialParams& m) {
+    d[0]  = m.bevelWidth;     d[1]  = m.bevelStrength;
+    d[2]  = m.waveHeight;     d[3]  = m.bulgeTilt;
+    d[4]  = m.roughBase;      d[5]  = m.roughMod;
+    d[6]  = m.metalBase;      d[7]  = m.metalMod;
+    d[8]  = m.emissive;       d[9]  = m.sheen;
+    d[10] = m.sheenRough;     d[11] = m.clearcoat;
+    d[12] = m.coatRough;      d[13] = m.anisotropy;
+    d[14] = m.iridescence;    d[15] = m.iridIOR;
+    d[16] = m.iridThickMin;   d[17] = m.iridThickMax;
+    d[18] = 0.0f;             d[19] = 0.0f;
+    d[20] = m.sheenColor[0];  d[21] = m.sheenColor[1];
+    d[22] = m.sheenColor[2];  d[23] = 0.0f;
+    d[24] = m.keyDir[0];      d[25] = m.keyDir[1];
+    d[26] = m.keyDir[2];      d[27] = m.keyIntensity;
+    d[28] = m.keyColor[0];    d[29] = m.keyColor[1];
+    d[30] = m.keyColor[2];    d[31] = 0.0f;
+    d[32] = m.fillDir[0];     d[33] = m.fillDir[1];
+    d[34] = m.fillDir[2];     d[35] = m.fillIntensity;
+    d[36] = m.fillColor[0];   d[37] = m.fillColor[1];
+    d[38] = m.fillColor[2];   d[39] = 0.0f;
+    d[40] = m.ambientColor[0]; d[41] = m.ambientColor[1];
+    d[42] = m.ambientColor[2]; d[43] = m.ambient;
+}
+
 } // namespace penrose

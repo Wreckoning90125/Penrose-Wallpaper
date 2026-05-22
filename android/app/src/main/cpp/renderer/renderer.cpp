@@ -348,18 +348,35 @@ void Renderer::drawFrame() {
     {
         graph::EvalContext gctx{};
         for (int i = 0; i < 8; ++i) gctx.bands[i] = audioBands[i];
-        gctx.beat    = audioBeat;
-        gctx.timeSec = time_;
+        gctx.beat       = audioBeat;
+        gctx.timeSec    = time_;
+        gctx.pageScroll = pageOffset_;
         graph::EvalResult gres{};
-        gres.rippleAmount = settings_.rippleAmount;
-        gres.rippleSpeed  = settings_.rippleSpeed;
-        gres.brightness   = settings_.brightness;
-        gres.depthAmount  = settings_.depthAmount;
+        gres.rippleAmount   = settings_.rippleAmount;
+        gres.rippleSpeed    = settings_.rippleSpeed;
+        gres.brightness     = settings_.brightness;
+        gres.depthAmount    = settings_.depthAmount;
+        gres.matRoughness   = settings_.matRoughness;
+        gres.matMetalness   = settings_.matMetalness;
+        gres.matSheen       = settings_.matSheen;
+        gres.matClearcoat   = settings_.matClearcoat;
+        gres.matAnisotropy  = settings_.matAnisotropy;
+        gres.matIridescence = settings_.matIridescence;
+        gres.matEmissive    = settings_.matEmissive;
+        gres.matRelief      = settings_.matRelief;
         graph_.evaluate(gctx, gres);
         fxRippleAmount_ = gres.rippleAmount;
         fxRippleSpeed_  = gres.rippleSpeed;
         fxBrightness_   = gres.brightness;
         fxDepthAmount_  = gres.depthAmount;
+        fxMatRoughness_   = gres.matRoughness;
+        fxMatMetalness_   = gres.matMetalness;
+        fxMatSheen_       = gres.matSheen;
+        fxMatClearcoat_   = gres.matClearcoat;
+        fxMatAnisotropy_  = gres.matAnisotropy;
+        fxMatIridescence_ = gres.matIridescence;
+        fxMatEmissive_    = gres.matEmissive;
+        fxMatRelief_      = gres.matRelief;
     }
 
     // Lazily bring ImGui up only when the editor is actually wanted.
@@ -413,6 +430,22 @@ void Renderer::drawFrame() {
         std::memcpy(base + offsetof(PaletteUbo, effects),    effects,    sizeof(effects));
         std::memcpy(base + offsetof(PaletteUbo, audioBands), bandsBlock, sizeof(bandsBlock));
         std::memcpy(base + offsetof(PaletteUbo, audioBeat),  beatBlock,  sizeof(beatBlock));
+
+        // Material rows — the eight graph-modulated controls over the
+        // static MaterialParams defaults, rewritten every frame so audio /
+        // clock / page-scroll modulation reaches the shader.
+        MaterialParams fxMat{};
+        fxMat.roughBase     = fxMatRoughness_;
+        fxMat.metalMod      = fxMatMetalness_;
+        fxMat.sheen         = fxMatSheen_;
+        fxMat.clearcoat     = fxMatClearcoat_;
+        fxMat.anisotropy    = fxMatAnisotropy_;
+        fxMat.iridescence   = fxMatIridescence_;
+        fxMat.emissive      = fxMatEmissive_;
+        fxMat.bevelStrength = fxMatRelief_;
+        writeMaterialRows(
+            reinterpret_cast<float*>(base + offsetof(PaletteUbo, matNormal)),
+            fxMat);
     }
 
     FrameSync& f = frames_[currentFrame_];

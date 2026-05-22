@@ -39,6 +39,20 @@ enum class NodeKind : uint16_t {
     OutRippleSpeed,
     OutBrightness,
     OutDepthAmount,
+    // Material targets — must stay contiguous with the four above; the
+    // target block runs OutRippleAmount .. OutMatRelief.
+    OutMatRoughness,
+    OutMatMetalness,
+    OutMatSheen,
+    OutMatClearcoat,
+    OutMatAnisotropy,
+    OutMatIridescence,
+    OutMatEmissive,
+    OutMatRelief,
+
+    // Appended after the target block so existing saved-graph node indices
+    // never shift. A Source by category despite its enum position.
+    SrcPageScroll,
 
     Count_,
 };
@@ -54,9 +68,10 @@ const NodeDescriptor* descriptors();
 int                   descriptorCount();
 
 struct EvalContext {
-    float bands[8] = {};
-    float beat     = 0.0f;
-    float timeSec  = 0.0f;
+    float bands[8]  = {};
+    float beat      = 0.0f;
+    float timeSec   = 0.0f;
+    float pageScroll = 0.0f;  // home-screen horizontal scroll, 0..1
 };
 
 struct EvalResult {
@@ -64,6 +79,15 @@ struct EvalResult {
     float rippleSpeed  = 1.0f;
     float brightness   = 1.0f;
     float depthAmount  = 0.3f;
+    // Material targets — order matches the OutMat* NodeKind block.
+    float matRoughness   = 0.50f;
+    float matMetalness   = 0.40f;
+    float matSheen       = 0.35f;
+    float matClearcoat   = 0.45f;
+    float matAnisotropy  = 0.40f;
+    float matIridescence = 0.45f;
+    float matEmissive    = 0.60f;
+    float matRelief      = 1.05f;
 };
 
 // FlowNode is the common base for every modulation node in the editor.

@@ -64,6 +64,20 @@ struct Settings {
     float  brightness   = 1.0f;
     float  depthAmount  = 0.3f;
 
+    // Physical-material controls — eight user-facing knobs, each a slider
+    // base value the modulation graph can drive on top of. They map 1:1
+    // onto MaterialParams fields (render_state.h); the rest of the material
+    // (light rig, film thickness, sheen tint, …) holds its MaterialParams
+    // defaults, set as a bundle by the material presets.
+    float  matRoughness   = 0.50f;
+    float  matMetalness   = 0.40f;
+    float  matSheen       = 0.35f;
+    float  matClearcoat   = 0.45f;
+    float  matAnisotropy  = 0.40f;
+    float  matIridescence = 0.45f;
+    float  matEmissive    = 0.60f;
+    float  matRelief      = 1.05f;
+
     // Custom palette — used when `preset == Preset::Custom`. 10 OKLCH
     // triples; only the first `colorCount` are actually consumed.
     Oklch  customOklch[kMaxColors] = {

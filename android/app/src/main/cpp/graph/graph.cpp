@@ -44,6 +44,15 @@ const NodeDescriptor kDescriptors[] = {
     { NodeKind::OutRippleSpeed,  "Ripple speed",        "Target"   },
     { NodeKind::OutBrightness,   "Brightness",          "Target"   },
     { NodeKind::OutDepthAmount,  "Depth",               "Target"   },
+    { NodeKind::OutMatRoughness, "Roughness",           "Target"   },
+    { NodeKind::OutMatMetalness, "Metalness",           "Target"   },
+    { NodeKind::OutMatSheen,     "Sheen",               "Target"   },
+    { NodeKind::OutMatClearcoat, "Clearcoat",           "Target"   },
+    { NodeKind::OutMatAnisotropy,"Anisotropy",          "Target"   },
+    { NodeKind::OutMatIridescence,"Iridescence",        "Target"   },
+    { NodeKind::OutMatEmissive,  "Emissive glow",       "Target"   },
+    { NodeKind::OutMatRelief,    "Surface relief",      "Target"   },
+    { NodeKind::SrcPageScroll,   "Home-screen scroll",  "Source"   },
 };
 static_assert(sizeof(kDescriptors) / sizeof(kDescriptors[0])
                   == static_cast<size_t>(NodeKind::Count_),
@@ -85,9 +94,10 @@ private:
             case NodeKind::SrcBand5:    return c.bands[5];
             case NodeKind::SrcBand6:    return c.bands[6];
             case NodeKind::SrcBand7:    return c.bands[7];
-            case NodeKind::SrcBeat:     return c.beat;
-            case NodeKind::SrcTime:     return c.timeSec;
-            case NodeKind::SrcConstant: return p0;
+            case NodeKind::SrcBeat:       return c.beat;
+            case NodeKind::SrcTime:       return c.timeSec;
+            case NodeKind::SrcPageScroll: return c.pageScroll;
+            case NodeKind::SrcConstant:   return p0;
             default:                    return 0.0f;
         }
     }
@@ -403,6 +413,10 @@ uint64_t Graph::addNode(NodeKind kind, float x, float y) {
     return spawn(handler_, kind, ImVec2(x, y), this);
 }
 
+// The contiguous Target block, OutRippleAmount .. OutMatRelief inclusive.
+constexpr int kTargetCount = static_cast<int>(NodeKind::OutMatRelief)
+                           - static_cast<int>(NodeKind::OutRippleAmount) + 1;
+
 void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
     ctx_ = ctx;
     // OutPin::val() memoizes per-frame by adding a marker to this list
@@ -410,45 +424,45 @@ void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
     // so frame N+1 actually recomputes instead of replaying frame N.
     handler_.get_recursion_blacklist().clear();
 
-    float ripA = 0.0f, ripS = 0.0f, bri = 0.0f, dep = 0.0f;
-    bool seenA = false, seenS = false, seenB = false, seenD = false;
+    // Accumulate every connected Target by kind index within the block.
+    float add[kTargetCount]  = {};
+    bool  seen[kTargetCount] = {};
+    const int firstTarget = static_cast<int>(NodeKind::OutRippleAmount);
     for (auto& [uid, node] : handler_.getNodes()) {
         // Skip nodes the user deleted this frame — destroy() only marks
         // them; handler_.update() sweeps them afterwards. Evaluating one
         // would feed a stale target for the frame between the two.
         if (!node || node->toDestroy()) continue;
         auto* fn = static_cast<FlowNode*>(node.get());
-        // Targets are the last four kinds in the registry; a single
-        // range check is cheaper than a string-compare on category
-        // and runs once per node per frame.
-        if (fn->kind() < NodeKind::OutRippleAmount) continue;
+        const int ti = static_cast<int>(fn->kind()) - firstTarget;
+        if (ti < 0 || ti >= kTargetCount) continue;  // not a Target
         // Skip Targets whose input pin has no upstream link. An
         // unconnected target should LEAVE the slider baseline alone,
-        // not push it to zero. Without this, the default graph
-        // (which ships with disconnected Target nodes for each of
-        // ripple/brightness/depth) silences brightness on every
-        // frame and the wallpaper renders as black fills under the
-        // borders.
+        // not push it to zero — the default graph ships disconnected
+        // Target nodes, and zeroing brightness would render black.
         const auto& ins = node->getIns();
         if (ins.empty() || !ins[0] || !ins[0]->isConnected()) continue;
-        const float v = static_cast<TargetNode*>(fn)->pull();
-        switch (fn->kind()) {
-            case NodeKind::OutRippleAmount: ripA += v; seenA = true; break;
-            case NodeKind::OutRippleSpeed:  ripS += v; seenS = true; break;
-            case NodeKind::OutBrightness:   bri  += v; seenB = true; break;
-            case NodeKind::OutDepthAmount:  dep  += v; seenD = true; break;
-            default: break;
-        }
+        add[ti]  += static_cast<TargetNode*>(fn)->pull();
+        seen[ti]  = true;
     }
-    // Additive composition: the slider baseline is what the user
-    // chose; the graph ADDS modulation on top. Targets writing 0
-    // (e.g. silent audio band through ScaleBias) leave the slider
-    // value unchanged instead of zeroing the wallpaper out. Clamp
-    // ranges are the same final-output limits the shader expects.
-    if (seenA) out.rippleAmount = std::clamp(out.rippleAmount + ripA, 0.0f, 1.0f);
-    if (seenS) out.rippleSpeed  = std::clamp(out.rippleSpeed  + ripS, 0.1f, 3.0f);
-    if (seenB) out.brightness   = std::clamp(out.brightness   + bri,  0.0f, 2.0f);
-    if (seenD) out.depthAmount  = std::clamp(out.depthAmount  + dep,  0.0f, 1.0f);
+
+    // Additive composition: the slider baseline is what the user chose;
+    // the graph ADDS modulation on top. An unconnected (or zero-writing)
+    // target leaves the baseline untouched. `slot` and the clamp ranges
+    // are in NodeKind target order.
+    float* slot[kTargetCount] = {
+        &out.rippleAmount, &out.rippleSpeed, &out.brightness, &out.depthAmount,
+        &out.matRoughness, &out.matMetalness, &out.matSheen, &out.matClearcoat,
+        &out.matAnisotropy, &out.matIridescence, &out.matEmissive, &out.matRelief,
+    };
+    const float lo[kTargetCount] = {
+        0.0f, 0.1f, 0.0f, 0.0f,  0.05f, 0.0f, 0.0f, 0.0f,  -1.0f, 0.0f, 0.0f, 0.0f,
+    };
+    const float hi[kTargetCount] = {
+        1.0f, 3.0f, 2.0f, 1.0f,  1.0f,  1.0f, 2.0f, 1.0f,   1.0f, 1.0f, 2.0f, 2.0f,
+    };
+    for (int i = 0; i < kTargetCount; ++i)
+        if (seen[i]) *slot[i] = std::clamp(*slot[i] + add[i], lo[i], hi[i]);
 }
 
 // -----------------------------------------------------------------------------

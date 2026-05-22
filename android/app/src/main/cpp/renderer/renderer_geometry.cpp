@@ -434,31 +434,21 @@ void Renderer::updatePaletteUbo() {
     ubo.audioBeat[2] = 0.0f;
     ubo.audioBeat[3] = 0.0f;
 
-    // Physical-material parameters. Static defaults for now — the base
-    // values a settings panel and the modulation graph will later drive.
-    const MaterialParams m{};
-    ubo.matNormal[0]   = m.bevelWidth;    ubo.matNormal[1]   = m.bevelStrength;
-    ubo.matNormal[2]   = m.waveHeight;    ubo.matNormal[3]   = m.bulgeTilt;
-    ubo.matSurface[0]  = m.roughBase;     ubo.matSurface[1]  = m.roughMod;
-    ubo.matSurface[2]  = m.metalBase;     ubo.matSurface[3]  = m.metalMod;
-    ubo.matLobeA[0]    = m.emissive;      ubo.matLobeA[1]    = m.sheen;
-    ubo.matLobeA[2]    = m.sheenRough;    ubo.matLobeA[3]    = m.clearcoat;
-    ubo.matLobeB[0]    = m.coatRough;     ubo.matLobeB[1]    = m.anisotropy;
-    ubo.matLobeB[2]    = m.iridescence;   ubo.matLobeB[3]    = m.iridIOR;
-    ubo.matIrid[0]     = m.iridThickMin;  ubo.matIrid[1]     = m.iridThickMax;
-    ubo.matIrid[2]     = 0.0f;            ubo.matIrid[3]     = 0.0f;
-    ubo.matSheenCol[0] = m.sheenColor[0]; ubo.matSheenCol[1] = m.sheenColor[1];
-    ubo.matSheenCol[2] = m.sheenColor[2]; ubo.matSheenCol[3] = 0.0f;
-    ubo.keyLight[0]    = m.keyDir[0];     ubo.keyLight[1]    = m.keyDir[1];
-    ubo.keyLight[2]    = m.keyDir[2];     ubo.keyLight[3]    = m.keyIntensity;
-    ubo.keyColor[0]    = m.keyColor[0];   ubo.keyColor[1]    = m.keyColor[1];
-    ubo.keyColor[2]    = m.keyColor[2];   ubo.keyColor[3]    = 0.0f;
-    ubo.fillLight[0]   = m.fillDir[0];    ubo.fillLight[1]   = m.fillDir[1];
-    ubo.fillLight[2]   = m.fillDir[2];    ubo.fillLight[3]   = m.fillIntensity;
-    ubo.fillColor[0]   = m.fillColor[0];  ubo.fillColor[1]   = m.fillColor[1];
-    ubo.fillColor[2]   = m.fillColor[2];  ubo.fillColor[3]   = 0.0f;
-    ubo.ambient[0]     = m.ambientColor[0]; ubo.ambient[1]   = m.ambientColor[1];
-    ubo.ambient[2]     = m.ambientColor[2]; ubo.ambient[3]   = m.ambient;
+    // Physical material: the eight user-facing controls come from the
+    // settings sliders; the rest hold the MaterialParams defaults (a
+    // material preset sets those as a bundle). The per-frame UBO patch in
+    // drawFrame overwrites these rows with the modulation-graph result, so
+    // this is the cold-path seed for the first frame after a settings change.
+    MaterialParams m{};
+    m.roughBase     = settings_.matRoughness;
+    m.metalMod      = settings_.matMetalness;
+    m.sheen         = settings_.matSheen;
+    m.clearcoat     = settings_.matClearcoat;
+    m.anisotropy    = settings_.matAnisotropy;
+    m.iridescence   = settings_.matIridescence;
+    m.emissive      = settings_.matEmissive;
+    m.bevelStrength = settings_.matRelief;
+    writeMaterialRows(&ubo.matNormal[0], m);
 
     std::memcpy(paletteUboMapped_, &ubo, sizeof(ubo));
 }

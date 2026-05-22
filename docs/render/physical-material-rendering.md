@@ -1,46 +1,78 @@
 # Physical-material rendering — plan
 
 The renderer is geometrically complete (11 tiling families, closure-verified by
-`tools/verify_tilings.cpp`, table-driven). Visually it is still flat-shaded
-polygons. This document is the single pick-up point for turning the tiling into
-a lit, beveled, physical surface. It carries the full context, the technique,
-and a five-phase build sequence — every phase is committed work; the order is
-sequencing, not optionality.
+`tools/verify_tilings.cpp`, table-driven). This document is the single pick-up
+point for turning the flat tiling into a lit, beveled, physical surface. It
+carries the full context, the technique, the material architecture, and a
+phased build sequence. Every phase is committed work; the order is sequencing,
+not optionality.
+
+The technique is lifted from a studied reference — a TSL/WebGPU hyperbolic-audio
+visualiser that renders a flat unit disk as a real physical material. What that
+reference does with three.js `MeshPhysicalNodeMaterial` we do by hand in GLSL,
+because the Vulkan renderer has no node-material engine. The reference's lesson
+is **architectural, not its 50-slider UI**: a scalar field plus its
+screen-space gradient plus a real BRDF is a physical surface. We take the
+architecture and drop the slider farm — see §4.
+
+---
+
+## 0. Status — what is already built
+
+| Phase | State | Commit |
+|-------|-------|--------|
+| A — edge-distance attribute, bevel+wave normal, base BRDF | **done** | `50c7599`, `dba42ef` |
+| B — material channels from the tiling's own fields | todo | — |
+| C — sheen / clearcoat / thin-film iridescence lobes | todo | — |
+| D — key + fill + ambient lights, light tint, tonemap | todo | — |
+| E — HDR offscreen + bloom | todo | — |
+| F — border merge + curated audio-graph wiring | todo | — |
+
+Phase A landed: `FillVertex` carries a per-triangle edge-distance basis
+(`inBary`); `fill.frag` lifts a bevel chamfer height field from it, derives the
+chamfer normal analytically from the screen-space gradient, folds in the ripple
+field's analytic slope (`waveGradient`), and shades the result with a
+single-key principled BRDF (Lambert + GGX) over an ambient term, calibrated so a
+tile plateau reproduces its palette colour at brightness 1. Material parameters
+are GLSL `const`s grouped at the top of `fill.frag`; they migrate to the UBO in
+Phase B when audio/sliders need to reach them.
 
 ---
 
 ## 1. Where the renderer is now
 
-Branch base: `main` after the eight-family / verifier / doc-tree merge (PR #3).
-Renderer is **Vulkan, dynamic rendering** (no `VkRenderPass` object), drawing
-two pipelines straight to the swapchain image — **no depth buffer, no
-offscreen/HDR target**. Two draws per frame: fill triangles, then border quads.
+Renderer is **Vulkan 1.3, dynamic rendering** (no `VkRenderPass` object),
+drawing two pipelines straight to the swapchain image — **no depth buffer, no
+offscreen/HDR target** (until Phase E). Two draws per frame: fill triangles,
+then border quads. Shaders are GLSL 460, compiled by `glslc` in the NDK build.
 
 **Files and ownership:**
 
-| File | Lines | Owns |
-|------|-------|------|
-| `cpp/renderer/render_state.h` | 60 | `FillVertex`, `BorderVertex`, `PushBlock`, `PaletteUbo` structs |
-| `cpp/renderer/renderer_vulkan.cpp` | 660 | device / swapchain / pipeline setup, vertex-attribute descriptions |
-| `cpp/renderer/renderer_geometry.cpp` | 345 | `buildGeometry()` (tiles → vertex lists), `updatePaletteUbo()` |
-| `cpp/renderer/renderer.cpp` | 638 | lifecycle, `drawFrame` |
-| `shaders/fill.vert` | 106 | fill vertex stage — wave displacement, parallax |
-| `shaders/fill.frag` | 35 | fill fragment — flat `palette[idx] × brightness × depth × ripple` |
-| `shaders/border.vert` / `border.frag` | 62 / 20 | expanded-quad borders |
+| File | Owns |
+|------|------|
+| `cpp/renderer/render_state.h` | `FillVertex`, `BorderVertex`, `PushBlock`, `PaletteUbo` structs |
+| `cpp/renderer/renderer_vulkan.cpp` | device / swapchain / pipeline setup, vertex-attribute descriptions |
+| `cpp/renderer/renderer_geometry.cpp` | `buildGeometry()` (tiles → vertex lists), `updatePaletteUbo()` |
+| `cpp/renderer/renderer.cpp` | lifecycle, `drawFrame` (per-frame UBO patch) |
+| `shaders/fill.vert` / `fill.frag` | fill stage — displacement, parallax, bevel, BRDF |
+| `shaders/border.vert` / `border.frag` | expanded-quad borders |
 
-Shaders are GLSL 460, compiled by `glslc` in the NDK build.
-
-**Fill vertex** (`render_state.h:24`) — non-indexed, 3 verts pushed per triangle:
+**Fill vertex** (`render_state.h`) — non-indexed, 3 verts pushed per triangle:
 
 ```c
-struct FillVertex { float x, y; uint32_t colorIdx; float cx, cy; float depth; };
+struct FillVertex {
+  float x, y; uint32_t colorIdx; float cx, cy; float depth;
+  float bx, by, bz;   // edge-distance barycentric basis (Phase A)
+};
 ```
 
-→ `fill.vert` inputs: `loc0 vec2 inPos`, `loc1 uint inColorIdx`,
-`loc2 vec2 inCenter`, `loc3 float inDepth`.
+→ `fill.vert` inputs `loc0..loc4`: `vec2 inPos`, `uint inColorIdx`,
+`vec2 inCenter`, `float inDepth`, `vec3 inBary`.
+→ `fill.vert` outputs `loc0..loc4`: `flat uint vColorIdx`, `flat float vRipple`,
+`float vDepth`, `vec3 vBary`, `vec2 vWaveGrad`.
 
-**Uniform block `PaletteUbo`** (`render_state.h:48`) — std140, **mirrored
-verbatim in all four shaders**:
+**Uniform block `PaletteUbo`** (`render_state.h`) — std140, **mirrored verbatim
+in all four shaders** (see Risks):
 
 ```c
 struct PaletteUbo {
@@ -51,28 +83,30 @@ struct PaletteUbo {
 };
 ```
 
-**Vertex attributes** are declared at `renderer_vulkan.cpp:400` —
-`VkVertexInputAttributeDescription fillAttrs[4]`, formats
-`R32G32_SFLOAT / R32_UINT / R32G32_SFLOAT / R32_SFLOAT`. Adding an attribute =
-grow that array + the pipeline's `vertexAttributeDescriptionCount`.
+**Vertex attributes** are declared in `renderer_vulkan.cpp::buildPipelines` —
+`VkVertexInputAttributeDescription fillAttrs[5]`. Adding an attribute = grow
+that array + bump `vertexAttributeDescriptionCount`.
 
-**Swapchain formats** (`renderer_vulkan.cpp:44`): preferred is
-`A2B10G10R10_UNORM_PACK32` on the Display-P3 colour space (10-bit), with sRGB
-8-bit fallbacks.
+**Swapchain formats**: preferred is `A2B10G10R10_UNORM_PACK32` on the
+Display-P3 colour space (10-bit), with sRGB 8-bit fallbacks — wide gamut and
+the extra bit depth carry tonemapped highlights well.
 
 **Already present, ready to exploit:**
 
-- `fill.vert` computes `waveGradient()` — the **analytic** 2-D slope of the
-  ripple field. Used today only to displace vertices; it is exactly the wave's
-  contribution to a surface normal, for free.
+- `fill.vert::waveGradient()` — the **analytic** 2-D slope of the ripple field.
+  Phase A folds it into the shading normal; it is also the natural driver for
+  audio-reactive surface motion.
 - `inDepth` (parallax bulge, ±1 on one vertex) is linear across a triangle →
-  constant analytic gradient.
+  exact analytic gradient, no `dFdx` needed.
 - The palette is OKLCH-derived linear RGB from `color.cpp`, which also holds the
   sRGB and wide-gamut-P3 encode paths.
-- `classify()` computes a per-tile **orientation** (currently spent only on a
-  colour bucket).
+- `classify()` computes a per-tile **type**, **orientation**, and **ring
+  distance** — today spent only on a colour bucket. These are free per-tile
+  material-identity fields (see §4).
 - Geometry is non-indexed: each triangle's 3 vertices are independent, so
   per-triangle attribute values are free to assign.
+- The modulation **node graph** (`graph/`) already drives ripple / brightness /
+  depth from the audio analyser every frame — the wiring point for Phase F.
 
 ---
 
@@ -81,230 +115,265 @@ grow that array + the pipeline's `vertexAttributeDescriptionCount`.
 Work splits into **tiling choice** (what we draw) and **surface
 sophistication** (how it looks). This document drives the surface track in
 full. The tiling track is tracked in `docs/tilings/ROADMAP.md`; its committed
-next item is the **Hat / Spectre einstein** family — see §8. The two tracks are
+next item is the **Hat / Spectre einstein** family — see §9. The two tracks are
 independent and can progress in parallel.
 
 ---
 
 ## 3. The technique
 
-Reference studied: a TSL/WebGPU hyperbolic audio visualiser. Stripped of the
-framework, the whole render is:
+Stripped of its framework, the reference renderer is:
 
 - A **flat** surface, geometric normal `(0,0,1)`, orthographic view.
 - A scalar field `H(x,y)` treated as a **height field**.
 - The surface normal reconstructed *per fragment* as
-  `normalize(vec3(-dHdx·s, -dHdy·s, 1))`. No height geometry, no normal-map
-  texture.
-- That normal drives a **full principled BRDF** (Disney / MaterialX standard
+  `normalize(vec3(-dHdx, -dHdy, 1))`. No height geometry, no normal-map texture.
+- That normal driving a **full principled BRDF** (Disney / MaterialX standard
   surface): base colour, roughness, metalness, clearcoat, sheen, thin-film
   iridescence, emissive, IOR.
-- Real lights (directional key + point fill + ambient), OKLab colour, filmic
-  tonemap on output.
+- Real lights (directional key + point fill + ambient), OKLab colour, a filmic
+  tonemap (the reference uses ACES) on output.
+- **The same scalar field also modulates the physical channels** —
+  `roughness = base + mod·f(H)`, likewise metalness, emission, sheen. The field
+  is not just geometry; it is the material's spatial variation.
 
 The idea underneath: **a 3-D-looking physical surface needs only a scalar
-field, its screen-space gradient as a normal, and a real BRDF — not 3-D
-geometry.**
+field, its screen-space gradient as a normal, a real BRDF, and that same field
+wired into the BRDF's channels — not 3-D geometry, not textures.**
 
 **It is all portable shader math.** TSL is a node front-end that compiles to
-WGSL; every node maps one-to-one to GLSL we already compile:
+WGSL; every node maps one-to-one to GLSL we compile with `glslc`:
 
-| Reference (TSL / three.js) | Our Vulkan / GLSL equivalent | Status |
-|---|---|---|
-| `dFdx` / `dFdy` | `dFdx` / `dFdy` (GLSL core → SPIR-V) | available |
-| `MeshPhysicalNodeMaterial` | hand-written Cook-Torrance GGX + lobes in `fill.frag` | ~250 lines, standard |
-| OKLab → linear-sRGB | already in `color.cpp` and the shader | present |
-| filmic tonemap | one GLSL function | available |
-| directional / point / ambient lights | light uniforms | trivial |
-| storage-buffer attributes | Vulkan SSBO / vertex attributes | present |
-| `uniform()` param registry | the node-graph editor's params | present, richer |
+| Reference (TSL / three.js) | Our Vulkan / GLSL equivalent |
+|---|---|
+| `dFdx` / `dFdy` | `dFdx` / `dFdy` (GLSL core → SPIR-V) |
+| `MeshPhysicalNodeMaterial` | hand-written Cook-Torrance GGX + lobes in `fill.frag` |
+| OKLab → linear-sRGB node | already in `color.cpp` and authored into the palette |
+| ACES filmic tonemap | one GLSL function (we use AgX — §D) |
+| directional / point / ambient lights | light vectors + colours in the UBO |
+| `uniform()` param registry | `PaletteUbo` fields + the existing node graph |
 
-**A tiling beats the reference's single disk in two structural ways.** The
-reference must use `dFdx` of `H` because its field has no closed-form gradient,
-and `dFdx` across a tiling seam smears garbage (the 2×2 quad straddles a
-discontinuity). We assemble `H` from terms with **analytic** gradients —
-bevel, bulge, and the already-analytic `waveGradient` — so the normal is exact
-and seam-clean. And because we have discrete tiles, each tile carries its own
-material identity: orientation-aligned anisotropy, type-driven material sets,
-the substitution hierarchy expressible as material change across scale — none
-of which a single continuous disk can do.
+**A tiling beats the reference's single disk in two structural ways.**
+
+1. *Clean normals.* The reference must use `dFdx` of `H` because its field has
+   no closed-form gradient, and `dFdx` across a discontinuity smears garbage. We
+   assemble `H` from terms with **analytic** gradients — the bevel (piecewise-
+   linear `inBary`), the parallax bulge (linear `inDepth`), and the already-
+   analytic `waveGradient` — so the normal is exact and seam-clean.
+2. *Per-tile material identity.* The reference has one field, so one material
+   varying continuously. We have **discrete tiles**, each carrying type,
+   orientation, and ring distance. Different physical channels can key to
+   different structural fields: metalness by tile type, anisotropy along tile
+   orientation, iridescence thickness by ring — material variation the tiling
+   *is*, not material variation painted on. A single continuous disk cannot do
+   this.
 
 ---
 
-## 4. The pipeline — five phases
+## 4. Material architecture — and why there is no slider farm
 
-Each phase is one commit-sized, on-device-verifiable step. Phase N renders
-correctly on its own; Phase N+1 builds on it.
+The reference exposes ~50 sliders. We do **not**. The architecture is kept; the
+UI is replaced by structure + audio + a curated handful of controls.
 
-### Phase 1 — edge-distance vertex attribute
+**Channel-modulation pattern.** Every modulatable BRDF channel `X` is
 
-One attribute delivers analytic anti-aliasing, exact borders, and the **bevel
-height field**.
+```
+X_effective = X_base  +  X_mod · f(field)
+```
 
-- Add `float edge[3]` to `FillVertex` (a `vec3`). Single-pass-wireframe basis:
-  within a triangle, vertex *k* carries `1` in component *k*, `0` elsewhere;
-  interpolated component *k* falls linearly to `0` along the edge **opposite**
-  vertex *k*. `min(edge.x, edge.y, edge.z)` per fragment is distance-to-nearest-
-  edge.
-- **Mask internal fan cuts.** Tiles that are not triangles (rhombs, Chair, P1)
-  are fanned into triangles in `buildGeometry()`; the fan diagonals are not
-  real tile boundaries and must not bevel. Rule: if the edge opposite vertex
-  *k* is an internal diagonal, set component *k* to `1` at all three vertices →
-  that component is ≡1 and never the `min` near a real seam. Plain triangle
-  families (P3, P2, Tübingen, Danzer, Pinwheel) use the standard
-  `(1,0,0)/(0,1,0)/(0,0,1)` basis; fanned convex polygons mark the two
-  vertex-0 diagonals internal; the P1 centroid-fan marks the two spokes
-  internal.
-- **Files:** `render_state.h` (`FillVertex`); `renderer_vulkan.cpp`
-  (`fillAttrs` 4→5, format `R32G32B32_SFLOAT`, bump count); `renderer_geometry.cpp`
-  (`buildGeometry` sets `edge[3]` per triangle, beside the fan loops at
-  `renderer_geometry.cpp:105-154`); `fill.vert` (`loc4 in vec3 inEdge` →
-  interpolated `out vec3 vEdge`).
-- **Done when:** the tiling renders unchanged, plus the border can be drawn (a
-  `smoothstep` on `min(vEdge)`) and matches the existing border-quad output.
+`X_base` is a constant from the active material preset. `f(field)` is a scalar
+in roughly `[0,1]` drawn from one of the tiling's own fields. **The pairing of
+channel to field is fixed in the shader by design intent — it is not a knob.**
+That single decision is what removes ~30 sliders:
 
-### Phase 2 — height field + analytic normal
+| Channel | Field it keys to | Read |
+|---|---|---|
+| normal | bevel `edgeDist` + bulge `vDepth` + wave `vWaveGrad` | beveled chips, domed tiles, lit ripple |
+| roughness | bevel `edgeDist` (rougher in seam valleys) | free contact-grime / worn-edge read |
+| metalness | per-tile `type` | structural — alternating tile kinds read as different metals |
+| emissive | `max(vRipple, 0)` and/or per-tile `type` | ripple crests and chosen tiles glow |
+| sheen intensity | bevel `edgeDist` (sheen rises toward grazing rim) | velvet catch along every tile edge |
+| anisotropy direction | per-tile `orientation` from `classify()` | brushed-metal streaks aligned per tile |
+| iridescence thickness | per-tile `ring` distance, offset by ripple/audio | oil-slick that shifts with distance and sound |
 
-In `fill.frag`, build a per-fragment height `H` as the sum of three terms,
-each with a clean gradient:
+**Where the user-facing controls actually are.** Total new controls across all
+phases, deliberately small:
 
-- **Bevel:** `edge = min(vEdge.x, vEdge.y, vEdge.z)`;
-  `Hb = bevelDepth · smoothstep(0, bevelWidth, edge)` — `0` at the seam, full
-  inside. `vEdge` is piecewise-linear and continuous within a triangle, so
-  `dFdx(edge)/dFdy(edge)` are clean; the only crease is the `min` switch, which
-  is the bevel ridge itself.
-- **Bulge:** `Hu = depthAmount · vDepth` (reuse `effects.y` and the existing
-  `vDepth` varying). Linear across the triangle → constant gradient.
-- **Wave:** add varying `out vec2 vWaveGrad` to `fill.vert`, set it to
-  `waveGradient(inPos, …)` (already computed there) — the fragment shader gets
-  the wave slope with no recomputation.
-- **Normal:** `N = normalize(vec3(-dHdx, -dHdy, 1))`, where
-  `dHdx = dFdx(Hb) + dFdx(Hu) + vWaveGrad.x · waveHeightScale` (likewise y).
-  Tangent space is the wallpaper plane — for a flat 2-D tiling that is the
-  shading frame. This is a shading normal only; no depth buffer is involved.
-- **Files:** `fill.vert` (emit `vWaveGrad`); `fill.frag` (height + normal).
-- **Done when:** a debug view of `N` shows clean per-tile bevels, smooth
-  bulges, and wave slope, with no fizz along internal fan cuts.
+- **One "Material" preset picker**, sitting beside the existing palette picker.
+  Each preset is a bundle of the `X_base` constants — the reference's own answer
+  to slider overload was exactly this (its `Metallic` / `Pearl` / `Bubblegum`
+  presets). Target set: `Matte`, `Ceramic`, `Pearl`, `Brushed metal`,
+  `Lacquer`, `Oil-slick`.
+- **2–3 sliders only**: surface relief (bevel + wave normal strength), gloss
+  (a single value steering roughness + clearcoat together), key-light azimuth.
+- **The audio graph** drives the motion. The node graph already exists and
+  already maps audio bands → ripple / brightness / depth. Phase F adds a *small,
+  curated* set of new graph targets — light azimuth, iridescence thickness,
+  gloss — so the surface polishes, the light orbits, and the oil-slick pumps on
+  transients. Not "every uniform is a target": a handful chosen for musicality.
 
-### Phase 3 — principled BRDF + lights
+Everything else — which channel keys to which field, the modulation amounts —
+is fixed in the shader. The material is expressive because the *tiling* and the
+*audio* are expressive, not because the user tunes 50 numbers.
 
-The screenshot-changing phase: tiles become lit physical inlay.
+**Storage.** Phase B moves the `X_base` constants and the few sliders into
+`PaletteUbo` (new `vec4` rows, std140, all vec4-aligned — see Risks for the
+shared-include mitigation). Per-tile `type` / `orientation` / `ring` reach the
+shader as one new `vec4` vertex attribute, `inTileMat`, written by
+`buildGeometry()` from the `classify()` result it already computes.
 
-- **Uniforms** — append to `PaletteUbo` and the block in all four shaders:
-  `light0` (key direction.xyz + intensity.w), `light0col`, `light1` (fill point
-  pos.xyz + intensity), `light1col`, `lightAmb`, `material` (roughness,
-  metalness, clearcoat, clearcoatRoughness), `material2` (sheen, specular,
-  bevelDepth, bevelWidth). `updatePaletteUbo()` writes them.
-- **`fill.frag` shading:** base colour = `palette[idx]` (Type/Orient/Ring still
-  pick it) as albedo; then a principled BRDF against the Phase-2 normal —
-  Lambert/Burley diffuse, Cook-Torrance GGX specular (`D_GGX`, `V_SmithGGX`,
-  `F_Schlick`), a clearcoat GGX lobe, a Charlie/velvet sheen lobe. Sum over key
-  + fill + ambient. Reference implementations: Filament's shading-model doc and
-  the glTF-Sample-Viewer.
-- **Output:** apply an AgX tonemap in-shader before the existing OKLCH/P3
-  encode so specular highlights resolve instead of clipping. The 10-bit P3
-  swapchain carries this well.
-- **Files:** `render_state.h` (`PaletteUbo`); all four shaders (uniform block);
-  `renderer_geometry.cpp` (`updatePaletteUbo`); `fill.frag` (BRDF + tonemap).
-- **Done when:** the key light sweeps highlights across tiles as it moves;
-  seams read as valleys the light falls into (free contact darkening from the
-  bevel normal); every family reads as physical inlay.
+---
 
-### Phase 4 — HDR offscreen + bloom + AgX post pass
+## 5. The pipeline — phases
+
+Phase A is done (§0). Each remaining phase is one commit-sized, on-device-
+verifiable step; phase N renders correctly on its own.
+
+### Phase B — material channels from the tiling's own fields
+
+- **Complete the normal.** Fold the parallax bulge into the shading normal:
+  `vDepth` is linear across a triangle, so `dFdx(vDepth)/dFdy(vDepth)` is its
+  exact constant gradient. Add it to `slope` in `fill.frag` and **retire the
+  `depthMod` albedo fake** — the bulge becomes real shading relief, not a
+  brightness trick (avoids double-counting).
+- **`inTileMat` attribute.** Add `vec4 inTileMat` to `FillVertex` =
+  `(typeNorm, orientCos, orientSin, ringNorm)`, written per tile in
+  `buildGeometry()` from `classify()`. Grow `fillAttrs` 5→6.
+- **`PaletteUbo` material block.** Append `material0/1/2` `vec4` rows holding
+  the `X_base` constants + mod amounts; `updatePaletteUbo()` writes them from
+  the active preset.
+- **`fill.frag` channels.** Implement the §4 table: `roughness`, `metalness`,
+  `emissive`, `sheenIntensity` as `base + mod·f(field)`. Feed `roughness` into
+  the existing GGX lobe; add the `emissive` term to the output.
+- **Done when:** seam valleys read rougher; alternating tile types read as
+  different finishes; ripple crests glow; the bulge tilts light, not brightness.
+
+### Phase C — sheen, clearcoat, thin-film iridescence
+
+Hand-written lobes added to `fill.frag`, summed with the Phase-A GGX. Reference
+implementations are the glTF Sample Viewer GLSL — port, do not re-derive:
+
+- **Sheen** — `KHR_materials_sheen`: Estevez–Kulla "Charlie" sheen distribution
+  `D_Charlie` + `V_Ashikhmin`/`V_Charlie` visibility (~15 lines). Sheen colour
+  is an OKLCH value from the preset; intensity keys to `edgeDist` (§4).
+- **Clearcoat** — `KHR_materials_clearcoat`: a second GGX lobe at fixed F0 0.04,
+  its own roughness, layered over the base lobes; energy-conserve by attenuating
+  the base by `(1 − Fc)`.
+- **Iridescence** — `KHR_materials_iridescence` (Belcour & Barla 2017, "A
+  Practical Extension to Microfacet Theory for the Modeling of Varying
+  Iridescence"): the thin-film term `evalIridescence(outIOR, eta2, cosθ1,
+  thickness, baseF0)` with its `evalSensitivity` spectral fit (~80 lines). Film
+  thickness keys to the per-tile `ring` field offset by ripple/audio so the
+  slick shifts across the tiling and with the music.
+- **Done when:** the `Pearl` and `Oil-slick` presets read as iridescent; sheen
+  catches a velvet rim on grazing tiles; clearcoat adds a wet gloss layer.
+
+### Phase D — lights + tonemap
+
+- **Lights.** Replace Phase A's single hard-coded `const` light with a key
+  directional + fill point + ambient, each an OKLCH-tinted colour, positions
+  from azimuth/elevation. Store light vectors + colours in `PaletteUbo`;
+  `updatePaletteUbo()` writes them. Key azimuth is the one light slider; the
+  rest are preset constants.
+- **Tonemap.** Apply **AgX** in `fill.frag` before the existing OKLCH/P3 encode
+  so specular, clearcoat, and emissive highlights resolve instead of clipping.
+  AgX is preferred over the reference's ACES for its lower hue-shift on
+  saturated colours — it protects the authored OKLCH palette. ACES filmic is an
+  acceptable fallback. (Promoted to a real post pass in Phase E.)
+- **Done when:** the key light sweeps highlights as its azimuth changes; the
+  10-bit P3 swapchain shows smooth tonemapped rolloff with no banding.
+
+### Phase E — HDR offscreen + bloom
 
 Promote tonemapping from in-shader to a real post chain so highlights and
 emissive tile-cores glow.
 
 - Add an `R16G16B16A16_SFLOAT` offscreen colour attachment sized to the
-  swapchain; the fill and border pipelines render into it.
-- A **dual-Kawase bloom**: a luminance-thresholded downsample chain (~5 mips)
-  then an upsample-combine — ~5 small pipelines, cheap.
-- A fullscreen **composite/tonemap pass**: sample HDR + bloom, AgX tonemap,
-  then the `color.cpp` encode (sRGB or wide-gamut P3), write to the swapchain.
+  swapchain; the fill and border pipelines render into it as linear HDR.
+- A **dual-Kawase bloom**: luminance-thresholded downsample chain (~5 mips) then
+  upsample-combine — ~5 small pipelines, cheap on mobile.
+- A fullscreen **composite/tonemap pass**: sample HDR + bloom, AgX tonemap, then
+  the `color.cpp` encode, write to the swapchain.
 - Vulkan work: offscreen images + views + a sampler + the bloom and composite
   pipelines + descriptor sets. Dynamic rendering keeps each pass a plain
   begin/end-rendering.
-- **Files:** `renderer_vulkan.cpp` (attachments, samplers, bloom + composite
-  pipelines); `renderer.cpp` (`drawFrame` pass sequence); new
-  `shaders/bloom_down.frag`, `bloom_up.frag`, `composite.frag`.
+- **Files:** `renderer_vulkan.cpp` (attachments, samplers, pipelines);
+  `renderer.cpp` (`drawFrame` pass sequence); new `shaders/bloom_down.frag`,
+  `bloom_up.frag`, `composite.frag`.
 - **Done when:** bright tiles and wave crests bloom; the composite pass owns
   tonemap + encode; `fill.frag` writes linear HDR.
 
-### Phase 5 — anisotropy, iridescence, node-graph wiring, border merge
+### Phase F — border merge + curated audio-graph wiring
 
-Completes the material system and removes the border-quad pipeline.
-
-- **Anisotropy:** `buildGeometry()` writes the `classify()` per-tile
-  orientation as a vertex attribute (a tangent `vec2`); `fill.frag` runs an
-  anisotropic GGX along it — brushed-metal streaks aligned per tile.
-- **Iridescence:** a thin-film interference lobe (Belcour–Barla 2017), film
-  thickness (nm) and IOR as uniforms.
-- **Node-graph wiring:** every material / light / bevel uniform becomes a
-  modulation target in the existing node-graph editor — roughness, sheen,
-  clearcoat, film thickness, key-light azimuth, bevel height. The audio
-  pipeline then drives the surface: light orbits, film thickness pumps, the
-  surface polishes and roughens on transients.
-- **Border merge:** draw the border inside `fill.frag` as a `smoothstep` on the
-  Phase-1 edge distance; remove the `border.*` shaders, the `BorderVertex`
-  path, and the border pipeline.
-- **Files:** `render_state.h` (`FillVertex` orientation attr, `PaletteUbo`
-  material fields); `renderer_vulkan.cpp` (attribute, drop border pipeline);
-  `renderer_geometry.cpp` (write orientation, drop border build); `fill.frag`;
-  the node-graph param registry + Android settings UI.
-- **Done when:** a "material" picker sits beside the palette picker; the
-  surface is audio-reactive through the node graph; one pipeline draws fill +
-  border.
+- **Border merge.** Draw the border inside `fill.frag` as a `smoothstep` on the
+  Phase-A `edgeDist`; remove the `border.*` shaders, the `BorderVertex` path,
+  and the border pipeline. One pipeline draws fill + border.
+- **Curated graph wiring.** Add a *small* set of new modulation-graph targets —
+  key-light azimuth, iridescence thickness, gloss — to the existing node graph
+  (`graph/`). Audio then drives the surface: light orbits on the beat, the
+  oil-slick pumps, gloss tracks energy. Deliberately not "every uniform" — see
+  §4.
+- **Done when:** a Material picker sits beside the palette picker; the surface
+  is audio-reactive through the graph; one pipeline draws fill + border.
 
 ---
 
-## 5. Files touched — master list
+## 6. Files touched — master list
 
 | File | Phase(s) | Change |
 |------|----------|--------|
-| `render_state.h` | 1, 3, 5 | `FillVertex` (+edge, +orientation); `PaletteUbo` (+light/material) |
-| `renderer_vulkan.cpp` | 1, 4, 5 | vertex attrs; offscreen + bloom + composite pipelines; drop border pipeline |
-| `renderer_geometry.cpp` | 1, 3, 5 | per-triangle edge basis; orientation attr; UBO writes; drop border build |
-| `renderer.cpp` | 4 | `drawFrame` multi-pass sequence |
-| `shaders/fill.vert` | 1, 2 | pass `inEdge`; emit `vEdge`, `vWaveGrad` |
-| `shaders/fill.frag` | 2, 3, 5 | height field, normal, BRDF, anisotropy, iridescence, border |
-| `shaders/border.*` | 5 | removed |
-| `shaders/uniforms.glsl` (new) | 1 | shared uniform block (see Risks) |
-| `shaders/bloom_down/up.frag`, `composite.frag` (new) | 4 | post chain |
-| node-graph params + Android UI | 5 | material / light modulation targets |
+| `render_state.h` | A✓, B | `FillVertex` (+`inBary`✓, +`inTileMat`); `PaletteUbo` (+material/light rows) |
+| `renderer_vulkan.cpp` | A✓, B, E, F | vertex attrs; offscreen + bloom + composite pipelines; drop border pipeline |
+| `renderer_geometry.cpp` | A✓, B, F | edge basis✓; `inTileMat` from `classify()`; UBO material/light writes; drop border build |
+| `renderer.cpp` | E, F | `drawFrame` multi-pass sequence; graph targets |
+| `shaders/fill.vert` | A✓, B | pass `inBary`✓, `vWaveGrad`✓; pass `inTileMat` |
+| `shaders/fill.frag` | A✓, B, C, D, F | bevel+wave normal✓, base BRDF✓; channels, lobes, lights, tonemap, border |
+| `shaders/uniforms.glsl` (new) | B | shared uniform block, `#include`d (see Risks) |
+| `shaders/border.*` | F | removed |
+| `shaders/bloom_down/up.frag`, `composite.frag` (new) | E | post chain |
+| node-graph params + Android UI | B, F | Material preset picker; curated modulation targets |
 
 ---
 
-## 6. Risks / gotchas
+## 7. Risks / gotchas
 
 - **The uniform block is duplicated across four shaders.** Any `PaletteUbo`
   change must land identically in `fill.vert`, `fill.frag`, `border.vert`,
   `border.frag` or std140 offsets drift and every uniform reads garbage.
-  Phase 1 factors the block into a shared `shaders/uniforms.glsl` and
-  `#include`s it (`glslc` supports `#include` with `-I`); confirm the build
-  script passes the include directory.
+  Phase B factors the block into a shared `shaders/uniforms.glsl` and
+  `#include`s it — `glslc` resolves `#include` relative to the source file by
+  default, so no build-script change is needed beyond adding `*.glsl` to the
+  shader task's input-tracking glob (so an edit retriggers compilation) while
+  keeping it out of the compile list.
 - `dFdx` / `dFdy` are valid only in the fragment stage under uniform control
-  flow — satisfied here.
+  flow — satisfied here. The bevel `min()` crease is the one non-smooth point;
+  it is the intended bevel ridge, not an artefact.
 - There is no depth buffer and none is added — the normal is a *shading*
   normal; this is not a Z-test.
-- Mobile cost: GGX + clearcoat + sheen + three lights is comfortably real-time
-  on any Vulkan-capable mobile GPU (the reference runs a per-fragment loop and
-  holds frame rate). A quality tier gates the heavier lobes: Low = flat +
-  bevel, High = full PBR + bloom + iridescence.
-- `tools/verify_tilings.cpp` is unaffected — tiling topology never changes;
-  the new attributes are pure shading data.
+- Mobile cost: GGX + clearcoat + sheen + iridescence + three lights is
+  comfortably real-time on any Vulkan-capable mobile GPU (the reference runs a
+  per-fragment zero-loop *and* the full physical material and holds frame rate).
+  If a low-end tier is ever needed, gate the heavier lobes behind a preset flag.
+- `tools/verify_tilings.cpp` is unaffected — tiling topology never changes; the
+  new attributes are pure shading data.
+- Material params currently live as `fill.frag` `const`s. They must move to the
+  UBO in Phase B *before* audio/sliders can reach them; until then, editing the
+  look means editing the shader.
 
 ---
 
-## 7. Verification
+## 8. Verification
 
-- `glslc` compiles all shaders — the NDK build does this; runnable locally.
+- `glslc` compiles all shaders — the NDK build does this. Locally,
+  `glslangValidator -V --target-env vulkan1.3 <shader>` validates a shader to
+  SPIR-V without the full Android build (used to check Phase A).
 - CI: `assembleRelease`, `lintRelease`, the `tiling-verify` job, and the UBSan
   build stay green.
 - On-device per phase, as listed in each phase's "done when".
 
 ---
 
-## 8. Tiling track — committed next item
+## 9. Tiling track — committed next item
 
 `docs/tilings/ROADMAP.md` and `docs/tilings/catalogue.md` mark the **Hat /
 Spectre einstein** as the next family. It is a 2023 result
@@ -312,9 +381,8 @@ Spectre einstein** as the next family. It is a 2023 result
 aperiodically with reflections; the Spectre is the strictly chiral monotile,
 needing no reflected copies. Both carry a published **metatile substitution**
 (H, T, P, F clusters) that is volume-hierarchic — it enters the engine the way
-the Danzer family did: one `FamilyInfo` row plus one geometry function that
-runs the metatile substitution and maps metatiles to Hat/Spectre outlines,
-checked by `tools/verify_tilings.cpp`. The Spectre's curved-edge variant
-(`Tile(1,1)`) reads as interlocking organic forms, visually unlike anything
-else in the app. This track is independent of the five render phases above and
-can run alongside them.
+the Danzer family did: one `FamilyInfo` row plus one geometry function that runs
+the metatile substitution and maps metatiles to Hat/Spectre outlines, checked by
+`tools/verify_tilings.cpp`. The Spectre's curved-edge variant reads as
+interlocking organic forms, visually unlike anything else in the app. This
+track is independent of the render phases above and can run alongside them.

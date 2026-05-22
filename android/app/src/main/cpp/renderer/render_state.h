@@ -67,8 +67,40 @@ struct PushBlock {
 };
 static_assert(sizeof(PushBlock) == 32, "PushBlock layout drift");
 
+// Physical-material parameters. Every appearance knob the fill shader once
+// hard-coded lives here as a base value, so the look is fully settable
+// without audio; the modulation graph layers its sources (audio bands, the
+// beat, a clock, home-screen pan) on top of these bases. The defaults below
+// are the calibrated look — a flat non-metal plateau still reads as its
+// palette colour. updatePaletteUbo() packs this into the UBO rows below.
+struct MaterialParams {
+    // Normal-shaping height fields.
+    float bevelWidth = 0.30f, bevelStrength = 1.05f;
+    float waveHeight = 0.12f, bulgeTilt = 0.70f;
+    // Surface channels keyed to the tiling's own fields.
+    float roughBase = 0.50f, roughMod = 0.35f;
+    float metalBase = 0.0f,  metalMod = 0.40f;
+    // BRDF lobes.
+    float emissive = 0.60f, sheen = 0.35f, sheenRough = 0.30f;
+    float clearcoat = 0.45f, coatRough = 0.10f, anisotropy = 0.40f;
+    float iridescence = 0.45f, iridIOR = 1.30f;
+    float iridThickMin = 280.0f, iridThickMax = 560.0f;
+    float sheenColor[3] = { 1.00f, 0.97f, 0.92f };
+    // Key + fill + ambient lighting rig.
+    float keyDir[3] = { -0.35f, -0.45f, 0.80f };
+    float keyIntensity = 0.76f;
+    float keyColor[3] = { 1.00f, 0.99f, 0.97f };
+    float fillDir[3] = { 0.45f, 0.30f, 0.65f };
+    float fillIntensity = 0.27f;
+    float fillColor[3] = { 0.82f, 0.88f, 1.00f };
+    float ambientColor[3] = { 0.90f, 0.93f, 1.00f };
+    float ambient = 0.22f;
+};
+
 // Palette UBO laid out as std140 — every member is vec4-aligned.
-// Shader uniform block in fill.vert / fill.frag / border.* must match.
+// fill.vert and border.* declare the block through `audioBeat`; fill.frag
+// declares it in full. A shader may omit trailing members it does not read,
+// so only fill.frag carries the material rows.
 struct PaletteUbo {
     float    palette[kMaxColors][4];
     float    borderColor[4];
@@ -79,6 +111,18 @@ struct PaletteUbo {
     float    effects[4];      // x=brightness, y=depth, z=rippleSpeed, w=rippleKind
     float    audioBands[2][4];
     float    audioBeat[4];
+    // Physical material — packed from MaterialParams; vec3-valued rows zero-pad.
+    float    matNormal[4];    // bevelWidth, bevelStrength, waveHeight, bulgeTilt
+    float    matSurface[4];   // roughBase, roughMod, metalBase, metalMod
+    float    matLobeA[4];     // emissive, sheen, sheenRough, clearcoat
+    float    matLobeB[4];     // coatRough, anisotropy, iridescence, iridIOR
+    float    matIrid[4];      // iridThickMin, iridThickMax, --, --
+    float    matSheenCol[4];  // sheenColor.rgb, --
+    float    keyLight[4];     // keyDir.xyz, keyIntensity
+    float    keyColor[4];     // keyColor.rgb, --
+    float    fillLight[4];    // fillDir.xyz, fillIntensity
+    float    fillColor[4];    // fillColor.rgb, --
+    float    ambient[4];      // ambientColor.rgb, ambientAmount
 };
 
 } // namespace penrose

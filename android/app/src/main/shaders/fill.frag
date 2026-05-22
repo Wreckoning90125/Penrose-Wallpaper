@@ -10,6 +10,18 @@ layout(set = 0, binding = 0, std140) uniform Palette {
     vec4 effects;
     vec4 audioBands[2];
     vec4 audioBeat;
+    // Physical-material parameters — see MaterialParams in render_state.h.
+    vec4 matNormal;    // bevelWidth, bevelStrength, waveHeight, bulgeTilt
+    vec4 matSurface;   // roughBase, roughMod, metalBase, metalMod
+    vec4 matLobeA;     // emissive, sheen, sheenRough, clearcoat
+    vec4 matLobeB;     // coatRough, anisotropy, iridescence, iridIOR
+    vec4 matIrid;      // iridThickMin, iridThickMax, --, --
+    vec4 matSheenCol;  // sheenColor.rgb, --
+    vec4 keyLight;     // keyDir.xyz, keyIntensity
+    vec4 keyColor;     // keyColor.rgb, --
+    vec4 fillLight;    // fillDir.xyz, fillIntensity
+    vec4 fillColor;    // fillColor.rgb, --
+    vec4 ambient;      // ambientColor.rgb, ambientAmount
 } ubo;
 
 layout(location = 0) flat in uint vColorIdx;
@@ -26,42 +38,18 @@ const float PI = 3.14159265359;
 // ringed by a chamfer. The shading normal is reconstructed per fragment from
 // three analytic height fields — bevel, parallax bulge, quasicrystal ripple —
 // and drives a principled BRDF: anisotropic GGX with a thin-film-iridescent
-// Fresnel, Lambert diffuse, a Charlie sheen lobe, and a clearcoat lobe, lit by
-// a key + fill + ambient rig. Roughness and metalness are keyed to the
-// tiling's own fields. Constants are tuned so a flat non-metal plateau
-// reproduces its palette colour at brightness 1.
-const float kBevelWidth    = 0.30;   // edge-distance span of the chamfer
-const float kBevelStrength = 1.05;   // tan of the chamfer's peak slope
-const float kWaveHeight    = 0.12;   // ripple slope → shading-normal tilt
-const float kBulgeTilt     = 0.70;   // parallax-bulge normal tilt at depth 1
-const float kRoughBase     = 0.50;   // plateau roughness
-const float kRoughMod      = 0.35;   // extra roughness in the seam valleys
-const float kMetalBase     = 0.0;
-const float kMetalMod      = 0.40;   // metalness gained across tile types
-const float kEmissive      = 0.60;   // ripple-crest glow gain
-const float kSheen         = 0.35;   // Charlie velvet lobe strength
-const float kSheenRough    = 0.30;
-const vec3  kSheenColor    = vec3(1.0, 0.97, 0.92);
-const float kClearcoat     = 0.45;   // clearcoat layer strength
-const float kCoatRough     = 0.10;
-const float kAnisotropy    = 0.40;   // base-lobe anisotropy; 0 is isotropic
-const float kIridescence   = 0.45;   // thin-film Fresnel mix
-const float kIridIOR       = 1.30;
-const float kIridThickMin  = 280.0;  // film thickness sweep, nanometres
-const float kIridThickMax  = 560.0;
+// Fresnel, Lambert diffuse, a Charlie sheen lobe, and a clearcoat lobe, lit
+// by a key + fill + ambient rig. Every parameter is a UBO value (the bases
+// in MaterialParams); roughness and metalness are also keyed to the tiling's
+// own fields.
 
-// Key + fill + ambient rig. The Vulkan framebuffer's y axis points down, so a
-// negative y in a direction places the light above the wallpaper and a
-// positive z tilts it toward the viewer. The fill is dimmer, cooler, and from
-// the opposite side — bounce light. Intensities calibrate the flat plateau.
-const vec3  kKeyDir        = vec3(-0.35, -0.45, 0.80);
-const vec3  kKeyColor      = vec3(1.00, 0.99, 0.97);
-const float kKeyIntensity  = 0.76;
-const vec3  kFillDir       = vec3( 0.45,  0.30, 0.65);
-const vec3  kFillColor     = vec3(0.82, 0.88, 1.00);
-const float kFillIntensity = 0.27;
-const vec3  kAmbientColor  = vec3(0.90, 0.93, 1.00);
-const float kAmbient       = 0.22;
+// The lobe parameters shadeLight() needs, unpacked once from the UBO.
+struct Material {
+    vec3  sheenColor;
+    float sheen, sheenRough;
+    float clearcoat, coatRough;
+    float anisotropy, iridescence;
+};
 
 float ggxDistribution(float NdotH, float a2) {
     float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
@@ -190,7 +178,8 @@ float vGGXaniso(float NdotL, float NdotV, float TdotV, float BdotV,
 // lobe, and the clearcoat lobe with its energy-conserving base attenuation.
 // Returns the white-light response; the caller scales by colour × intensity.
 vec3 shadeLight(vec3 N, vec3 L, vec3 V, vec3 T, vec3 B,
-                vec3 albedo, vec3 F0, vec3 iridF, float a, float metalness) {
+                vec3 albedo, vec3 F0, vec3 iridF, float a, float metalness,
+                Material mat) {
     float NdotL = max(dot(N, L), 0.0);
     if (NdotL <= 0.0) return vec3(0.0);
     vec3  H = normalize(L + V);
@@ -199,11 +188,11 @@ vec3 shadeLight(vec3 N, vec3 L, vec3 V, vec3 T, vec3 B,
     float VdotH = clamp(dot(V, H), 0.0, 1.0);
 
     // Iridescent Fresnel blended over the plain Schlick one.
-    vec3 F = mix(fSchlick(F0, VdotH), iridF, kIridescence);
+    vec3 F = mix(fSchlick(F0, VdotH), iridF, mat.iridescence);
 
     // Anisotropic base specular along the tile's tangent frame.
-    float at = max(a * (1.0 + kAnisotropy), 1e-4);
-    float ab = max(a * (1.0 - kAnisotropy), 1e-4);
+    float at = max(a * (1.0 + mat.anisotropy), 1e-4);
+    float ab = max(a * (1.0 - mat.anisotropy), 1e-4);
     float D   = dGGXaniso(NdotH, dot(T, H), dot(B, H), at, ab);
     float Vis = vGGXaniso(NdotL, NdotV, dot(T, V), dot(B, V),
                           dot(T, L), dot(B, L), at, ab);
@@ -212,18 +201,18 @@ vec3 shadeLight(vec3 N, vec3 L, vec3 V, vec3 T, vec3 B,
     vec3 diffuse = albedo * (1.0 - metalness) * NdotL;
 
     // Charlie velvet sheen.
-    float sheenD = charlieDistribution(kSheenRough, NdotH);
+    float sheenD = charlieDistribution(mat.sheenRough, NdotH);
     float sheenV = ashikhminVisibility(NdotL, NdotV);
-    vec3  sheen  = kSheenColor * (kSheen * sheenD * sheenV * NdotL);
+    vec3  sheen  = mat.sheenColor * (mat.sheen * sheenD * sheenV * NdotL);
 
     // Clearcoat lobe; its Fresnel attenuates the base layers below it.
-    float coatA    = kCoatRough * kCoatRough;
+    float coatA    = mat.coatRough * mat.coatRough;
     float coatD    = ggxDistribution(NdotH, coatA * coatA);
     float coatG    = smithVisibility(NdotV, NdotL, coatA * 0.5);
     float coatF    = 0.04 + 0.96 * pow(1.0 - VdotH, 5.0);
-    float coatLobe = kClearcoat * coatD * coatG * coatF
+    float coatLobe = mat.clearcoat * coatD * coatG * coatF
                    / max(4.0 * NdotV * NdotL, 1e-4) * NdotL;
-    float baseAtten = 1.0 - kClearcoat * coatF;
+    float baseAtten = 1.0 - mat.clearcoat * coatF;
 
     return (diffuse + spec + sheen) * baseAtten + vec3(coatLobe);
 }
@@ -232,6 +221,26 @@ void main() {
     uint idx = vColorIdx;
     if (idx >= 16u) idx = 15u;
     vec4 c = ubo.palette[idx];
+
+    // Unpack the material + lighting parameters from the UBO.
+    float bevelWidth    = ubo.matNormal.x;
+    float bevelStrength = ubo.matNormal.y;
+    float waveHeight    = ubo.matNormal.z;
+    float bulgeTilt     = ubo.matNormal.w;
+    float roughBase     = ubo.matSurface.x;
+    float roughMod      = ubo.matSurface.y;
+    float metalBase     = ubo.matSurface.z;
+    float metalMod      = ubo.matSurface.w;
+    float emissiveGain  = ubo.matLobeA.x;
+    float iridIOR       = ubo.matLobeB.w;
+    Material mat;
+    mat.sheenColor  = ubo.matSheenCol.rgb;
+    mat.sheen       = ubo.matLobeA.y;
+    mat.sheenRough  = ubo.matLobeA.z;
+    mat.clearcoat   = ubo.matLobeA.w;
+    mat.coatRough   = ubo.matLobeB.x;
+    mat.anisotropy  = ubo.matLobeB.y;
+    mat.iridescence = ubo.matLobeB.z;
 
     // Albedo: palette RGB with master brightness only. The bulge and ripple
     // are carried by the shading normal (the ripple also by the emissive).
@@ -245,22 +254,22 @@ void main() {
     // sums the ripple, the parallax bulge, and the bevel: the ripple and
     // bulge apply everywhere; the bevel tilts the chamfer away from the
     // inward edge-distance gradient, fading from edge to plateau.
-    vec2 slope = -vWaveGrad * kWaveHeight
-               - vBulgeGrad * (ubo.effects.y * kBulgeTilt);
+    vec2 slope = -vWaveGrad * waveHeight
+               - vBulgeGrad * (ubo.effects.y * bulgeTilt);
     vec2  g    = vec2(dFdx(edgeDist), dFdy(edgeDist));
     float gLen = length(g);
     if (gLen > 1e-7) {
         vec2  inward = g / gLen;
-        float e      = clamp(edgeDist / kBevelWidth, 0.0, 1.0);
-        slope += -inward * (kBevelStrength * cos(e * (PI * 0.5)));
+        float e      = clamp(edgeDist / bevelWidth, 0.0, 1.0);
+        slope += -inward * (bevelStrength * cos(e * (PI * 0.5)));
     }
     vec3 N = normalize(vec3(slope, 1.0));
 
     // Physical channels keyed to the tiling's own fields: roughness rises in
     // the seam valleys (a worn-edge read), metalness comes from the tile type.
-    float seam      = 1.0 - smoothstep(0.0, kBevelWidth, edgeDist);
-    float roughness = clamp(kRoughBase + kRoughMod * seam, 0.045, 1.0);
-    float metalness = clamp(kMetalBase + kMetalMod * vTileMat.x, 0.0, 1.0);
+    float seam      = 1.0 - smoothstep(0.0, bevelWidth, edgeDist);
+    float roughness = clamp(roughBase + roughMod * seam, 0.045, 1.0);
+    float metalness = clamp(metalBase + metalMod * vTileMat.x, 0.0, 1.0);
     float a  = roughness * roughness;
     vec3  F0 = mix(vec3(0.04), albedo, metalness);
 
@@ -269,9 +278,9 @@ void main() {
     // Thickness sweeps with the tile's radius and the ripple — a drifting
     // oil-slick.
     vec3  V = vec3(0.0, 0.0, 1.0);
-    float filmThick = mix(kIridThickMin, kIridThickMax,
+    float filmThick = mix(ubo.matIrid.x, ubo.matIrid.y,
                           0.5 + 0.5 * sin(vTileMat.w * 6.0 + vRipple * 3.0));
-    vec3  iridF = evalIridescence(1.0, kIridIOR, max(N.z, 1e-4), filmThick, F0);
+    vec3  iridF = evalIridescence(1.0, iridIOR, max(N.z, 1e-4), filmThick, F0);
 
     // Anisotropy tangent frame: the tile orientation re-orthogonalised against
     // the shading normal. N always has a positive z, so it is never parallel
@@ -280,16 +289,16 @@ void main() {
     vec3 T = normalize(oriented - N * dot(N, oriented));
     vec3 B = cross(N, T);
 
-    vec3 key  = shadeLight(N, normalize(kKeyDir),  V, T, B,
-                           albedo, F0, iridF, a, metalness)
-              * kKeyColor * kKeyIntensity;
-    vec3 fill = shadeLight(N, normalize(kFillDir), V, T, B,
-                           albedo, F0, iridF, a, metalness)
-              * kFillColor * kFillIntensity;
+    vec3 key  = shadeLight(N, normalize(ubo.keyLight.xyz),  V, T, B,
+                           albedo, F0, iridF, a, metalness, mat)
+              * ubo.keyColor.rgb * ubo.keyLight.w;
+    vec3 fill = shadeLight(N, normalize(ubo.fillLight.xyz), V, T, B,
+                           albedo, F0, iridF, a, metalness, mat)
+              * ubo.fillColor.rgb * ubo.fillLight.w;
 
     // Ambient fills the unlit side; ripple crests add an emissive glow.
-    vec3 ambient  = albedo * kAmbientColor * kAmbient;
-    vec3 emissive = albedo * kEmissive * max(vRipple, 0.0);
+    vec3 ambient  = albedo * ubo.ambient.rgb * ubo.ambient.w;
+    vec3 emissive = albedo * emissiveGain * max(vRipple, 0.0);
 
     outColor = vec4(clamp(ambient + key + fill + emissive, 0.0, 1.0), c.a);
 }

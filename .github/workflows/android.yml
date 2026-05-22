@@ -225,3 +225,73 @@ jobs:
             fi
           done
           exit $status
+
+  # On pull requests: fail the PR if it introduces a dependency with a known
+  # vulnerability or a disallowed licence. Reads the GitHub dependency graph
+  # kept current by the dependency-submission job below.
+  dependency-review:
+    name: dependency review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
+        with:
+          comment-summary-in-pr: on-failure
+
+  # On main only: submit the resolved Gradle dependency graph to GitHub so
+  # Dependabot alerts and the dependency-review job above see an accurate
+  # picture. Gradle's graph is dynamic, so it must be submitted — GitHub does
+  # not parse it from the build files. Needs the full Android SDK + NDK
+  # because AGP configuration (which dependency resolution triggers) locates
+  # the NDK through build.gradle.kts's resolveNdkPath(). main-only, so it
+  # never gates a PR.
+  dependency-submission:
+    name: submit dependency graph
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 20
+    permissions:
+      contents: write
+
+    defaults:
+      run:
+        working-directory: android
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9  # v4.8.0
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407  # v3.2.2
+        with:
+          packages: ""
+
+      - name: Install required SDK packages
+        run: |
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "platform-tools" \
+            "cmake;3.22.1" \
+            "ndk;29.0.14206865"
+
+      - name: Submit dependency graph
+        uses: gradle/actions/dependency-submission@748248ddd2a24f49513d8f472f81c3a07d4d50e1  # v4.4.4
+        with:
+          gradle-version: "9.4.1"
+          build-root-directory: android

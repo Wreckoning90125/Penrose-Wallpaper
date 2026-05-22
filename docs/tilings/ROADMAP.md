@@ -18,6 +18,7 @@ Hat / Spectre einstein family — see *Obvious next step* below.
 | Socolar–Taylor monotile | new `Family` | medium | `catalogue.md`. Hierarchical; the tile is *not connected*, so the `Tile` model would need a disconnected-tile representation. |
 | Harriss 7-fold rhomb substitution | new `Family` | high | `heptagonal.md`. Blocked on the rhomb-packing closure solver below. |
 | Hyperbolic projection mode (Poincaré disk) | new projection, not a `Family` | high | `hyperbolic-and-tooling.md`. A distinct geometry path; generators stay Euclidean. |
+| Endless home-screen pan | rework of the `Generative` pan mode | medium–high | Today's `Generative` mode grows the patch — each drag triggers a deflation pass, the view stays centred. True endless pan instead *translates* the view across an unbounded tiling: generate tiles covering the visible window plus a margin as it moves, drop tiles that leave. Decouples view position from generation depth; the home-screen page offset feeds the same translation. |
 
 ## Docs
 

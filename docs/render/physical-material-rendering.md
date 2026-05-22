@@ -26,7 +26,7 @@ architecture and drop the slider farm — see §4.
 | C — sheen / clearcoat / iridescence / anisotropy lobes | **done** | `d2e43ea`, `7933d4d` |
 | D — key + fill + ambient lights | **done** | `ea43bf6` |
 | E — HDR offscreen + bloom + AgX tonemap | todo | — |
-| F — border merge + Material preset picker + audio-graph wiring | todo | — |
+| F — parameterized look: settings, presets, modulation, border merge | in progress | material→UBO migration done (`43be608`) |
 
 Phase A landed: `FillVertex` carries a per-triangle edge-distance basis
 (`inBary`); `fill.frag` lifts a bevel chamfer height field from it, derives the
@@ -196,32 +196,29 @@ That single decision is what removes ~30 sliders:
 | anisotropy direction | per-tile `orientation` from `classify()` | brushed-metal streaks aligned per tile |
 | iridescence thickness | per-tile `ring` distance, offset by ripple/audio | oil-slick that shifts with distance and sound |
 
-**Where the user-facing controls actually are.** Total new controls across all
-phases, deliberately small:
+**The control surface.** Two layers, both real, neither audio-dependent:
 
-- **One "Material" preset picker**, sitting beside the existing palette picker.
-  Each preset is a bundle of the `X_base` constants — the reference's own answer
-  to slider overload was exactly this (its `Metallic` / `Pearl` / `Bubblegum`
-  presets). Target set: `Matte`, `Ceramic`, `Pearl`, `Brushed metal`,
-  `Lacquer`, `Oil-slick`.
-- **2–3 sliders only**: surface relief (bevel + wave normal strength), gloss
-  (a single value steering roughness + clearcoat together), key-light azimuth.
-- **The audio graph** drives the motion. The node graph already exists and
-  already maps audio bands → ripple / brightness / depth. Phase F adds a *small,
-  curated* set of new graph targets — light azimuth, iridescence thickness,
-  gloss — so the surface polishes, the light orbits, and the oil-slick pumps on
-  transients. Not "every uniform is a target": a handful chosen for musicality.
+- **Material presets** — a picker beside the palette picker, each a named
+  bundle of `MaterialParams` values (`Matte`, `Ceramic`, `Pearl`,
+  `Brushed metal`, `Lacquer`, `Oil-slick`). A one-tap starting point.
+- **Per-parameter settings** — every `MaterialParams` field is user-settable,
+  grouped in the settings drawer (Surface / Lobes / Lighting). A preset seeds
+  the group; the user tunes from there. The whole look is reachable with no
+  audio running — essential for a static live wallpaper or lock screen.
 
-Everything else — which channel keys to which field, the modulation amounts —
-is fixed in the shader. The material is expressive because the *tiling* and the
-*audio* are expressive, not because the user tunes 50 numbers.
+**Modulation.** Every parameter is also a target of the existing node graph,
+which evaluates against audio bands, the beat, and a clock; Phase F adds the
+home-screen pan offset as a fourth source. A target's graphed value *adds
+onto* its settings base, so modulation rides on top of whatever the user set:
+the wallpaper can sit still, breathe to a clock, sway with home-screen
+panning, or pulse to sound. The channel→field pairings in the table above
+stay fixed in the shader; what the user sets and the graph drives is the
+parameters.
 
-**Storage.** Per-tile `type` / `orientation` / `ring` reach the shader as one
-`vec4` vertex attribute, `inTileMat`, written by `buildGeometry()` (Phase B).
-The material and light `X_base` constants stay `fill.frag` `const`s through
-Phases B–D. Phase F's preset picker migrates them to `PaletteUbo` `vec4` rows
-(std140, all vec4-aligned — see Risks for the shared-include mitigation) and
-drives them; nothing is plumbed through the UBO while it is static.
+**Storage.** Per-tile identity reaches the shader as the `inTileMat` vertex
+attribute (Phase B). The material and light parameters are `PaletteUbo` rows
+packed from a `MaterialParams` struct (done, `43be608`). Phase F connects that
+struct to the persisted settings and the node graph.
 
 ---
 
@@ -314,18 +311,29 @@ encode, so AgX is applied once, in linear, regardless of the swapchain path.
 - **Done when:** bright tiles and wave crests bloom; the composite pass owns
   tonemap + encode; `fill.frag` writes linear HDR.
 
-### Phase F — border merge + curated audio-graph wiring
+### Phase F — parameterized look: settings, presets, modulation, border merge
 
-- **Border merge.** Draw the border inside `fill.frag` as a `smoothstep` on the
-  Phase-A `edgeDist`; remove the `border.*` shaders, the `BorderVertex` path,
-  and the border pipeline. One pipeline draws fill + border.
-- **Curated graph wiring.** Add a *small* set of new modulation-graph targets —
-  key-light azimuth, iridescence thickness, gloss — to the existing node graph
-  (`graph/`). Audio then drives the surface: light orbits on the beat, the
-  oil-slick pumps, gloss tracks energy. Deliberately not "every uniform" — see
-  §4.
-- **Done when:** a Material picker sits beside the palette picker; the surface
-  is audio-reactive through the graph; one pipeline draws fill + border.
+The material is fully in the UBO (done — `MaterialParams` → `PaletteUbo`,
+commit `43be608`). Phase F connects it to the user and the graph.
+
+- **Settings + presets.** `MaterialParams` becomes a persisted settings
+  record. A Material preset picker beside the palette picker seeds it
+  (`Matte`, `Ceramic`, `Pearl`, `Brushed metal`, `Lacquer`, `Oil-slick`); the
+  settings drawer exposes the fields, grouped (Surface / Lobes / Lighting).
+  `updatePaletteUbo` packs the live settings in place of the defaults.
+- **Modulation sources.** The node graph already evaluates against audio
+  bands, the beat, and a clock. Add the home-screen pan offset as a fourth
+  source, and expose every material parameter as a graph target whose value
+  *adds onto* its settings base. The per-frame UBO patch writes the modulated
+  result. The wallpaper then sits exactly as set, or breathes to a clock,
+  sways with home-screen panning, or pulses to sound — the user's choice, and
+  every look is reachable with no audio at all.
+- **Border merge.** Draw the border inside `fill.frag` as a `smoothstep` on
+  the Phase-A `edgeDist`; remove the `border.*` shaders, the `BorderVertex`
+  path, and the border pipeline. One pipeline draws fill + border.
+- **Done when:** every look is reachable from the settings UI with no audio;
+  presets seed it; the graph layers audio / clock / pan on top; one pipeline
+  draws fill + border.
 
 ---
 

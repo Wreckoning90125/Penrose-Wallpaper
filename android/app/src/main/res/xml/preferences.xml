@@ -39,6 +39,10 @@
             android:title="Motion"
             android:summary="Ripple amplitude, speed, kind, mode" />
         <Preference
+            android:key="nav_material"
+            android:title="Material"
+            android:summary="Roughness, metalness, iridescence, sheen, lobes" />
+        <Preference
             android:key="nav_background"
             android:title="Background"
             android:summary="Mode + OKLCH color" />

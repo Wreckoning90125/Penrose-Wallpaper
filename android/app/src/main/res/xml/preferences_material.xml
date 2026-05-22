@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <Preference
+        android:key="nav_back"
+        android:title="← Back"
+        android:summary="" />
+
+    <PreferenceCategory android:title="Material">
+        <SeekBarPreference
+            android:key="mat_roughness"
+            android:title="Roughness"
+            android:summary="Matte at high values, glossy at low"
+            android:min="0" android:max="100" android:defaultValue="50"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_metalness"
+            android:title="Metalness"
+            android:summary="How metallic the alternate tile type reads"
+            android:min="0" android:max="100" android:defaultValue="40"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_iridescence"
+            android:title="Iridescence"
+            android:summary="Thin-film oil-slick sheen"
+            android:min="0" android:max="100" android:defaultValue="45"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_sheen"
+            android:title="Sheen"
+            android:summary="Velvet grazing-angle lobe"
+            android:min="0" android:max="200" android:defaultValue="35"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_clearcoat"
+            android:title="Clearcoat"
+            android:summary="Glossy lacquer layer over the base"
+            android:min="0" android:max="100" android:defaultValue="45"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_anisotropy"
+            android:title="Anisotropy"
+            android:summary="Brushed-metal streak along each tile"
+            android:min="0" android:max="100" android:defaultValue="40"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_emissive"
+            android:title="Emissive glow"
+            android:summary="Glow on the ripple crests"
+            android:min="0" android:max="200" android:defaultValue="60"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_relief"
+            android:title="Surface relief"
+            android:summary="Depth of the beveled chamfer"
+            android:min="0" android:max="200" android:defaultValue="105"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+</PreferenceScreen>

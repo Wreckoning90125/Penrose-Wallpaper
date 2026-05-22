@@ -36,6 +36,14 @@ internal class Settings(
     val panY: Float,
     val brightness: Float,
     val depthAmount: Float,
+    val matRoughness: Float,
+    val matMetalness: Float,
+    val matSheen: Float,
+    val matClearcoat: Float,
+    val matAnisotropy: Float,
+    val matIridescence: Float,
+    val matEmissive: Float,
+    val matRelief: Float,
     val customOklch: FloatArray,
 ) {
     fun toNative(): Pair<IntArray, FloatArray> {
@@ -48,6 +56,8 @@ internal class Settings(
             bgL, bgC, bgH, rippleAmount,
             zoom, rotation, panX, panY,
             brightness, depthAmount, rippleSpeed,
+            matRoughness, matMetalness, matSheen, matClearcoat,
+            matAnisotropy, matIridescence, matEmissive, matRelief,
         )
         val floats = FloatArray(baseFloats.size + customOklch.size)
         baseFloats.copyInto(floats)
@@ -86,6 +96,18 @@ internal class Settings(
         const val KEY_PAN_Y         = "view_pan_y"
         const val KEY_BRIGHTNESS    = "brightness"
         const val KEY_DEPTH_AMOUNT  = "depth_amount"
+
+        // Physical-material slider bases. SeekBarPreference stores 0..N
+        // integers; load() divides by 100. The modulation graph drives
+        // these on top of the stored base.
+        const val KEY_MAT_ROUGHNESS   = "mat_roughness"
+        const val KEY_MAT_METALNESS   = "mat_metalness"
+        const val KEY_MAT_SHEEN       = "mat_sheen"
+        const val KEY_MAT_CLEARCOAT   = "mat_clearcoat"
+        const val KEY_MAT_ANISOTROPY  = "mat_anisotropy"
+        const val KEY_MAT_IRIDESCENCE = "mat_iridescence"
+        const val KEY_MAT_EMISSIVE    = "mat_emissive"
+        const val KEY_MAT_RELIEF      = "mat_relief"
 
         // Bumped by PresetStore.applyToPrefs whenever a preset writes a
         // fresh modulation_graph.json, and by the node editor when it
@@ -179,6 +201,14 @@ internal class Settings(
                 panY         = safeFloat(prefs, KEY_PAN_Y, 0.0f),
                 brightness   = safeInt(prefs, KEY_BRIGHTNESS, 100) / 100f,
                 depthAmount  = safeInt(prefs, KEY_DEPTH_AMOUNT, 30) / 100f,
+                matRoughness   = safeInt(prefs, KEY_MAT_ROUGHNESS, 50) / 100f,
+                matMetalness   = safeInt(prefs, KEY_MAT_METALNESS, 40) / 100f,
+                matSheen       = safeInt(prefs, KEY_MAT_SHEEN, 35) / 100f,
+                matClearcoat   = safeInt(prefs, KEY_MAT_CLEARCOAT, 45) / 100f,
+                matAnisotropy  = safeInt(prefs, KEY_MAT_ANISOTROPY, 40) / 100f,
+                matIridescence = safeInt(prefs, KEY_MAT_IRIDESCENCE, 45) / 100f,
+                matEmissive    = safeInt(prefs, KEY_MAT_EMISSIVE, 60) / 100f,
+                matRelief      = safeInt(prefs, KEY_MAT_RELIEF, 105) / 100f,
                 customOklch  = custom,
             )
         }

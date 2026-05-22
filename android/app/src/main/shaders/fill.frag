@@ -22,16 +22,14 @@ layout(location = 0) out vec4 outColor;
 
 const float PI = 3.14159265359;
 
-// --- Material constants ------------------------------------------------------
-// Each tile is shaded as a beveled physical chip: a flat-topped plateau
-// ringed by a chamfer that catches the key light. The chamfer normal is
-// derived analytically from the screen-space gradient of the edge-distance
-// field; the ripple field's analytic slope bends it too. Physical channels
-// are keyed to the tiling's own fields — roughness to seam distance,
-// metalness to tile type — so material variation is the tiling, not a
-// painted-on texture. Lighting is a single-key principled BRDF (Lambert +
-// GGX) over a flat ambient term; ambient and key are calibrated so a
-// non-metal tile plateau reproduces its palette colour at brightness 1.
+// Fill-tile material. Each tile is a beveled physical chip: a flat plateau
+// ringed by a chamfer. The shading normal is reconstructed per fragment from
+// three analytic height fields — bevel, parallax bulge, quasicrystal ripple —
+// and drives a principled BRDF: anisotropic GGX with a thin-film-iridescent
+// Fresnel, Lambert diffuse, a Charlie sheen lobe, and a clearcoat lobe, lit by
+// a key + fill + ambient rig. Roughness and metalness are keyed to the
+// tiling's own fields. Constants are tuned so a flat non-metal plateau
+// reproduces its palette colour at brightness 1.
 const float kBevelWidth    = 0.30;   // edge-distance span of the chamfer
 const float kBevelStrength = 1.05;   // tan of the chamfer's peak slope
 const float kWaveHeight    = 0.12;   // ripple slope → shading-normal tilt
@@ -40,30 +38,30 @@ const float kRoughBase     = 0.50;   // plateau roughness
 const float kRoughMod      = 0.35;   // extra roughness in the seam valleys
 const float kMetalBase     = 0.0;
 const float kMetalMod      = 0.40;   // metalness gained across tile types
-const float kEmissive      = 0.6;    // ripple-crest glow gain
-const float kAmbient       = 0.32;
-const float kKeyIntensity  = 0.85;
-const vec3  kLightColor    = vec3(1.0, 0.99, 0.97);
-// Screen-space key direction. The Vulkan framebuffer's y axis points down,
-// so a negative y component places the light above the wallpaper; the
-// positive z component tilts it toward the viewer.
-const vec3  kLightDir      = vec3(-0.35, -0.45, 0.80);
-// Sheen — a retroreflective velvet lobe, brightest at grazing angles.
-const float kSheen         = 0.35;
+const float kEmissive      = 0.60;   // ripple-crest glow gain
+const float kSheen         = 0.35;   // Charlie velvet lobe strength
 const float kSheenRough    = 0.30;
 const vec3  kSheenColor    = vec3(1.0, 0.97, 0.92);
-// Clearcoat — a thin glossy layer over the base material.
-const float kClearcoat     = 0.45;
+const float kClearcoat     = 0.45;   // clearcoat layer strength
 const float kCoatRough     = 0.10;
-// Anisotropy — stretches the base specular lobe along each tile's
-// orientation. 0 is isotropic.
-const float kAnisotropy    = 0.40;
-// Thin-film iridescence — Belcour-Barla. Film thickness (nanometres) sweeps
-// with the tile's distance from the origin and the ripple.
-const float kIridescence   = 0.45;
+const float kAnisotropy    = 0.40;   // base-lobe anisotropy; 0 is isotropic
+const float kIridescence   = 0.45;   // thin-film Fresnel mix
 const float kIridIOR       = 1.30;
-const float kIridThickMin  = 280.0;
+const float kIridThickMin  = 280.0;  // film thickness sweep, nanometres
 const float kIridThickMax  = 560.0;
+
+// Key + fill + ambient rig. The Vulkan framebuffer's y axis points down, so a
+// negative y in a direction places the light above the wallpaper and a
+// positive z tilts it toward the viewer. The fill is dimmer, cooler, and from
+// the opposite side — bounce light. Intensities calibrate the flat plateau.
+const vec3  kKeyDir        = vec3(-0.35, -0.45, 0.80);
+const vec3  kKeyColor      = vec3(1.00, 0.99, 0.97);
+const float kKeyIntensity  = 0.76;
+const vec3  kFillDir       = vec3( 0.45,  0.30, 0.65);
+const vec3  kFillColor     = vec3(0.82, 0.88, 1.00);
+const float kFillIntensity = 0.27;
+const vec3  kAmbientColor  = vec3(0.90, 0.93, 1.00);
+const float kAmbient       = 0.22;
 
 float ggxDistribution(float NdotH, float a2) {
     float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
@@ -183,98 +181,38 @@ float vGGXaniso(float NdotL, float NdotV, float TdotV, float BdotV,
     return clamp(0.5 / max(gv + gl, 1e-7), 0.0, 1.0);
 }
 
-void main() {
-    uint idx = vColorIdx;
-    if (idx >= 16u) idx = 15u;
-    vec4 c = ubo.palette[idx];
-
-    // Albedo: palette RGB with master brightness only. The parallax bulge
-    // and the quasicrystal ripple no longer modulate albedo — both are
-    // carried by the shading normal, the ripple also by the emissive term.
-    float brightness = ubo.effects.x;
-    vec3 albedo = clamp(c.rgb * brightness, 0.0, 1.0);
-
-    // Edge distance: 0 on every tile boundary edge, rising toward the tile
-    // interior. Drives both the bevel normal and the seam roughness.
-    float edgeDist = min(min(vBary.x, vBary.y), vBary.z);
-
-    // Shading normal. `slope` accumulates -dH/d(x,y) for a height field that
-    // is the sum of the ripple, the parallax bulge, and the bevel;
-    // N = normalize(vec3(slope, 1)). The ripple and bulge terms apply
-    // everywhere; the bevel term tilts the chamfer away from the inward
-    // edge-distance gradient, fading edge → plateau.
-    //
-    // Bulge: vBulgeGrad is the unit model-space gradient direction of the
-    // tile's depth field — -gradient tilts the normal off the bulge, so each
-    // tile reads as a raised dome / sunk pit. Zero for the flat Chair family.
-    vec2 slope = -vWaveGrad * kWaveHeight
-               - vBulgeGrad * (ubo.effects.y * kBulgeTilt);
-    vec2  g    = vec2(dFdx(edgeDist), dFdy(edgeDist));
-    float gLen = length(g);
-    if (gLen > 1e-7) {
-        vec2  inward = g / gLen;
-        float e      = clamp(edgeDist / kBevelWidth, 0.0, 1.0);
-        float tilt   = kBevelStrength * cos(e * (PI * 0.5));
-        slope += -inward * tilt;
-    }
-    vec3 N = normalize(vec3(slope, 1.0));
-
-    // Physical channels keyed to the tiling's own fields:
-    //   roughness  rises in the seam valleys — a free worn-edge read
-    //   metalness  comes from the tile type — distinct kinds, distinct metal
-    float seam      = 1.0 - smoothstep(0.0, kBevelWidth, edgeDist);
-    float roughness = clamp(kRoughBase + kRoughMod * seam, 0.045, 1.0);
-    float metalness = clamp(kMetalBase + kMetalMod * vTileMat.x, 0.0, 1.0);
-
-    // Principled single-key BRDF in tangent space (+z toward the viewer).
-    vec3  V = vec3(0.0, 0.0, 1.0);
-    vec3  L = normalize(kLightDir);
-    vec3  H = normalize(L + V);
+// Full principled response of one directional light: anisotropic GGX
+// specular with the iridescent Fresnel, Lambert diffuse, the Charlie sheen
+// lobe, and the clearcoat lobe with its energy-conserving base attenuation.
+// Returns the white-light response; the caller scales by colour × intensity.
+vec3 shadeLight(vec3 N, vec3 L, vec3 V, vec3 T, vec3 B,
+                vec3 albedo, vec3 F0, vec3 iridF, float a, float metalness) {
     float NdotL = max(dot(N, L), 0.0);
-    float NdotV = max(dot(N, V), 0.0);
+    if (NdotL <= 0.0) return vec3(0.0);
+    vec3  H = normalize(L + V);
+    float NdotV = max(dot(N, V), 1e-4);
     float NdotH = max(dot(N, H), 0.0);
     float VdotH = clamp(dot(V, H), 0.0, 1.0);
 
-    float a  = roughness * roughness;
-    vec3  F0 = mix(vec3(0.04), albedo, metalness);
-    vec3  F  = fSchlick(F0, VdotH);
+    // Iridescent Fresnel blended over the plain Schlick one.
+    vec3 F = mix(fSchlick(F0, VdotH), iridF, kIridescence);
 
-    // Thin-film iridescence — a colour-shifting Fresnel blended over the
-    // plain one. Film thickness sweeps with the tile's distance from the
-    // origin (vTileMat.w) and the ripple, so the slick drifts across the
-    // tiling and pulses with the wave.
-    float filmThick = mix(kIridThickMin, kIridThickMax,
-                          0.5 + 0.5 * sin(vTileMat.w * 6.0 + vRipple * 3.0));
-    vec3  iridF = evalIridescence(1.0, kIridIOR, NdotV, filmThick, F0);
-    F = mix(F, iridF, kIridescence);
-
-    // Anisotropic base specular. The tangent frame is the tile's own
-    // orientation (vTileMat.yz) re-orthogonalised against the shading
-    // normal, so a brushed-metal streak aligns to each tile. at == ab is
-    // exact isotropy, so kAnisotropy = 0 reproduces plain GGX.
-    vec3  oriented = vec3(vTileMat.yz, 0.0);
-    vec3  Taxis = normalize(oriented - N * dot(N, oriented));
-    vec3  Baxis = cross(N, Taxis);
+    // Anisotropic base specular along the tile's tangent frame.
     float at = max(a * (1.0 + kAnisotropy), 1e-4);
     float ab = max(a * (1.0 - kAnisotropy), 1e-4);
-    float D   = dGGXaniso(NdotH, dot(Taxis, H), dot(Baxis, H), at, ab);
-    float Vis = vGGXaniso(NdotL, NdotV, dot(Taxis, V), dot(Baxis, V),
-                          dot(Taxis, L), dot(Baxis, L), at, ab);
+    float D   = dGGXaniso(NdotH, dot(T, H), dot(B, H), at, ab);
+    float Vis = vGGXaniso(NdotL, NdotV, dot(T, V), dot(B, V),
+                          dot(T, L), dot(B, L), at, ab);
     vec3  spec = (D * Vis) * F * NdotL;
 
     vec3 diffuse = albedo * (1.0 - metalness) * NdotL;
 
-    // Sheen — a Charlie velvet lobe over the base, retroreflective at
-    // grazing angles, so the beveled chamfers gain a soft fabric rim.
-    // Independent of metalness; tinted by kSheenColor.
+    // Charlie velvet sheen.
     float sheenD = charlieDistribution(kSheenRough, NdotH);
     float sheenV = ashikhminVisibility(NdotL, NdotV);
     vec3  sheen  = kSheenColor * (kSheen * sheenD * sheenV * NdotL);
 
-    // Clearcoat — a second, tight GGX lobe at the fixed dielectric F0 0.04,
-    // layered on top. Its Fresnel reflects part of the key away before it
-    // reaches the base, so the base lobes are attenuated by (1 - clearcoat·Fc)
-    // to keep the surface from gaining energy.
+    // Clearcoat lobe; its Fresnel attenuates the base layers below it.
     float coatA    = kCoatRough * kCoatRough;
     float coatD    = ggxDistribution(NdotH, coatA * coatA);
     float coatG    = smithVisibility(NdotV, NdotL, coatA * 0.5);
@@ -283,15 +221,71 @@ void main() {
                    / max(4.0 * NdotV * NdotL, 1e-4) * NdotL;
     float baseAtten = 1.0 - kClearcoat * coatF;
 
-    // Emissive: ripple crests glow. vRipple is the wave height at the tile
-    // centroid; only crests (positive) emit, so troughs stay shaded by the
-    // normal rather than self-lighting.
+    return (diffuse + spec + sheen) * baseAtten + vec3(coatLobe);
+}
+
+void main() {
+    uint idx = vColorIdx;
+    if (idx >= 16u) idx = 15u;
+    vec4 c = ubo.palette[idx];
+
+    // Albedo: palette RGB with master brightness only. The bulge and ripple
+    // are carried by the shading normal (the ripple also by the emissive).
+    vec3 albedo = clamp(c.rgb * ubo.effects.x, 0.0, 1.0);
+
+    // Edge distance: 0 on every tile boundary edge, rising toward the tile
+    // interior. Drives both the bevel normal and the seam roughness.
+    float edgeDist = min(min(vBary.x, vBary.y), vBary.z);
+
+    // Shading normal. `slope` accumulates -dH/d(x,y) for a height field that
+    // sums the ripple, the parallax bulge, and the bevel: the ripple and
+    // bulge apply everywhere; the bevel tilts the chamfer away from the
+    // inward edge-distance gradient, fading from edge to plateau.
+    vec2 slope = -vWaveGrad * kWaveHeight
+               - vBulgeGrad * (ubo.effects.y * kBulgeTilt);
+    vec2  g    = vec2(dFdx(edgeDist), dFdy(edgeDist));
+    float gLen = length(g);
+    if (gLen > 1e-7) {
+        vec2  inward = g / gLen;
+        float e      = clamp(edgeDist / kBevelWidth, 0.0, 1.0);
+        slope += -inward * (kBevelStrength * cos(e * (PI * 0.5)));
+    }
+    vec3 N = normalize(vec3(slope, 1.0));
+
+    // Physical channels keyed to the tiling's own fields: roughness rises in
+    // the seam valleys (a worn-edge read), metalness comes from the tile type.
+    float seam      = 1.0 - smoothstep(0.0, kBevelWidth, edgeDist);
+    float roughness = clamp(kRoughBase + kRoughMod * seam, 0.045, 1.0);
+    float metalness = clamp(kMetalBase + kMetalMod * vTileMat.x, 0.0, 1.0);
+    float a  = roughness * roughness;
+    vec3  F0 = mix(vec3(0.04), albedo, metalness);
+
+    // View is straight on. Iridescence depends only on the view angle, so its
+    // colour-shifting Fresnel is evaluated once and shared by both lights.
+    // Thickness sweeps with the tile's radius and the ripple — a drifting
+    // oil-slick.
+    vec3  V = vec3(0.0, 0.0, 1.0);
+    float filmThick = mix(kIridThickMin, kIridThickMax,
+                          0.5 + 0.5 * sin(vTileMat.w * 6.0 + vRipple * 3.0));
+    vec3  iridF = evalIridescence(1.0, kIridIOR, max(N.z, 1e-4), filmThick, F0);
+
+    // Anisotropy tangent frame: the tile orientation re-orthogonalised against
+    // the shading normal. N always has a positive z, so it is never parallel
+    // to the in-plane orientation and the subtraction never collapses.
+    vec3 oriented = vec3(vTileMat.yz, 0.0);
+    vec3 T = normalize(oriented - N * dot(N, oriented));
+    vec3 B = cross(N, T);
+
+    vec3 key  = shadeLight(N, normalize(kKeyDir),  V, T, B,
+                           albedo, F0, iridF, a, metalness)
+              * kKeyColor * kKeyIntensity;
+    vec3 fill = shadeLight(N, normalize(kFillDir), V, T, B,
+                           albedo, F0, iridF, a, metalness)
+              * kFillColor * kFillIntensity;
+
+    // Ambient fills the unlit side; ripple crests add an emissive glow.
+    vec3 ambient  = albedo * kAmbientColor * kAmbient;
     vec3 emissive = albedo * kEmissive * max(vRipple, 0.0);
 
-    vec3 lit = albedo * kAmbient
-             + ((diffuse + spec + sheen) * baseAtten + vec3(coatLobe))
-               * kLightColor * kKeyIntensity
-             + emissive;
-
-    outColor = vec4(clamp(lit, 0.0, 1.0), c.a);
+    outColor = vec4(clamp(ambient + key + fill + emissive, 0.0, 1.0), c.a);
 }

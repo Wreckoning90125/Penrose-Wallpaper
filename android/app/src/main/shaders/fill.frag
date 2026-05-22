@@ -48,6 +48,13 @@ const vec3  kLightColor    = vec3(1.0, 0.99, 0.97);
 // so a negative y component places the light above the wallpaper; the
 // positive z component tilts it toward the viewer.
 const vec3  kLightDir      = vec3(-0.35, -0.45, 0.80);
+// Sheen — a retroreflective velvet lobe, brightest at grazing angles.
+const float kSheen         = 0.35;
+const float kSheenRough    = 0.30;
+const vec3  kSheenColor    = vec3(1.0, 0.97, 0.92);
+// Clearcoat — a thin glossy layer over the base material.
+const float kClearcoat     = 0.45;
+const float kCoatRough     = 0.10;
 
 float ggxDistribution(float NdotH, float a2) {
     float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
@@ -58,6 +65,21 @@ float smithVisibility(float NdotV, float NdotL, float k) {
     float gv = NdotV / max(NdotV * (1.0 - k) + k, 1e-7);
     float gl = NdotL / max(NdotL * (1.0 - k) + k, 1e-7);
     return gv * gl;
+}
+
+// Estevez-Kulla "Charlie" sheen distribution — a velvet lobe that peaks at
+// grazing angles (sin²h → 1), unlike GGX which peaks head-on.
+float charlieDistribution(float roughness, float NdotH) {
+    float invA  = 1.0 / max(roughness * roughness, 1e-4);
+    float sin2h = max(1.0 - NdotH * NdotH, 1e-7);
+    return (2.0 + invA) * pow(sin2h, invA * 0.5) / (2.0 * PI);
+}
+
+// Ashikhmin visibility — the lightweight sheen visibility term Filament
+// pairs with the Charlie distribution.
+float ashikhminVisibility(float NdotL, float NdotV) {
+    return clamp(1.0 / max(4.0 * (NdotL + NdotV - NdotL * NdotV), 1e-7),
+                 0.0, 1.0);
 }
 
 void main() {
@@ -122,13 +144,33 @@ void main() {
 
     vec3 diffuse = albedo * (1.0 - metalness) * NdotL;
 
+    // Sheen — a Charlie velvet lobe over the base, retroreflective at
+    // grazing angles, so the beveled chamfers gain a soft fabric rim.
+    // Independent of metalness; tinted by kSheenColor.
+    float sheenD = charlieDistribution(kSheenRough, NdotH);
+    float sheenV = ashikhminVisibility(NdotL, NdotV);
+    vec3  sheen  = kSheenColor * (kSheen * sheenD * sheenV * NdotL);
+
+    // Clearcoat — a second, tight GGX lobe at the fixed dielectric F0 0.04,
+    // layered on top. Its Fresnel reflects part of the key away before it
+    // reaches the base, so the base lobes are attenuated by (1 - clearcoat·Fc)
+    // to keep the surface from gaining energy.
+    float coatA    = kCoatRough * kCoatRough;
+    float coatD    = ggxDistribution(NdotH, coatA * coatA);
+    float coatG    = smithVisibility(NdotV, NdotL, coatA * 0.5);
+    float coatF    = 0.04 + 0.96 * pow(1.0 - VdotH, 5.0);
+    float coatLobe = kClearcoat * coatD * coatG * coatF
+                   / max(4.0 * NdotV * NdotL, 1e-4) * NdotL;
+    float baseAtten = 1.0 - kClearcoat * coatF;
+
     // Emissive: ripple crests glow. vRipple is the wave height at the tile
     // centroid; only crests (positive) emit, so troughs stay shaded by the
     // normal rather than self-lighting.
     vec3 emissive = albedo * kEmissive * max(vRipple, 0.0);
 
     vec3 lit = albedo * kAmbient
-             + (diffuse + spec) * kLightColor * kKeyIntensity
+             + ((diffuse + spec + sheen) * baseAtten + vec3(coatLobe))
+               * kLightColor * kKeyIntensity
              + emissive;
 
     outColor = vec4(clamp(lit, 0.0, 1.0), c.a);

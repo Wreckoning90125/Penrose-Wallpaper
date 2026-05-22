@@ -66,9 +66,10 @@ struct Settings {
 
     // Physical-material controls — eight user-facing knobs, each a slider
     // base value the modulation graph can drive on top of. They map 1:1
-    // onto MaterialParams fields (render_state.h); the rest of the material
-    // (light rig, film thickness, sheen tint, …) holds its MaterialParams
-    // defaults, set as a bundle by the material presets.
+    // onto MaterialParams fields (render_state.h); the non-slider material
+    // fields (film thickness, sheen tint, bevel/ripple shaping) keep their
+    // MaterialParams defaults. A material preset bundles the sliders below
+    // plus the lighting controls; it does not touch the non-slider fields.
     float  matRoughness   = 0.50f;
     float  matMetalness   = 0.40f;
     float  matSheen       = 0.35f;

@@ -39,8 +39,8 @@ enum class NodeKind : uint16_t {
     OutRippleSpeed,
     OutBrightness,
     OutDepthAmount,
-    // Material targets — must stay contiguous with the four above; the
-    // target block runs OutRippleAmount .. OutMatRelief.
+    // Material + lighting targets — must stay contiguous with the four
+    // above; the target block runs OutRippleAmount .. OutLightAmbient.
     OutMatRoughness,
     OutMatMetalness,
     OutMatSheen,

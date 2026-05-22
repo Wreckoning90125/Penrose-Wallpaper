@@ -109,12 +109,24 @@ bool Renderer::onSurfaceChanged(int width, int height) {
     if (!deviceReady_ || width <= 0 || height <= 0) return false;
     if ((uint32_t)width == swapchainExtent_.width &&
         (uint32_t)height == swapchainExtent_.height) return true;
+    return rebuildSwapchain();
+}
+
+bool Renderer::rebuildSwapchain() {
+    if (!deviceReady_ || surface_ == VK_NULL_HANDLE) return false;
+    // createSwapchain re-queries VkSurfaceCapabilitiesKHR::currentExtent
+    // for the true (post-rotation) surface size; the width/height args
+    // are only the fallback for the UINT32_MAX case, which Android does
+    // not use — so the last known extent is a safe fallback value.
+    const int w = (swapchainExtent_.width  > 0) ? (int)swapchainExtent_.width  : 1;
+    const int h = (swapchainExtent_.height > 0) ? (int)swapchainExtent_.height : 1;
     vkDeviceWaitIdle(device_);
+    swapchainReady_ = false;
     destroyPerFrameResources();
     destroySwapchain();
-    if (!createSwapchain(width, height)) return false;
-    if (!buildPipelines()) return false;
-    if (!createPerFrameResources()) return false;
+    if (!createSwapchain(w, h))       return false;
+    if (!buildPipelines())            return false;
+    if (!createPerFrameResources())   return false;
     swapchainReady_ = true;
     if (imGuiReady_) {
         const uint32_t imageCount = static_cast<uint32_t>(swapchainImages_.size());
@@ -122,6 +134,21 @@ bool Renderer::onSurfaceChanged(int width, int height) {
         imGuiHost_.onSwapchainChanged(minImageCount, imageCount);
     }
     return true;
+}
+
+void Renderer::syncSwapchainToSurface() {
+    if (!deviceReady_ || surface_ == VK_NULL_HANDLE) return;
+    VkSurfaceCapabilitiesKHR caps{};
+    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, surface_, &caps)
+            != VK_SUCCESS) return;
+    const VkExtent2D ce = caps.currentExtent;
+    // 0 — the surface is not presentable right now (window minimised /
+    // mid-teardown); UINT32_MAX — the surface defers sizing to the
+    // swapchain. Either way there is no surface size to match against.
+    if (ce.width == 0 || ce.height == 0 || ce.width == UINT32_MAX) return;
+    if (ce.width != swapchainExtent_.width || ce.height != swapchainExtent_.height) {
+        rebuildSwapchain();
+    }
 }
 
 void Renderer::onSurfaceDestroyed() {
@@ -256,9 +283,7 @@ void Renderer::setSystemInsets(int topPx, int bottomPx, int leftPx, int rightPx)
 void Renderer::considerGrowth() {
     if (settings_.panMode != 1) return;
     const float threshold = (surfW_ > 0) ? (float)surfW_ : 1080.0f;
-    const int maxGen = (settings_.family == Family::Chair) ? kMaxGenChair :
-                       (settings_.family == Family::P2)    ? kMaxGenP2 :
-                                                              kMaxGenP3;
+    const int maxGen = familyInfo(settings_.family).maxGen;
     while (panAccumPx_ >= threshold && effectiveGeneration_ < maxGen) {
         panAccumPx_ -= threshold;
         effectiveGeneration_ += 1;
@@ -276,6 +301,14 @@ void Renderer::considerGrowth() {
 
 void Renderer::drawFrame() {
     if (!deviceReady_ || !swapchainReady_) return;
+
+    // A device rotation resizes the surface. If the swapchain no longer
+    // matches, rebuild it before drawing so this frame already targets
+    // the correct extent — otherwise the compositor stretches the
+    // stale-orientation swapchain onto the rotated window and the
+    // wallpaper stays distorted until it is re-applied.
+    syncSwapchainToSurface();
+    if (!swapchainReady_) return;
 
     if (settingsDirty_) {
         vkDeviceWaitIdle(device_);
@@ -304,11 +337,14 @@ void Renderer::drawFrame() {
     float audioBeat = 0.0f;
     globalAudioAnalyzer().snapshot(audioBands, audioBeat);
 
-    // Modulation graph: evaluate against the latest audio + clock and
-    // write the result back into the override slots the UBO patch below
-    // reads. Seeded with the user's baselines so an unconnected output
-    // keeps the slider value (Graph::evaluate skips Targets whose input
-    // pin has no upstream link).
+    // Modulation graph: evaluate against the latest audio + clock. The
+    // result lands in the fx* members the UBO patch below uploads —
+    // never back into settings_. settings_ stays the pristine user
+    // baseline; seeding the graph from it every frame (rather than from
+    // last frame's modulated output) is what stops a connected target
+    // from accumulating without bound. Graph::evaluate leaves a target
+    // untouched when its input pin has no upstream link, so an empty
+    // graph reproduces the slider values exactly.
     {
         graph::EvalContext gctx{};
         for (int i = 0; i < 8; ++i) gctx.bands[i] = audioBands[i];
@@ -320,10 +356,10 @@ void Renderer::drawFrame() {
         gres.brightness   = settings_.brightness;
         gres.depthAmount  = settings_.depthAmount;
         graph_.evaluate(gctx, gres);
-        settings_.rippleAmount = gres.rippleAmount;
-        settings_.rippleSpeed  = gres.rippleSpeed;
-        settings_.brightness   = gres.brightness;
-        settings_.depthAmount  = gres.depthAmount;
+        fxRippleAmount_ = gres.rippleAmount;
+        fxRippleSpeed_  = gres.rippleSpeed;
+        fxBrightness_   = gres.brightness;
+        fxDepthAmount_  = gres.depthAmount;
     }
 
     // Lazily bring ImGui up only when the editor is actually wanted.
@@ -357,14 +393,14 @@ void Renderer::drawFrame() {
     if (paletteUboMapped_) {
         float anim[4] = {
             time_,
-            settings_.rippleAmount,
-            static_cast<float>(static_cast<int>(settings_.family)),
+            fxRippleAmount_,
+            static_cast<float>(familyInfo(settings_.family).waveSymmetry),
             pageOffset_,
         };
         float effects[4] = {
-            settings_.brightness,
-            settings_.depthAmount,
-            settings_.rippleSpeed,
+            fxBrightness_,
+            fxDepthAmount_,
+            fxRippleSpeed_,
             static_cast<float>(settings_.rippleKind),
         };
         // Reuse the same snapshot taken above the graph eval.
@@ -383,10 +419,25 @@ void Renderer::drawFrame() {
     vkWaitForFences(device_, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
 
     uint32_t imageIndex = 0;
-    VkResult acq = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
-                                         f.imageAvailable, VK_NULL_HANDLE, &imageIndex);
-    if (acq == VK_ERROR_OUT_OF_DATE_KHR) return;
-    if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
+    bool rebuildAfterPresent = false;
+    const VkResult acq = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
+                                               f.imageAvailable, VK_NULL_HANDLE,
+                                               &imageIndex);
+    if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
+        // No image acquired — the swapchain is unusable. Rebuild now
+        // (nothing is pending on it) so the next frame draws clean.
+        rebuildSwapchain();
+        return;
+    }
+    if (acq == VK_SUBOPTIMAL_KHR) {
+        // An image WAS acquired and is drawable; the swapchain just no
+        // longer ideally fits the surface. Draw and present this frame
+        // normally so the acquire semaphore is consumed, THEN rebuild —
+        // tearing the swapchain down here would strand that pending
+        // semaphore signal. The syncSwapchainToSurface check at the top
+        // of the frame normally catches a rotation before this.
+        rebuildAfterPresent = true;
+    } else if (acq != VK_SUCCESS) {
         LOGE("vkAcquireNextImageKHR -> %d", (int)acq);
         return;
     }
@@ -571,10 +622,17 @@ void Renderer::drawFrame() {
     present.pSwapchains = &swapchain_;
     present.pImageIndices = &imageIndex;
     VkResult pr = vkQueuePresentKHR(queue_, &present);
-    if (pr != VK_SUCCESS && pr != VK_ERROR_OUT_OF_DATE_KHR && pr != VK_SUBOPTIMAL_KHR) {
+    currentFrame_ = (currentFrame_ + 1) % kFramesInFlight;
+    if (rebuildAfterPresent ||
+        pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
+        // Either the acquire reported the chain suboptimal (deferred to
+        // here so the frame's semaphore was consumed first), or the
+        // surface changed between acquire and present. Rebuild for the
+        // next frame.
+        rebuildSwapchain();
+    } else if (pr != VK_SUCCESS) {
         LOGE("vkQueuePresentKHR -> %d", (int)pr);
     }
-    currentFrame_ = (currentFrame_ + 1) % kFramesInFlight;
 }
 
 } // namespace penrose

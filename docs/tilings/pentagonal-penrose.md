@@ -1,11 +1,12 @@
 # Pentagonal tilings — the Penrose family
 
-The three Penrose tilings (P1, P2, P3) plus the two structures that overlay
-them (Ammann bars, decapods). All have 5-fold character and golden-ratio
-geometry; all are genuinely aperiodic. P2 and P3 are the renderer's two
-implemented pentagonal families.
+The three Penrose tilings (P1, P2, P3), the two structures that overlay them
+(Ammann bars, decapods), and the Gummelt single-decagon covering equivalent
+to P3. All have 5-fold character and golden-ratio geometry; all are genuinely
+aperiodic. P2 and P3 are the renderer's two implemented pentagonal families.
 
-Source: `quadibloc.com/math/penrose.htm` and linked pages.
+Source: `quadibloc.com/math/penrose.htm` and linked pages; the Gummelt
+covering is from the primary literature (Savard's series has no page on it).
 
 ---
 
@@ -23,40 +24,46 @@ pentagon/star/boat tilings.
 | Aperiodic        | yes |
 | Prototiles       | 6 — pentagon (×3 colour-roles), five-point star, boat, diamond (thin rhomb) |
 | Construction     | substitution + matching-rule |
-| Inflation factor | golden-ratio family (φ per generation) |
+| Inflation factor | φ² ≈ 2.618 per generation |
 | Attribution      | Roger Penrose |
 
 ### Prototiles
-Six tiles, expressible as decorated pentagon / star / boat / diamond shapes.
-The substitution bookkeeping labels them A = blue-green pentagon, B = yellow
-pentagon, C = green pentagon, D = boat, E = star, F = diamond. The drawn
-tiles carry interior pentagons/stars/boats positioned only to shape the
-outline (per Kepler-tiling rules, **not** Penrose rules); the operative
-constraint is the edge decoration.
+Six tiles, all of unit edge length and all interior angles a multiple of 36°:
+- three regular **pentagons**, geometrically identical and distinguished only
+  by matching context — P-5, P-3 and P-2 have respectively 5, 3 and 2 of their
+  five edges adjoining other pentagons;
+- a **star** — the pentacle, i.e. the {5/2} star polygon (10 edges, alternating
+  36° points and 252° reflex vertices);
+- a **boat** — a half-pentacle, roughly three-fifths of a star (three of its
+  five points);
+- a **diamond** — the thin 36°/144° golden rhomb.
 
 ### Construction
-One generation of the substitution (parent → child counts):
+P1 is a decoration of the P3 rhomb tiling; its linear inflation factor is φ².
+A reproducible construction:
 
-| Parent | Children |
-|--------|----------|
-| A | 1A, 5B |
-| B | 1A, 3B, 2C, 3F |
-| C | 1A, 1B, 4C, 2F |
-| D | 3C, 3D, 1E |
-| E | 5C, 5D, 1E |
-| F | 1C, 1D, 1F |
+1. Generate P3 — the two golden Robinson triangles, **acute** (36°-72°-72°)
+   and **obtuse** (108°-36°-36°), under their φ-inflation substitution
+   (`subdivideP3`). Take the short side of each triangle as length 1.
+2. In every **obtuse** triangle place three regular pentagons of circumradius
+   φ⁻² ≈ 0.382: one centred on a 36° corner; one centred on the long side
+   (length φ) at fraction φ⁻² of its length from that corner; one centred on a
+   short side at fraction φ⁻¹ of its length from the other 36° corner. Each
+   pentagon is oriented edge-parallel to the triangle side it sits against, so
+   the decorations of two obtuse triangles sharing an edge place coincident
+   pentagons.
+3. Identify the coincident pentagons. The pentagons then cover the plane
+   except for three residual gap shapes — pentacle (star), half-pentacle
+   (boat) and thin 36° rhomb (diamond) — which are the other three prototiles.
 
-Two recurrence schemes exist. The **first-order** rule is *not* a true
-recurrence — it leaves the diamond (F) orientation unspecified. The
-**second-order** rule fully determines diamond orientation and is the one to
-use. Iterating from a single A pentagon, generation tile-counts grow
-A: 1, 1, 6, 36, 231, 1586, … with limiting tile-frequency ratios numerically
-A:B:C:D:E:F = 1 : 2.17288 : 3.94273 : 1.115611 : 0.5134249 : 2.024296.
+Equivalently P1 has a direct six-prototile composition: each prototile equals a
+patch of smaller P1 tiles scaled up by φ² (Grünbaum & Shephard §10.3).
 
 ### Matching rules
-Edge-shape-derived rules, shown as colours on the elementary shapes. Even the
-largest legal clusters cannot be assembled by geometric fit alone — the
-colour/edge rules must be obeyed. These rules force aperiodicity.
+Each edge carries one of three projection/indentation profiles (labelled
+0, 1, 2); an edge may meet only its own profile. For the three pentagons this
+is exactly the P-5/P-3/P-2 context distinction. Geometric fit alone admits
+periodic tilings — the edge profiles are what force aperiodicity.
 
 ### Symmetry & aperiodicity
 Aperiodic — Penrose's first aperiodic set. Forced by the edge-shape matching
@@ -73,18 +80,31 @@ the tiling dual to the infinite "Sun" P2 tiling.
 ### History & decoration
 The six tiles literally resemble Kepler's pentagon, star, and boat. P1 is the
 historical bridge between Kepler's decorative pentagon tilings and the
-mathematically sharp P2/P3.
+mathematically sharp P2/P3. Kepler's *Harmonices Mundi* (1619) already showed
+that the gaps left by a pentagon packing fill with pentagrams, decagons and
+related shapes, and gave a finite patch he labelled "Aa"; P1 can be viewed as
+a completion of Kepler's Aa pattern. Traces of the same pentagon arrangement
+appear in Albrecht Dürer's work. Penrose (1974) acknowledged Kepler's
+inspiration and supplied the matching rules that turn the decorative
+arrangement into a forced aperiodic set.
 
 ### Renderer mapping
-Not implemented and not recommended as a `Family`. Six prototiles with
-colour-coded edge rules is far more state than the renderer's substitution
-engine carries for P2/P3. If ever wanted, model it as a 6-symbol substitution
-matrix (table above) with a per-tile orientation field; the second-order rule
-is mandatory or diamonds float.
+Implemented — `Family::P1` (`generateP1` in `tiling/penrose.cpp`), exactly the
+Construction recipe above. The P3 substitution is run as a transform recursion
+so every obtuse triangle carries an exact frame; its three pentagons are
+emitted, coincident pentagons are deduplicated, and the star / boat / diamond
+gaps are recovered as the closed loops of un-shared pentagon edges — a 10-edge
+loop is a star, a 4-edge loop a diamond, any other a boat. Tiles store `type`
+0 = pentagon, 1 = star, 2 = boat, 3 = diamond, with `vcount` up to 10; the
+concave star and boat are triangulated from the centroid (`centroidFan`).
+`waveSymmetry` 5 is shared with P2/P3. The substitution harness checks the
+result is gap-free and overlap-free with every edge shared by at most two
+tiles.
 
 ### References
-Roger Penrose (original set); external archive of Penrose's original six
-tiles; quadibloc `penrose.htm`.
+Roger Penrose, *Bull. Inst. Math. Appl.* **10** (1974) 266 (the original
+six-tile set); Grünbaum & Shephard, *Tilings and Patterns* (1987) §10.3
+(the six-prototile composition); quadibloc `penrose.htm`.
 
 ---
 
@@ -115,19 +135,59 @@ half** — every dart is bisected by the recurrence — which makes the rule
 visually confusing but well-defined. A recurrence also exists for the P3
 rhomb pair, so P2 and P3 are related at multiple relative scales.
 
+Deflation (= inflation = composition/decomposition) is a subdivision rule
+applied generation by generation. The half-kite and half-dart deflations are
+valid only inside a larger pattern, not on single tiles; the simple
+subdivision rule leaves small holes near the patch edge, so additional
+forcing rules are needed to fill them. A deflation table tracks the children
+of each piece across generations:
+
+| Piece     | Generation 1 | Generation 2 | Generation 3 |
+|-----------|--------------|--------------|--------------|
+| Half-kite | subdivides each generation per the kite-and-dart rule |||
+| Half-dart | subdivides each generation per the kite-and-dart rule |||
+| Sun       | grows into a larger Sun patch each generation |||
+| Star      | grows into a larger Star patch each generation |||
+
+Counting tiles, the substitution acts on the (large, small) population vector.
+For P2 (large = kite A_L, small = dart A_S) and analogously for the P3 thick
+and thin rhombs:
+
+    φⁿ (A_L, A_S)ᵀ = [[2,1],[1,1]]ⁿ (A_L, A_S)ᵀ
+    [[2,1],[1,1]]ⁿ = [[F_{2n+1}, F_{2n}], [F_{2n}, F_{2n-1}]]
+
+where F_n is the nth Fibonacci number. The kite : dart count ratio (and the
+thick : thin rhomb ratio in P3) therefore tends to φ.
+
+**Up-down generation** is an alternative construction of a P2 (or P3) tiling
+directly from the inflation/deflation hierarchy. Together with Ammann bars,
+pentagrids and cut-and-project it is one of several distinct parameterizations
+of the Penrose tilings.
+
 ### Matching rules
 Coloured edge markings must match across shared edges. Exactly **seven legal
 vertex configurations**, named by Conway: Sun, Star, Ace, Deuce, Jack, Queen,
 King. (Note: some published vertex-type diagrams draw the King vertex
-illegally — verify against Conway.)
+illegally — verify against Conway.) Two of the seven — **Star** and **Sun** —
+have full 5-fold dihedral symmetry; the other five have a single reflection
+axis. Apart from the Ace and the Sun, every vertex figure *forces* additional
+tiles. The **Ace** (Conway's name) looks like an enlarged kite but does not
+tile the same way. A dart's concave vertex is necessarily filled by two kites;
+two kites meeting along a short edge force two darts.
 
 ### Symmetry & aperiodicity
 Aperiodic. Any finite patch recurs infinitely often in every kite-and-dart
 tiling — "from the finite point of view there is only one Penrose tiling" —
-yet there are uncountably many distinct infinite P2 tilings. The Sun and Star
-infinite tilings have exact 5-fold symmetry about their single centre.
-Crucially, the patch-reappearance distance is bounded by a low multiple of
-the patch size (unlike Keplerian tilings — see `pentagonal-keplerian.md`).
+yet there are uncountably many distinct infinite P2 tilings (the number of
+distinct P2 tilings is uncountably infinite, and no finite patch determines
+the whole tiling or the viewer's position in it). The Sun and Star infinite
+tilings have exact 5-fold symmetry about their single centre. A P2 tiling has
+**at most one** centre of global five-fold symmetry — two such centres would,
+by symmetry, generate ever closer centres, a contradiction — and exactly two
+P2 tilings have global pentagonal symmetry, the one centred on a Sun vertex
+and the one centred on a Star vertex. Crucially, the patch-reappearance
+distance is bounded by a low multiple of the patch size (unlike Keplerian
+tilings — see `pentagonal-keplerian.md`).
 
 ### Variants & relations
 Relates to P1 by the pentagon/star/boat decomposition; relates to P3 — but
@@ -175,6 +235,22 @@ A substitution relation exists for the rhomb pair, relating P3 to P2 at
 several relative scales. Each rhomb inflates into a cluster of thick and thin
 rhombs scaled by φ.
 
+P3 is equivalently the **de Bruijn dualization** of a *pentagrid* — five
+superimposed grids of equally spaced parallel lines, the grid normals 72°
+apart, each grid k carrying a real shift γₖ (k = 0..4). Every grid
+intersection dualizes to a rhomb whose edges are orthogonal to the two
+crossing lines; a 36° crossing yields a thin rhomb, a 72° crossing a thick
+one. de Bruijn (1981) proved the dual obeys the Penrose matching rules
+exactly when Σγₖ is an integer.
+
+de Bruijn (1981) gave **two** constructions: the *multigrid method* above (the
+Penrose tiling as the dual graph of an arrangement of five families of
+parallel lines) and the *cut-and-project method* (the Penrose tiling as a 2D
+projection of a slice through a five-dimensional cubic lattice). Baake,
+Kramer, Schlottmann & Zeidler (1990) further derived both the Penrose tiling
+and the Tübingen triangle tiling as sections of the four-dimensional 5-cell
+honeycomb.
+
 ### Matching rules
 Edge rules (conventionally arrows, two arrow types) force aperiodicity.
 **Eight** distinct legal vertex types occur (versus seven for P2). In the
@@ -192,10 +268,33 @@ Related to P2 and P1. The P2↔P3 relation is **not** the naive one: Ammann-bar
 spacing differs between P2 and P3 even when pentagons/stars are drawn at the
 same scale, proving the real isomorphism sits at a different relative scale.
 
+Equal-shift pentagrids (all γₖ equal) give the exactly-symmetric Penrose
+tilings. **SUN** (Σγ = 1) and **STAR** (Σγ = 2) are the only two with a centre
+of full tenfold symmetry; **CARTWHEEL** (all shifts 0) has a lower-symmetry
+centre — ten triangular sectors bordered by Conway worms, enclosing an
+alternating SUN/STAR sequence of central regions whose radii grow by φ. These
+three correspond to the renderer's `SeedP3` Sun, Star and Cartwheel seeds.
+Equal-shift pentagrids whose Σγ is non-integer give the *generalized* Penrose
+tilings — fivefold, but not governed by the Penrose matching rules.
+
 ### History & decoration
 The decorated-rhomb Islamic motif (see `pentagonal-islamic.md`) is built to
 sit on a P3 rhomb arrangement, carrying girih strapwork onto an aperiodic
 substrate.
+
+P2 and P3 were obtained by reducing Penrose's original six-tile P1 set to two
+prototiles; the P3 rhomb tiling was independently discovered by Robert Ammann
+in 1976. Penrose and Conway investigated the tilings, the substitution
+property accounting for their hierarchical structure, and they were publicized
+by Martin Gardner in his "Mathematical Games" column, *Scientific American*,
+January 1977.
+
+Architectural realisations of the Penrose (rhomb) tiling include: the Miami
+University terrazzo Penrose tiling in the Bachelor Hall courtyard (1979); the
+IIIT Allahabad "Penrose Geometry" buildings (from 2001); the Bayliss Building
+atrium at the University of Western Australia; the Andrew Wiles Building of
+Oxford Mathematics (2013); Keskuskatu street, Helsinki (2014); and the
+Salesforce Transit Center, San Francisco (2018).
 
 ### Renderer mapping
 Implemented — `Family::P3`, the renderer's default family. Two-rhomb
@@ -204,7 +303,10 @@ substitution by generation count. The quasicrystal ripple shader uses a
 
 ### References
 Roger Penrose; external page tabulating the eight rhomb vertex-type limit
-frequencies; quadibloc `penrose.htm`.
+frequencies; N. G. de Bruijn, "Algebraic theory of Penrose's non-periodic
+tilings of the plane", *Nederl. Akad. Wetensch. Proc. Ser. A* **84** (*Indag.
+Math.* **43**) (1981) 38–66 (the pentagrid / dualization construction);
+quadibloc `penrose.htm`.
 
 ---
 
@@ -316,3 +418,103 @@ guards against it.
 ### References
 J. H. Conway; Martin Gardner, *Scientific American*, Jan 1977; quadibloc
 `penrose.htm`.
+
+---
+
+## Gummelt decagon covering
+
+**Summary.** A single marked decagon that, allowed to overlap copies of
+itself under one overlap rule, forces a structure equivalent to the Penrose
+P3 rhomb tiling — the first proof that *one* prototile suffices to force the
+quasiperiodic plane, and a model for how quasicrystals grow from a single
+repeating atomic cluster.
+
+| Property         | Value |
+|------------------|-------|
+| Symmetry order   | 10-fold (decagon prototile; resolves to 5-fold P3) |
+| Symmetry type    | statistical |
+| Aperiodic        | yes |
+| Prototiles       | 1 — one marked (decorated) regular decagon |
+| Construction     | covering — overlapping marked decagons |
+| Inflation factor | φ |
+| Attribution      | Petra Gummelt; Penrose-equivalence by P. J. Steinhardt & H.-C. Jeong |
+
+### Prototiles
+One regular decagon, edge length equal to the Penrose rhomb edge, carrying a
+fixed decoration — Gummelt's marking, a set of shaded regions (rendered as
+two colours in Egan's applet). Equivalently the decagon is inscribed with a
+large Penrose **fat rhomb**, or with a **Jack** (a star of four darts, two
+clockwise and two counter-clockwise, one pair overlapping). The shaded
+regions *are* the overlap rule; the decagon is otherwise unmarked.
+
+### Construction
+A *covering*, not a tiling: copies of the one marked decagon are laid down so
+that they may overlap. The overlap rule — two decagons may overlap only where
+their shaded regions coincide (shaded-on-shaded), equivalently only over an
+area at least a specified hexagonal region — admits exactly two overlap
+types, a small **A-overlap** and a large **B-overlap**. An infinite
+arrangement obeying the rule is a *Gummelt covering*. The covering is
+self-similar: an inflation step replaces each decagon by five smaller
+decagons (edge 1/φ), and iterating it generates the covering.
+
+### Matching rules
+The overlap rule is itself the matching rule, enforced by *region overlap*
+rather than edge arrows. Gummelt showed exactly **nine** local "surrounding"
+configurations of a decagon occur in a valid covering (Jeong's type-1 … type-9
+decagons); these map onto the **eleven** Penrose-arrow-legal ways of
+surrounding a fat rhomb, which completes the equivalence with the P3 matching
+rules. Steinhardt & Jeong further showed the rule can be *discarded
+altogether*: maximising the density of a chosen tile cluster (their cluster
+**C** — 9 fat + 4 thin rhombi, density 1/(3φ+1)) yields the Penrose tiling,
+since P3 uniquely maximises that density.
+
+### Symmetry & aperiodicity
+A Gummelt covering is structurally equivalent to a Penrose P3 tiling:
+inscribe each decagon with its fat rhomb / Jack and the covering resolves
+into P3, the thin rhombs automatically filling the gaps. It is therefore
+aperiodic and statistically 10-fold symmetric in exactly the sense P3 is.
+Gummelt's theorem — the marked decagon plus overlap rule admits only
+quasiperiodic coverings — is the first proof that a *single* prototile can
+force quasiperiodicity.
+
+### Variants & relations
+- Direct equivalence with **P3** (above); by a change of inscribed marking,
+  with **P2**.
+- **Quasi-unit-cell (QUC)** reading: the decagon is an overlapping unit cell —
+  like a crystal unit cell, but neighbours overlap and share material. Jeong
+  (2003) proved every decagonal-QUC model equals a rhombus-Penrose-tile model
+  with fourfold-deflated super-tiles.
+- Relaxing the overlap rule yields **random tilings** (Gummelt & Bandt).
+- 3-D generalisation: decagonal prisms / overlapping polytopes, used to model
+  real decagonal quasicrystals such as Al–Ni–Co.
+
+### History & decoration
+Petra Gummelt (1996, *Geometriae Dedicata*) introduced the overlapping-decagon
+covering with an elaborate proof. Steinhardt & Jeong (1996, *Nature*) gave a
+simpler Penrose-equivalence proof and the density-maximisation principle,
+arguing it explains *why* quasicrystals form: if the decagon represents an
+energetically preferred atomic cluster, free-energy minimisation maximises
+its density and so forces quasiperiodicity. The quasi-unit-cell picture was
+later tested experimentally against Al–Ni–Co decagonal quasicrystals.
+Aperiodicity means there is no Bloch theorem for such a quasicrystal, yet its
+spectra can still be computed with rigorous error control.
+
+### Renderer mapping
+Not implemented, and not a natural `Family`: a covering is not a tiling — the
+decagons overlap — so it does not fit the renderer's disjoint-tile-list
+model. Because the covering resolves exactly to P3, the cheapest faithful
+realisation is a **decoration mode on `Family::P3`** — generate the P3 tiling
+as now, then overlay one decagon per fat rhomb — rather than a new generator.
+
+### References
+- P. Gummelt, "Penrose tilings as coverings of congruent decagons,"
+  *Geometriae Dedicata* 62 (1996) 1–17.
+- P. J. Steinhardt & H.-C. Jeong, "A simpler approach to Penrose tiling with
+  implications for quasicrystal formation," *Nature* 382 (1996) 431–433.
+- H.-C. Jeong & P. J. Steinhardt, "Constructing Penrose-like tilings from a
+  single prototile…," *Phys. Rev. B* 55 (1997) 3520–3532.
+- H.-C. Jeong, "Inflation rule for Gummelt coverings with decorated
+  decagons…," arXiv:cond-mat/0304690 (2003).
+- E. A. Lord & S. Ranganathan, "The Gummelt decagon as a 'quasi-unit cell',"
+  *Acta Cryst. A* 57 (2001) 531–539.
+- G. Egan, "Gummelt" applet, `gregegan.net/APPLETS/06/06.html`.

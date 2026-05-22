@@ -120,11 +120,18 @@ public:
 
     void resetToDefault();
 
+    // True while the graph still holds the built-in default node set
+    // (set by resetToDefault, cleared once fromJson loads a saved graph).
+    // The editor auto-arranges only the default layout; a user-arranged
+    // graph that was loaded from disk keeps its saved node positions.
+    bool isDefaultLayout() const { return defaultLayout_; }
+
 private:
     void teardown();
 
     ImFlow::ImNodeFlow handler_;
     EvalContext        ctx_{};
+    bool               defaultLayout_ = true;
 };
 
 } // namespace penrose::graph

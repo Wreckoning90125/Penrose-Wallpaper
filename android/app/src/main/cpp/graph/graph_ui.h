@@ -39,11 +39,12 @@ public:
     bool visible() const          { return visible_.load(std::memory_order_relaxed); }
 
     // Called when the model is reloaded out-of-band (fromJson, reset).
-    // Currently a no-op — ImFlow seeds each node's position from setPos
-    // at spawn time and persists it internally afterwards. Keeps a
-    // hook in place in case future work adds editor-side state that
-    // needs invalidating on reload.
-    void onGraphReloaded() {}
+    // Re-arms the auto-arrange pass so the next frame re-lays the
+    // default graph into the canvas (a loaded custom graph keeps its
+    // saved positions — arrangeNodes checks Graph::isDefaultLayout).
+    // Called on the render thread (graph_jni routes through the
+    // render dispatcher), same thread render() runs on.
+    void onGraphReloaded() { arrangePending_ = true; }
 
     // System-bar insets in surface pixels. The host forwards these
     // from WindowInsets so the editor's top app bar can sit below
@@ -60,11 +61,24 @@ public:
 private:
     void drawToolbar(Graph& graph);
     void drawSpawnPopup(Graph& graph);
+    // One-shot layout pass: arrange the default graph into a grid
+    // fitted to the visible canvas, accounting for each node's
+    // intrinsic size. Runs only once node sizes are known.
+    void arrangeNodes(Graph& graph);
+    // Per-frame guard: pull every node back inside the visible canvas
+    // so nothing can be dragged or spawned out of reach.
+    void clampNodes(Graph& graph);
+    // Visible-canvas size in ImNodeFlow grid units (screen size minus
+    // the app bar / system insets, divided by the editor zoom).
+    void canvasGridSize(Graph& graph, float& outW, float& outH) const;
 
     bool              initialized_    = false;
     std::atomic<bool> visible_        = false;
     float             densityScale_   = 1.0f;
     bool              openSpawnPopup_ = false;
+    // Set whenever the model is (re)loaded; consumed by arrangeNodes
+    // once node sizes are available. Render-thread only.
+    bool              arrangePending_ = true;
     // Staircase offset so consecutive spawns don't overlap. Wraps at
     // 8 steps; resetting on graph reset/load isn't worth the bookkeeping.
     int               spawnStagger_   = 0;

@@ -21,12 +21,17 @@ baseline.
 
 1. All tiling docs live in `docs/tilings/`.
 2. One file per **symmetry family** (5-fold, 7-fold, 8-fold, 12-fold,
-   periodic). A family file may document several distinct *systems*.
+   pinwheel, periodic). A family file may document several distinct *systems*.
 3. Within a file, **every distinct tiling system is one `##` section** that
    follows the Document Template below — verbatim, every section present, in
    order. A system with nothing to say under a heading writes `None.` or
    `n/a` rather than dropping the heading.
 4. A new symmetry family means a new file, registered in the Index below.
+5. Three **reference docs** are not symmetry families and do not use the
+   system template: `catalogue.md` (the flat list of every known aperiodic
+   prototile set), `bibliography.md` (the master source list, structured by
+   this tree), and `hyperbolic-and-tooling.md` (the H²/Escher/crystallographic
+   overlap and the external-tooling boundary). They are listed in the Index.
 
 ## Document template
 
@@ -45,7 +50,7 @@ no reordering.
 | Symmetry type   | exact-global / single-centre / statistical / periodic / none |
 | Aperiodic       | yes / no / not-forced |
 | Prototiles      | <count> — <names> |
-| Construction    | substitution / matching-rule / dualization / cut-and-project / direct |
+| Construction    | substitution / matching-rule / dualization / cut-and-project / covering / direct |
 | Inflation factor| <value> or n/a |
 | Attribution     | <people / sources> |
 
@@ -103,20 +108,31 @@ These terms have a fixed meaning across all documents here. Use them exactly.
   superimpose periodic line/tile grids and take the dual.
 - **Construction — cut-and-project**: slice a higher-dimensional periodic
   lattice through an irrational hyperplane (the "acceptance domain").
+- **Construction — covering**: the plane is *covered* by overlapping copies
+  of a single marked prototile, constrained by an overlap rule (which marked
+  regions of two copies may coincide). Unlike a tiling, copies overlap and do
+  not partition the plane; resolving the marked prototile into ordinary tiles
+  recovers an equivalent tiling. Gummelt's decagon covering of the Penrose
+  tiling is the canonical case.
 - φ denotes the golden ratio (1 + √5) / 2.
 
 ## Index
 
 | File | Symmetry | Systems documented |
 |------|----------|--------------------|
-| [`pentagonal-penrose.md`](pentagonal-penrose.md) | 5-fold | Penrose P1 (six-tile), P2 (kite & dart), P3 (rhomb); Ammann bars; decapods |
+| [`pentagonal-penrose.md`](pentagonal-penrose.md) | 5-fold | Penrose P1 (six-tile), P2 (kite & dart), P3 (rhomb); Ammann bars; decapods; Gummelt decagon covering |
 | [`pentagonal-keplerian.md`](pentagonal-keplerian.md) | 5-fold | Keplerian pentagon/star/boat tilings; boat-eliminated tiling; "pentagons and stars alone" |
 | [`pentagonal-binary.md`](pentagonal-binary.md) | 5-fold | Binary tiling; Mikulla–Roth tiling; Robinson & Tübingen triangle tilings; HBS (hexagon-boat-star) tiling |
 | [`pentagonal-islamic.md`](pentagonal-islamic.md) | 5-fold | Islamic decorated-rhomb tiling; Darb-e-Imam girih recurrence |
-| [`octagonal.md`](octagonal.md) | 8-fold | Ammann–Beenker tiling; Keplerian octagonal tessellation |
+| [`octagonal.md`](octagonal.md) | 8-fold | Ammann–Beenker tiling; Harriss–Lamb canonical substitution tilings; Keplerian octagonal tessellation |
 | [`dodecagonal.md`](dodecagonal.md) | 12-fold | Socolar (butterfly) tiling; Stampfli 12-star / square-triangle; de Bruijn rhomb-square; ship tiling; Keplerian dodecagonal recurrence |
-| [`heptagonal.md`](heptagonal.md) | 7-fold | Keplerian & Dürer-type heptagon attempts; rhomb dualization tilings; Harriss substitution; Danzer sevenfold tiling |
-| [`periodic-reference.md`](periodic-reference.md) | periodic | Cairo tiling; conventional periodic tilings and the 17 wallpaper groups (contrast baseline) |
+| [`heptagonal.md`](heptagonal.md) | 7-fold | Keplerian & Dürer-type heptagon attempts; rhomb dualization tilings; Savard binary-style recurrence; Harriss/Goodman-Strauss n-fold rhomb substitution; Danzer sevenfold tiling |
+| [`pinwheel.md`](pinwheel.md) | none (∞ orientations) | Conway–Radin pinwheel tiling; Sadun generalisation |
+| [`periodic-reference.md`](periodic-reference.md) | periodic | Cairo tiling; conventional periodic tilings and the 17 wallpaper groups; the 15 monohedral convex pentagonal tilings (contrast baseline) |
+| [`catalogue.md`](catalogue.md) | reference | Flat catalogue of every known aperiodic prototile set (E²/H²/E³), and which the renderer covers |
+| [`bibliography.md`](bibliography.md) | reference | Master source list for the whole tree, structured by these files |
+| [`hyperbolic-and-tooling.md`](hyperbolic-and-tooling.md) | reference | Hyperbolic (H²) tilings, the Escher / hyperbolic-crochet lineage, EPINET, and the crystallographic-tooling boundary |
+| [`ROADMAP.md`](ROADMAP.md) | reference | Ranked candidate additions for future work — families, docs, tooling |
 
 ## Conventions
 
@@ -126,10 +142,15 @@ These terms have a fixed meaning across all documents here. Use them exactly.
   describe, or link to a source.
 - **Renderer mapping is mandatory.** Every system says, explicitly, whether
   it is implemented in the renderer and what a `Family` entry would cost. The
-  app currently implements three families — P3 and P2 (see
-  `pentagonal-penrose.md`) and the Chair L-tromino tiling (a 4-fold
-  substitution not covered by the source PDFs; documented as a renderer note
-  only).
+  app currently implements eleven families — P3, P2 and P1 (see
+  `pentagonal-penrose.md`), the Chair L-tromino tiling (a 4-fold substitution
+  not covered by the source PDFs; documented as a renderer note only), the
+  de Bruijn rhomb-square dodecagonal, Ammann–Beenker and heptagonal tilings
+  (see `dodecagonal.md`, `octagonal.md`, `heptagonal.md` — all three share one
+  `generateMultigrid` dualization generator), the Conway–Radin pinwheel (see
+  `pinwheel.md`), the Godrèche–Lançon binary and Tübingen-triangle tilings
+  (see `pentagonal-binary.md`), and the Danzer sevenfold triangle substitution
+  (see `heptagonal.md`).
 - **Primary source.** Most of this material is synthesised from John Savard's
   tiling series at `http://www.quadibloc.com/math` (page IDs are cited per
   system), cross-checked against the primary academic literature each page

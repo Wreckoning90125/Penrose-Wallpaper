@@ -47,6 +47,12 @@ class FullScreenActivity : AppCompatActivity(),
 
     private var showGraphOnStart: Boolean = false
 
+    // True once surfaceCreated has queued loadGraphFromDisk. onStop only
+    // persists the graph when this is set — otherwise an activity that
+    // is stopped before the surface ever came up would save the empty
+    // default graph straight over the user's saved one. Main-thread only.
+    private var graphLoadedFromDisk: Boolean = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
@@ -112,6 +118,7 @@ class FullScreenActivity : AppCompatActivity(),
                     loadGraphFromDisk(ptr)
                     if (showGraphOnStart) NativeBridge.graphSetVisible(ptr, true)
                 }
+                graphLoadedFromDisk = true
                 // Choreographer.postFrameCallback must be called from a
                 // thread with a Looper. SurfaceHolder.Callback fires on
                 // main; do the arming here, not inside session.submit
@@ -275,25 +282,50 @@ class FullScreenActivity : AppCompatActivity(),
         }
     }
 
+    override fun onStop() {
+        // Persist the modulation graph here, while the renderer is fully
+        // alive and healthy — NOT during onDestroy's teardown. Only the
+        // node editor (showGraphOnStart) can have changed the graph; the
+        // plain preview never edits it, so it has nothing to save. Also
+        // skipped if the surface never came up, which would write the
+        // empty default graph over the user's real one. Render-thread
+        // only: graphSave walks the node map handler_.update() mutates.
+        if (graphLoadedFromDisk && showGraphOnStart) {
+            session.submitBlocking { ptr ->
+                saveGraphToDiskOnRenderThread(ptr)
+            }
+            // Announce the new graph: bump the revision so the running
+            // wallpaper engine reloads the file it was just handed.
+            // Without this, edits made in the editor never reached the
+            // live wallpaper — only a preset load bumped the revision.
+            prefs.edit()
+                .putLong(Settings.KEY_GRAPH_REVISION, System.currentTimeMillis())
+                .apply()
+        }
+        super.onStop()
+        // The node editor does not survive backgrounding: resuming a
+        // half-torn-down ImGui + Vulkan editor surface was unreliable
+        // (blank canvas, or a crash back to the menu). Finish it
+        // instead — the graph was just saved above, so reopening from
+        // the menu restores it into a clean, freshly-built editor.
+        // Consistent and intentional: leaving the editor closes it. A
+        // configuration change (rotation) is exempt — that is an
+        // activity recreate, not the user leaving.
+        if (showGraphOnStart && !isChangingConfigurations() && !isFinishing()) {
+            finish()
+        }
+    }
+
     override fun onDestroy() {
         // Defuse any pending long-press timer first — its runnable
         // captures the session and would otherwise fire up to
-        // LONG_PRESS_MS after destroy.
+        // LONG_PRESS_MS after destroy. The graph itself was already
+        // persisted in onStop; session.shutdown() is fired by the
+        // lifecycle observer during super.onDestroy() below.
         cancelLongPress()
         uiHandler.removeCallbacksAndMessages(null)
         disarmChoreographer()
         prefs.unregisterOnSharedPreferenceChangeListener(this)
-        // Save MUST happen on the render thread before shutdown
-        // drains the executor — graphSave reads handler_.getNodes()
-        // which the render thread mutates inside handler_.update(),
-        // so running it from any other thread is a data race.
-        // session.shutdown() is fired by the lifecycle observer
-        // during super.onDestroy() below; submitBlocking runs first
-        // here, so the save lands on the dispatcher ahead of the
-        // observer's shutdown.
-        session.submitBlocking { ptr ->
-            saveGraphToDiskOnRenderThread(ptr)
-        }
         super.onDestroy()
     }
 

@@ -54,12 +54,11 @@ struct EdgeKeyHash {
 };
 
 inline bool hideSeam(Family fam, EdgeKind k1, EdgeKind k2) {
-    switch (fam) {
-        case Family::P3:    return k1 == EdgeKind::Base && k2 == EdgeKind::Base;
-        case Family::P2:    return k1 == EdgeKind::Leg  && k2 == EdgeKind::Leg;
-        case Family::Chair: return false;
+    switch (familyInfo(fam).hideSeamMode) {
+        case 1:  return k1 == EdgeKind::Base && k2 == EdgeKind::Base;  // P3
+        case 2:  return k1 == EdgeKind::Leg  && k2 == EdgeKind::Leg;   // P2
+        default: return false;
     }
-    return false;
 }
 
 } // namespace
@@ -96,23 +95,57 @@ bool Renderer::buildGeometry() {
         for (int v = 0; v < vc; ++v) { sx += t.x[v]; sy += t.y[v]; }
         const float cx = sx / static_cast<float>(vc);
         const float cy = sy / static_cast<float>(vc);
+        // Parallax depth shading. type 0 bulges toward the viewer (+1),
+        // every other type recedes (-1); the depthAmount slider scales the
+        // effect in the fragment shader. The bulge sits on one vertex for a
+        // triangle, along the long diagonal for a rhomb, and at the centre
+        // for a P1 tile, so every family but the flat Chair reads as 3-D.
+        const FamilyInfo& fi = familyInfo(settings_.family);
+        const float dsign = (t.type == 0) ? +1.0f : -1.0f;
         if (vc == 3) {
-            // Per-vertex parallax depth. Penrose triangle vert 1 is the
-            // rhombus's long-axis apex; L (type 0) bulges (+1), S (type
-            // 1) recedes (-1). Legs sit at midline (0).
-            const float apexDepth = (t.type == 0) ? +1.0f : -1.0f;
-            const float depths[3] = { 0.0f, apexDepth, 0.0f };
+            // Triangle tiles: one vertex carries the bulge, the other two
+            // sit at the midline. For the Penrose rhomb halves and the
+            // pinwheel that is vertex 1; for the Tübingen triangles it is
+            // the apex, vertex 0 — fi.depthVertex selects it.
+            float depths[3] = { 0.0f, 0.0f, 0.0f };
+            if (fi.depthParallax) depths[fi.depthVertex] = dsign;
             for (int v = 0; v < 3; ++v) {
                 fills.push_back(FillVertex{ t.x[v], t.y[v], paletteIdx, cx, cy, depths[v] });
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
                 minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
             }
+        } else if (fi.centroidFan) {
+            // Concave polygons (P1 star / boat) — fan from the centroid so
+            // the triangulation stays inside a star-shaped tile. The
+            // centroid carries the bulge, so each tile reads as a shallow
+            // dome (type 0 = pentagon) or dimple.
+            const float cd = fi.depthParallax ? dsign : 0.0f;
+            for (int v = 0; v < vc; ++v) {
+                const int w = (v + 1) % vc;
+                fills.push_back(FillVertex{ cx,     cy,     paletteIdx, cx, cy, cd });
+                fills.push_back(FillVertex{ t.x[v], t.y[v], paletteIdx, cx, cy, 0.0f });
+                fills.push_back(FillVertex{ t.x[w], t.y[w], paletteIdx, cx, cy, 0.0f });
+                minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
+                minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
+            }
         } else {
-            // Chair L-trominoes have no natural depth axis — leave flat.
+            // Convex polygons fanned from vertex 0. A rhomb (the de Bruijn
+            // and binary families) carries the bulge along its long
+            // diagonal — the ridge of the Penrose rhombus generalised. The
+            // Chair L-tromino has no depth axis and stays flat.
+            float depth[12] = { 0.0f };
+            if (fi.depthParallax && vc == 4) {
+                const float dx02 = t.x[2] - t.x[0], dy02 = t.y[2] - t.y[0];
+                const float dx13 = t.x[3] - t.x[1], dy13 = t.y[3] - t.y[1];
+                if (dx02*dx02 + dy02*dy02 >= dx13*dx13 + dy13*dy13)
+                    depth[0] = depth[2] = dsign;
+                else
+                    depth[1] = depth[3] = dsign;
+            }
             for (int v = 1; v + 1 < vc; ++v) {
-                fills.push_back(FillVertex{ t.x[0],     t.y[0],     paletteIdx, cx, cy, 0.0f });
-                fills.push_back(FillVertex{ t.x[v],     t.y[v],     paletteIdx, cx, cy, 0.0f });
-                fills.push_back(FillVertex{ t.x[v + 1], t.y[v + 1], paletteIdx, cx, cy, 0.0f });
+                fills.push_back(FillVertex{ t.x[0],     t.y[0],     paletteIdx, cx, cy, depth[0] });
+                fills.push_back(FillVertex{ t.x[v],     t.y[v],     paletteIdx, cx, cy, depth[v] });
+                fills.push_back(FillVertex{ t.x[v + 1], t.y[v + 1], paletteIdx, cx, cy, depth[v + 1] });
             }
             for (int v = 0; v < vc; ++v) {
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
@@ -133,7 +166,14 @@ bool Renderer::buildGeometry() {
     std::vector<uint32_t>     borderIndices;
     if (settings_.borderOn) {
         std::vector<Edge> edges;
-        edges.reserve(tiles.size() * (settings_.family == Family::Chair ? 6 : 3));
+        const Family fam = settings_.family;
+        const int edgesPerTile =
+            (fam == Family::Chair || fam == Family::P1) ? 6 :
+            (fam == Family::Dodecagonal  ||
+             fam == Family::AmmannBeenker ||
+             fam == Family::Heptagonal    ||
+             fam == Family::Binary)         ? 4 : 3;
+        edges.reserve(tiles.size() * edgesPerTile);
         for (const Tile& t : tiles) {
             if (t.vcount == 3) edgesPenrose(t, edges);
             else               edgesChair(t, edges);
@@ -266,7 +306,7 @@ void Renderer::updatePaletteUbo() {
     // amount short-circuits the wave math for every tile.
     ubo.anim[0] = time_;
     ubo.anim[1] = settings_.rippleAmount;
-    ubo.anim[2] = static_cast<float>(static_cast<int>(settings_.family));
+    ubo.anim[2] = static_cast<float>(familyInfo(settings_.family).waveSymmetry);
     ubo.anim[3] = pageOffset_;
 
     // Border half-width in world space, scaled by the family's deflation

@@ -43,24 +43,24 @@ internal class PresetStore(private val context: Context) {
     }
 
     /**
-     * Writes preset.staticSettings into [prefs] and overwrites the
-     * persisted graph if the preset bundled one. The active renderer
-     * picks up the new prefs via its onSharedPreferenceChanged listener
-     * and re-loads the graph file on next surfaceCreated.
+     * Writes preset.staticSettings into [prefs]. If — and only if — the
+     * preset ships a graph block, the persisted modulation graph is
+     * overwritten with it. A colours-only / sliders-only preset leaves
+     * the user's hand-built graph completely alone: loading such a
+     * preset must never wipe a graph the user spent time wiring.
      */
     fun applyToPrefs(preset: Preset, prefs: SharedPreferences) {
-        // Order matters: write the JSON to disk FIRST so any listener
-        // observing the revision bump and reading the file gets the
-        // new graph, not the previous one. Presets without a graph
-        // block (e.g. "ambient drift" — slider-only, no audio
-        // reactivity) write an explicit empty graph so the file
-        // doesn't keep the previous preset's connections alive.
-        val graphToWrite = preset.graphJson ?: """{"nodes":[],"links":[]}"""
-        try {
-            java.io.File(context.filesDir, "modulation_graph.json")
-                .writeText(graphToWrite)
-        } catch (e: Exception) {
-            Log.w(TAG, "graph write failed for preset ${preset.id}", e)
+        // Write the graph JSON to disk FIRST (before the revision bump)
+        // so a listener reacting to the bump reads the new graph. A
+        // preset with no graph block does not touch the file at all.
+        val graphJson = preset.graphJson
+        if (graphJson != null) {
+            try {
+                java.io.File(context.filesDir, "modulation_graph.json")
+                    .writeText(graphJson)
+            } catch (e: Exception) {
+                Log.w(TAG, "graph write failed for preset ${preset.id}", e)
+            }
         }
         prefs.edit {
             for ((key, value) in preset.staticSettings) {
@@ -71,11 +71,12 @@ internal class PresetStore(private val context: Context) {
                     is StaticValue.FloatValue  -> putFloat(key, value.v)
                 }
             }
-            // Always bump even if the preset has no graph block —
-            // listeners reading the file will see an empty/missing
-            // file and reset to defaults, which is the right move for
-            // "ambient drift" (no audio reactivity).
-            putLong(Settings.KEY_GRAPH_REVISION, System.currentTimeMillis())
+            // Bump the revision only when the graph file actually
+            // changed — a slider-only preset must not make listeners
+            // reload (and thereby reset) an unchanged graph.
+            if (graphJson != null) {
+                putLong(Settings.KEY_GRAPH_REVISION, System.currentTimeMillis())
+            }
         }
     }
 

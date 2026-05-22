@@ -26,8 +26,8 @@ rules do *not* force aperiodicity.
 | Aperiodic        | not-forced |
 | Prototiles       | 2 — thick rhomb (72°/108°), thin rhomb (36°/144°) |
 | Construction     | substitution + corner-marking matching rule |
-| Inflation factor | golden-ratio family |
-| Attribution      | quasicrystal literature (term used by Savard) |
+| Inflation factor | √(2 + φ) ≈ 1.902 — non-Pisot |
+| Attribution      | Lançon & Billard 1988; Godrèche & Lançon 1992 |
 
 ### Prototiles
 The same two golden rhombs as P3, equal unit edge: thick 72°/108°, thin
@@ -36,19 +36,25 @@ types, drawn as white circles (the "large atom" sites, at the acute ends of
 the thin rhomb) and black circles ("small atom" sites).
 
 ### Construction
-A substitution relation exists — described by Savard as "particularly
-challenging to grasp," shown over four generations. Each thick and thin rhomb
-inflates into a cluster of thick and thin rhombs; the inflation produces
-scaled-up thick and thin super-rhombs, i.e. a self-similar rhomb-to-rhomb
-substitution. The boundary of an infinitely-recurred region is a fractal
-curve.
+A self-similar rhomb-to-rhomb substitution. Godrèche & Lançon (1992) give it
+explicitly: with eₖ = (cos 2πk/5, sin 2πk/5), the large rhomb L (72°/108°) is
+built on e₀,e₁ and the sharp rhomb S (36°/144°) on e₀,e₂. The substitution
+matrix is **[[3,1],[1,2]]** — L → 3L + 1S, S → 1L + 2S — with leading
+eigenvalue φ² (so the linear inflation factor is √(2 + φ) ≈ 1.902, a
+*non-Pisot* number; the second eigenvalue 3 − φ ≈ 1.382 also exceeds 1). The
+growth recurrence (their eq. 3) joins rotated, g-scaled copies of the previous
+finite tilings Lₙ, Sₙ; the centred **Bear** and **Dog** patches (their eq. 4)
+drop every translation so the copies fan a full turn around the origin. The
+boundary of an infinitely-recurred region is a fractal curve (dimension ≈
+1.078).
 
 ### Matching rules
 **Corner marks, not edge arrows** — analogous in kind to the kite-and-dart
 point-colouring rules. Adjacent tiles meet so compatible corner marks
 coincide; white = large-atom site, black = small-atom site. These rules are
 **not strong enough to force the recurrence, and not strong enough to force
-aperiodicity** — that is the headline fact.
+aperiodicity** — that is the headline fact. Super-tile rhombs assembled from
+small binary rhombs need obey no matching rules among themselves.
 
 ### Symmetry & aperiodicity
 **Aperiodic: not-forced.** The same two rhombs under the binary rules can
@@ -56,10 +62,6 @@ produce the aperiodic binary tiling, *or* a Penrose rhomb tiling, *or* a
 recursive self-similar tiling, *or* a periodic tiling (the thick rhomb alone
 tiles periodically). Aperiodicity requires matching rules beyond the binary
 ones.
-
-### Matching rules — addendum
-Super-tile rhombs built from small binary rhombs need obey no matching rules
-among themselves.
 
 ### Variants & relations
 Mikulla–Roth tiling (below). Using the thin rhomb as a "diamond", one can
@@ -71,13 +73,21 @@ acute-thin-rhomb corner is the atom needing more space.
 Of interest in quasicrystal physics as a two-atomic-species model.
 
 ### Renderer mapping
-Not implemented. A binary `Family` is feasible as a substitution, but the
-corner-marking rules carry no aperiodicity guarantee — the renderer would
-have to drive it purely by the substitution and treat the marks as decoration
-only. Lower value than P3/P2, which it geometrically overlaps.
+Implemented — `Family::Binary` (`generateBinary` in `tiling/penrose.cpp`).
+The renderer drives it purely by the substitution (the corner marks are not
+modelled — they carry no aperiodicity guarantee anyway). `generateBinary`
+runs the Godrèche–Lançon eq. (3) growth recurrence to depth `generations`,
+then closes it with eq. (4) into the centred Bear (`seedIdx` 0) or Dog
+(`seedIdx` 1) patch, and normalises into the unit disk. Tiles are 4-vertex
+rhombs with `type` 0 = L, 1 = S; `waveSymmetry` 5 is shared with P3/P2.
+Verified by the substitution harness: exact tile counts from [[3,1],[1,2]],
+every rhomb edge-to-edge, no overlaps.
 
 ### References
-Mikulla, Roth (named tiling); quadibloc `pen02.htm`.
+Lançon, F. & Billard, L., *J. Physique* **49** (1988) 249 (the binary tiling);
+Godrèche, C. & Lançon, F., "A simple example of a non-Pisot tiling with
+five-fold symmetry", *J. Phys. I France* **2** (1992) 207 (the explicit
+substitution, eqs. 3–4); Mikulla, Roth (named variant); quadibloc `pen02.htm`.
 
 ---
 
@@ -200,40 +210,72 @@ Robinson triangle tiling; the parent of the Mikulla–Roth tiling.
 | Prototiles       | acute & obtuse golden isosceles triangles |
 | Construction     | substitution |
 | Inflation factor | φ |
-| Attribution      | Tübingen quasicrystal group |
+| Attribution      | Baake, Kramer, Schlottmann, Lück (Tübingen group, 1990) |
 
 ### Prototiles
-Acute and obtuse golden isosceles triangles, the same triangle family as the
-Robinson triangles. Vertices are large-atom sites in the Mikulla–Roth
-derivation.
+Acute and obtuse golden isosceles triangles — the Robinson triangles, the same
+triangle family as the Robinson triangle tiling. The inflation factor is the
+golden mean φ = a/b = (1 + √5)/2 ≈ 1.618, the ratio of the triangles' long to
+short edge. Vertices are large-atom sites in the Mikulla–Roth derivation.
 
 ### Construction
 A substitution similar to — but distinct from — the Robinson triangle
-recurrence, shown on the right-hand side of Savard's triangle-recurrence
-diagram (black = current generation, orange = next-generation boundaries /
-orientation indicator). Each triangle subdivides into next-generation
-triangles each step.
+recurrence, with inflation factor φ. From BKSZ90 Fig. 4.6 ("local deflation
+of oriented triangles"):
+- **obtuse → 1 obtuse + 1 acute.** A single cevian runs from the 108° apex to
+  the point on the long base that divides it φ⁻¹ : φ⁻² (the φ⁻¹ part toward
+  the second base vertex). The apex-side wedge to the first base vertex is the
+  child obtuse; the remaining triangle is the child acute.
+- **acute → 2 acute + 1 obtuse.** Marking each leg φ⁻¹ of the way down from
+  the 36° apex gives points D, E; triangle apex-D-E is the child acute at the
+  apex. A diagonal D→(far base vertex) splits the rest into a second acute
+  (against the base) and an obtuse.
+
+Because each prototile is mirror-symmetric but its substitution is not, a
+triangle and its mirror deflate to mirror-image clusters — left- and
+right-handed tiles are genuinely distinct and must be tracked; in the
+substitution rule the handedness is carried by colour.
+
+The Tübingen triangle tiling is also obtainable by cut-and-project on the
+four-dimensional 5-cell honeycomb (Baake, Kramer, Schlottmann & Zeidler 1990),
+the same higher-dimensional structure that yields the Penrose tiling.
 
 ### Matching rules
-Triangle-orientation rules as encoded by the recurrence diagram.
+Triangle-orientation (handedness) rules as encoded by the recurrence diagram.
 
 ### Symmetry & aperiodicity
 Aperiodic substitution tiling.
 
 ### Variants & relations
 Sibling of the Robinson triangle tiling; generates the Mikulla–Roth binary
-tiling when vertices/centres are marked with atoms.
+tiling when vertices/centres are marked with atoms. Although its prototiles
+are Robinson triangles, its relation to Penrose differs from the Robinson
+triangle tiling's: the Penrose rhomb tilings are **locally derivable** from
+the Tübingen triangle tiling, but not the reverse.
 
 ### History & decoration
-Named for quasicrystal research at Tübingen.
+Discovered and studied by a research group in Tübingen, Germany — hence the
+name. With the Penrose rhombs it is one of the classical candidate tilings for
+modelling 5- and 10-fold quasicrystals.
 
 ### Renderer mapping
-Not implemented. A candidate `Family` — a clean two-triangle substitution —
-if a triangle-based 5-fold family is ever wanted alongside the rhomb-based
-P3.
+Implemented — `Family::Tuebingen` (`subdivideTuebingen` / `seedTuebingen` in
+`tiling/penrose.cpp`). Triangles are stored verts `[apex, b1, b2]`, `type`
+0 = obtuse / 1 = acute, like P3/P2. The chiral substitution is written once in
+barycentric coordinates of the parent frame and applied through that frame's
+affine map, so reflected tiles deflate to reflected clusters with no special
+case — the vertex winding *is* the handedness. Seeds: `Sun` (a ten-acute
+decagon rosette of alternating handedness) and `Triangle` (a single acute).
+`waveSymmetry` 5 is shared with P3/P2. Verified by the substitution harness:
+tile counts match the [[1,1],[1,2]] matrix at every generation, no overlaps,
+and the rendered patch reproduces the pinwheel-rosette texture of the BKSZ90
+reference patch.
 
 ### References
-Tübingen quasicrystal group; quadibloc `pen02.htm`.
+Baake, M., Kramer, P., Schlottmann, M. & Lück, R., "Planar patterns with
+fivefold symmetry as sections of periodic structures in 4-space", *Int. J.
+Mod. Phys. B* **4** (1990) 2217 (the substitution, Fig. 4.6); quadibloc
+`pen02.htm`.
 
 ---
 

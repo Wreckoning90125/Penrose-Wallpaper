@@ -32,7 +32,7 @@ constexpr int kFloatCount = 13 + 3 + 3 * kMaxColors;
 
 Settings decodeSettings(const jint* ints, const jfloat* floats) {
     Settings s{};
-    int fam = ints[0]; if (fam < 0 || fam > 2) fam = 0;
+    int fam = ints[0]; if (fam < 0 || fam >= kFamilyCount) fam = 0;
     s.family = static_cast<Family>(fam);
     s.seedIdx = ints[1];
     s.generation = ints[2];

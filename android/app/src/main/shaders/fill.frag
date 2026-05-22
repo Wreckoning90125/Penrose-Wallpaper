@@ -1,7 +1,7 @@
 #version 460
 
 layout(set = 0, binding = 0, std140) uniform Palette {
-    vec4 palette[10];
+    vec4 palette[16];
     vec4 borderColor;
     vec4 bgColor;
     uvec4 flags;
@@ -19,7 +19,7 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     uint idx = vColorIdx;
-    if (idx >= 10u) idx = 9u;
+    if (idx >= 16u) idx = 15u;
     vec4 c = ubo.palette[idx];
 
     // Master brightness, per-tile parallax gradient, and quasicrystal

@@ -69,6 +69,23 @@ if(_inf_patched EQUAL -1)
     file(WRITE "${_INF_INL}" "${_INF_INL_TEXT}")
 endif()
 
+# Patch ImNodeFlow: widen the link hit-test radius. Link::update() tests
+# the cursor against the connection bezier with a 2.5-unit collider —
+# fine for a mouse, far too thin to tap on a touchscreen, so a user can
+# never select a link in order to delete it. Widen it to 10 units
+# (~12px at the editor's default zoom) so links are tappable. Idempotent
+# across rebuilds; a harmless no-op if upstream ever changes the literal.
+set(_INF_CPP "${imnodeflow_SOURCE_DIR}/src/ImNodeFlow.cpp")
+file(READ "${_INF_CPP}" _INF_CPP_TEXT)
+string(FIND "${_INF_CPP_TEXT}" "start, end, 10.0)" _inf_collider_patched)
+if(_inf_collider_patched EQUAL -1)
+    string(REPLACE
+        "smart_bezier_collider(ImGui::GetMousePos(), start, end, 2.5)"
+        "smart_bezier_collider(ImGui::GetMousePos(), start, end, 10.0)"
+        _INF_CPP_TEXT "${_INF_CPP_TEXT}")
+    file(WRITE "${_INF_CPP}" "${_INF_CPP_TEXT}")
+endif()
+
 add_library(penrose SHARED
     # JNI entrypoints
     jni_bridge.cpp

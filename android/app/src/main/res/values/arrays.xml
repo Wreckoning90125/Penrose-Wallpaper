@@ -1,13 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Display order groups the families by symmetry: the three Penrose
+         systems, the other 5-fold tilings, then ascending fold order, with
+         the pinwheel (infinitely many orientations) and the Chair last. Each
+         <item> here is paired by index with family_values, which carries the
+         Family enum index the C++ side expects — so the menu can be reordered
+         freely without disturbing stored preferences or the enum. -->
     <string-array name="family_entries">
         <item>P3 (rhombi)</item>
         <item>P2 (kites &amp; darts)</item>
+        <item>P1 (pentagon/star/boat)</item>
+        <item>Tübingen triangle (5-fold)</item>
+        <item>Binary (Godrèche–Lançon)</item>
+        <item>Ammann–Beenker (8-fold)</item>
+        <item>Dodecagonal (rhomb&#8211;square)</item>
+        <item>Heptagonal (14-fold)</item>
+        <item>Danzer triangle (7-fold)</item>
+        <item>Pinwheel (right triangles)</item>
         <item>Chair (L-trominoes)</item>
     </string-array>
     <string-array name="family_values">
         <item>0</item>
         <item>1</item>
+        <item>9</item>
+        <item>8</item>
+        <item>7</item>
+        <item>5</item>
+        <item>3</item>
+        <item>6</item>
+        <item>10</item>
+        <item>4</item>
         <item>2</item>
     </string-array>
 
@@ -44,6 +66,84 @@
         <item>0</item>
         <item>1</item>
         <item>2</item>
+    </string-array>
+
+    <string-array name="seed_dodeca_entries">
+        <item>Rosette</item>
+        <item>Drift</item>
+        <item>Quasi</item>
+    </string-array>
+    <string-array name="seed_dodeca_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <string-array name="seed_pinwheel_entries">
+        <item>Square</item>
+        <item>Triangle</item>
+        <item>Rectangle</item>
+    </string-array>
+    <string-array name="seed_pinwheel_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <string-array name="seed_ammannbeenker_entries">
+        <item>Star</item>
+        <item>Drift</item>
+        <item>Quasi</item>
+    </string-array>
+    <string-array name="seed_ammannbeenker_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <string-array name="seed_heptagonal_entries">
+        <item>Star</item>
+        <item>Drift</item>
+        <item>Quasi</item>
+    </string-array>
+    <string-array name="seed_heptagonal_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
+    <string-array name="seed_binary_entries">
+        <item>Bear</item>
+        <item>Dog</item>
+    </string-array>
+    <string-array name="seed_binary_values">
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+
+    <string-array name="seed_tuebingen_entries">
+        <item>Sun</item>
+        <item>Triangle</item>
+    </string-array>
+    <string-array name="seed_tuebingen_values">
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+
+    <string-array name="seed_p1_entries">
+        <item>Sun</item>
+    </string-array>
+    <string-array name="seed_p1_values">
+        <item>0</item>
+    </string-array>
+
+    <string-array name="seed_danzer_entries">
+        <item>Sun</item>
+        <item>Triangle</item>
+    </string-array>
+    <string-array name="seed_danzer_values">
+        <item>0</item>
+        <item>1</item>
     </string-array>
 
     <string-array name="preset_entries">

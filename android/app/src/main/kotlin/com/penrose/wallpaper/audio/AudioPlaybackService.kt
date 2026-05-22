@@ -1,5 +1,6 @@
 package com.penrose.wallpaper.audio
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.annotation.OptIn
@@ -8,6 +9,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.penrose.wallpaper.NativeBridge
+import com.penrose.wallpaper.Settings
 
 /**
  * Foreground service hosting the file-playback ExoPlayer wrapped in a
@@ -36,6 +38,7 @@ class AudioPlaybackService : MediaSessionService() {
 
     companion object {
         const val ACTION_PLAY = "com.penrose.wallpaper.audio.PLAY"
+        const val ACTION_STOP = "com.penrose.wallpaper.audio.STOP"
         const val EXTRA_URI   = "uri"
 
         // Display-only mirror of what the service is currently playing.
@@ -57,15 +60,31 @@ class AudioPlaybackService : MediaSessionService() {
         }
 
         fun stop(context: android.content.Context) {
-            // stopService doesn't trip API 26+'s "started a foreground-type
-            // service from the background" guard and doesn't expect a
-            // startForeground call within 5s. If the service isn't running
-            // this is a no-op; if it is, onDestroy runs cleanup. We mirror
-            // the UI state immediately so the summary updates without
-            // racing the actual service teardown.
+            // Mirror the UI state immediately so the settings summary
+            // updates without racing the service teardown.
+            val wasActive = currentUri != null
             currentDisplayName = null
             currentUri = null
-            context.stopService(Intent(context, AudioPlaybackService::class.java))
+            // Nothing playing — don't spin the service up just to stop it.
+            if (!wasActive) return
+            // Route the stop THROUGH the service (ACTION_STOP) so it
+            // shuts down via pauseAllPlayersAndStopSelf — the same path
+            // onTaskRemoved already uses successfully. Calling
+            // stopService() on a foreground MediaSessionService destroys
+            // it while its media notification is still live, which
+            // crashes. startService on an already-running service only
+            // delivers onStartCommand — it is not a foreground-service
+            // start and carries no startForeground obligation.
+            try {
+                context.startService(
+                    Intent(context, AudioPlaybackService::class.java).apply {
+                        action = ACTION_STOP
+                    }
+                )
+            } catch (_: Exception) {
+                // Background-start restriction, or the service is already
+                // gone — either way there is nothing left to stop.
+            }
         }
     }
 
@@ -80,17 +99,46 @@ class AudioPlaybackService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
+    /**
+     * Publish playback state to the shared settings prefs. The wallpaper
+     * engine observes [Settings.KEY_AUDIO_ACTIVE] and arms its per-frame
+     * render loop while audio is active, so audio-reactive modulation
+     * keeps evaluating on the home screen even with no time-based ripple.
+     */
+    private fun writeAudioActive(active: Boolean) {
+        getSharedPreferences(Settings.PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(Settings.KEY_AUDIO_ACTIVE, active)
+            .apply()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_PLAY) {
-            val uri = intent.getStringExtra(EXTRA_URI)
-            if (uri != null && uri != lastUri) {
-                lastUri = uri
-                currentUri = uri
-                val parsed = uri.toUri()
-                currentDisplayName = parsed.lastPathSegment
-                player?.play(parsed)
-            } else if (uri != null) {
-                player?.resume()
+        when (intent?.action) {
+            ACTION_PLAY -> {
+                val uri = intent.getStringExtra(EXTRA_URI)
+                if (uri != null && uri != lastUri) {
+                    lastUri = uri
+                    currentUri = uri
+                    val parsed = uri.toUri()
+                    currentDisplayName = parsed.lastPathSegment
+                    player?.play(parsed)
+                } else if (uri != null) {
+                    player?.resume()
+                }
+                if (uri != null) writeAudioActive(true)
+            }
+            ACTION_STOP -> {
+                // Tear playback down exactly as onTaskRemoved does:
+                // pause the player (which drops the media notification
+                // and leaves the foreground state) then stopSelf. This
+                // is the Media3-sanctioned shutdown — onDestroy then
+                // releases the session and player.
+                lastUri = null
+                currentUri = null
+                currentDisplayName = null
+                player?.stop()
+                NativeBridge.clearAudio()
+                pauseAllPlayersAndStopSelf()
             }
         }
         return super.onStartCommand(intent, flags, startId)
@@ -113,6 +161,10 @@ class AudioPlaybackService : MediaSessionService() {
         lastUri = null
         currentUri = null
         currentDisplayName = null
+        // Clear the audio-active signal so the wallpaper can let its
+        // render loop idle again. onDestroy is the single teardown point
+        // every stop path (ACTION_STOP, onTaskRemoved) funnels through.
+        writeAudioActive(false)
         session?.release()
         session = null
         player?.release()

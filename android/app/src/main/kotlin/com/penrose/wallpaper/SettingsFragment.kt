@@ -205,19 +205,16 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 val prefs = preferenceManager.sharedPreferences ?: return@setItems
                 store.applyToPrefs(preset, prefs)
                 // Push the graph straight into the host activity's
-                // active Renderer too. applyToPrefs writes the graph
-                // JSON to filesDir for the wallpaper service to pick
-                // up on its next surfaceCreated (and via the
-                // graph-revision bump if it's running), but the
-                // visible preview wouldn't reflect the new graph
-                // until the activity tore down + relaunched without
-                // this hook. Pass the same JSON the file holds
-                // (empty graph if the preset has no graph block) so
-                // settings preview + wallpaper service stay in sync.
-                val graphJson = preset.graphJson
-                    ?: """{"nodes":[],"links":[]}"""
-                (activity as? SettingsActivity)
-                    ?.applyPresetGraph(graphJson)
+                // active Renderer too — applyToPrefs only wrote it to
+                // filesDir, which the live preview wouldn't reflect
+                // until a teardown + relaunch. Only when the preset
+                // actually ships a graph: a colours-only preset must
+                // leave the user's current graph untouched, both on
+                // disk (handled in applyToPrefs) and live here.
+                preset.graphJson?.let { graphJson ->
+                    (activity as? SettingsActivity)
+                        ?.applyPresetGraph(graphJson)
+                }
                 // Rebuild the prefs UI so SeekBarPreference /
                 // ListPreference widgets re-bind to the new pref
                 // values instead of showing stale slider positions.
@@ -235,6 +232,14 @@ class SettingsFragment : PreferenceFragmentCompat(),
         val (entriesId, valuesId) = when (family) {
             1 -> R.array.seed_p2_entries to R.array.seed_p2_values
             2 -> R.array.seed_chair_entries to R.array.seed_chair_values
+            3 -> R.array.seed_dodeca_entries to R.array.seed_dodeca_values
+            4 -> R.array.seed_pinwheel_entries to R.array.seed_pinwheel_values
+            5 -> R.array.seed_ammannbeenker_entries to R.array.seed_ammannbeenker_values
+            6 -> R.array.seed_heptagonal_entries to R.array.seed_heptagonal_values
+            7 -> R.array.seed_binary_entries to R.array.seed_binary_values
+            8 -> R.array.seed_tuebingen_entries to R.array.seed_tuebingen_values
+            9 -> R.array.seed_p1_entries to R.array.seed_p1_values
+            10 -> R.array.seed_danzer_entries to R.array.seed_danzer_values
             else -> R.array.seed_p3_entries to R.array.seed_p3_values
         }
         val entries = resources.getStringArray(entriesId)

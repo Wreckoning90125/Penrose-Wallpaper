@@ -123,6 +123,18 @@ private:
     bool createSurface(ANativeWindow* window);
     bool createSwapchain(int width, int height);
     void destroySwapchain();
+    // Tear down and rebuild the swapchain + pipelines + per-frame
+    // resources against the surface's current size. Used both by
+    // onSurfaceChanged and by drawFrame when acquire/present reports
+    // the swapchain stale (e.g. a device rotation the surface
+    // callbacks missed). Returns false if the surface is not presently
+    // usable (0-area); the caller should skip the frame.
+    bool rebuildSwapchain();
+    // Per-frame guard: if the surface's currentExtent no longer matches
+    // the swapchain (a device rotation), rebuild before drawing so the
+    // frame targets the right size instead of being stretched by the
+    // compositor.
+    void syncSwapchainToSurface();
     bool createPerFrameResources();
     void destroyPerFrameResources();
     bool createDescriptorObjects();
@@ -206,6 +218,18 @@ private:
     Settings settings_{};
     bool settingsDirty_ = true;
     LiveView view_{};
+
+    // Graph-modulated effective values. settings_ holds the pristine
+    // user baseline (sliders); the modulation graph reads that baseline
+    // each frame and the result lands here, in the values the UBO patch
+    // actually uploads. Kept separate from settings_ so the graph never
+    // feeds its own previous-frame output back as this frame's input —
+    // writing the result into settings_ made every modulated target run
+    // away (brightness pinned to white within a second).
+    float fxRippleAmount_ = 0.3f;
+    float fxRippleSpeed_  = 1.0f;
+    float fxBrightness_   = 1.0f;
+    float fxDepthAmount_  = 0.3f;
 
     // Effective generation for the currently-built geometry. Equal to
     // settings_.generation in Locked pan mode; grows past it in Generative

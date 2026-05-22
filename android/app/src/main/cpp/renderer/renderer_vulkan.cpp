@@ -397,7 +397,7 @@ bool Renderer::buildPipelines() {
     fillBinding.binding = 0;
     fillBinding.stride = sizeof(FillVertex);
     fillBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    VkVertexInputAttributeDescription fillAttrs[5]{};
+    VkVertexInputAttributeDescription fillAttrs[6]{};
     fillAttrs[0].location = 0; fillAttrs[0].binding = 0;
     fillAttrs[0].format   = VK_FORMAT_R32G32_SFLOAT;
     fillAttrs[0].offset   = offsetof(FillVertex, x);
@@ -413,12 +413,15 @@ bool Renderer::buildPipelines() {
     fillAttrs[4].location = 4; fillAttrs[4].binding = 0;
     fillAttrs[4].format   = VK_FORMAT_R32G32B32_SFLOAT;
     fillAttrs[4].offset   = offsetof(FillVertex, bx);
+    fillAttrs[5].location = 5; fillAttrs[5].binding = 0;
+    fillAttrs[5].format   = VK_FORMAT_R32G32B32A32_SFLOAT;
+    fillAttrs[5].offset   = offsetof(FillVertex, mtype);
 
     VkPipelineVertexInputStateCreateInfo fillVi{};
     fillVi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     fillVi.vertexBindingDescriptionCount = 1;
     fillVi.pVertexBindingDescriptions = &fillBinding;
-    fillVi.vertexAttributeDescriptionCount = 5;
+    fillVi.vertexAttributeDescriptionCount = 6;
     fillVi.pVertexAttributeDescriptions = fillAttrs;
 
     VkPipelineInputAssemblyStateCreateInfo triIA{};

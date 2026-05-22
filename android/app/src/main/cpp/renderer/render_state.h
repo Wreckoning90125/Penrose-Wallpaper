@@ -22,6 +22,7 @@ namespace penrose {
 //   location 2: vec2  inCenter  (tile centroid)
 //   location 3: float inDepth   (parallax depth, [-1, +1])
 //   location 4: vec3  inBary    (edge-distance basis — see buildGeometry)
+//   location 5: vec4  inTileMat (per-tile material identity — see buildGeometry)
 //
 // inBary is a per-triangle barycentric basis (vertex k → unit component k).
 // The fragment shader takes min(bary) as the distance to the nearest tile
@@ -29,12 +30,20 @@ namespace penrose {
 // diagonals that are interior to a tile (fan splits, centroid spokes) are
 // neutralised by pinning their component to 1 at every vertex so the bevel
 // never creases along a seam that is not a real tile edge.
+//
+// inTileMat carries per-tile identity, constant across the tile's vertices:
+//   x — type, normalised to [0,1] over the family's distinct tile kinds
+//   y,z — orientation, the unit (cos,sin) of the family's classifier edge
+//   w — centroid distance from the tiling origin (model space)
+// The fragment shader keys physical channels off these: metalness off type,
+// anisotropy off orientation, iridescence thickness off the radius.
 struct FillVertex {
     float    x, y;
     uint32_t colorIdx;
     float    cx, cy;
     float    depth;
     float    bx, by, bz;
+    float    mtype, mox, moy, mring;
 };
 
 // Vertex-shader-expanded border quad. Each unique edge emits four

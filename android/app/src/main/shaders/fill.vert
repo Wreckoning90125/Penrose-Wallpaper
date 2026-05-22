@@ -5,6 +5,7 @@ layout(location = 1) in uint inColorIdx;
 layout(location = 2) in vec2 inCenter;
 layout(location = 3) in float inDepth;
 layout(location = 4) in vec3 inBary;
+layout(location = 5) in vec4 inTileMat;
 
 layout(push_constant) uniform PC {
     vec4 view0;
@@ -28,6 +29,7 @@ layout(location = 1) flat out float vRipple;
 layout(location = 2)      out float vDepth;
 layout(location = 3)      out vec3 vBary;
 layout(location = 4)      out vec2 vWaveGrad;
+layout(location = 5) flat out vec4 vTileMat;
 
 const float TWO_PI = 6.2831853072;
 
@@ -74,6 +76,7 @@ void main() {
     vColorIdx = inColorIdx;
     vDepth = inDepth;
     vBary = inBary;
+    vTileMat = inTileMat;
 
     float amp = ubo.anim.y;
     float waveSym = ubo.anim.z;

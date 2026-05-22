@@ -114,6 +114,17 @@ bool Renderer::buildGeometry() {
     std::vector<FillVertex> fills;
     fills.reserve(tiles.size() * 6);
 
+    // One push site for the fill mesh — keeps the per-branch emit loops from
+    // spelling out the full 13-float vertex. bary3 is the vertex's row of the
+    // edge-distance basis; mat4 is the per-tile material identity, shared by
+    // all of a tile's vertices.
+    auto pushFill = [&fills](float x, float y, uint32_t idx, float cx, float cy,
+                             float depth, const float* bary3, const float* mat4) {
+        fills.push_back(FillVertex{ x, y, idx, cx, cy, depth,
+                                    bary3[0], bary3[1], bary3[2],
+                                    mat4[0], mat4[1], mat4[2], mat4[3] });
+    };
+
     float minX =  1e9f, minY =  1e9f;
     float maxX = -1e9f, maxY = -1e9f;
 
@@ -133,6 +144,22 @@ bool Renderer::buildGeometry() {
         // for a P1 tile, so every family but the flat Chair reads as 3-D.
         const FamilyInfo& fi = familyInfo(settings_.family);
         const float dsign = (t.type == 0) ? +1.0f : -1.0f;
+
+        // Per-tile material identity (location 5, see render_state.h):
+        // type normalised over the family's distinct kinds, the unit
+        // direction of the classifier edge as orientation, and the
+        // centroid radius. Shared by all of this tile's fill vertices.
+        const ClassSpec& cs = fi.cls;
+        const float typeNorm = (cs.typeBuckets > 1)
+            ? static_cast<float>(t.type) / static_cast<float>(cs.typeBuckets - 1)
+            : 0.0f;
+        const float odx  = t.x[cs.angB] - t.x[cs.angA];
+        const float ody  = t.y[cs.angB] - t.y[cs.angA];
+        const float olen = std::sqrt(odx * odx + ody * ody);
+        const float ocos = (olen > 1e-6f) ? odx / olen : 1.0f;
+        const float osin = (olen > 1e-6f) ? ody / olen : 0.0f;
+        const float mat[4] = { typeNorm, ocos, osin, std::sqrt(cx * cx + cy * cy) };
+
         if (vc == 3) {
             // Triangle tiles: one vertex carries the bulge, the other two
             // sit at the midline. For the Penrose rhomb halves and the
@@ -142,8 +169,7 @@ bool Renderer::buildGeometry() {
             if (fi.depthParallax) depths[fi.depthVertex] = dsign;
             const Bary3 bary = computeBary(3, 0, 1, 2);
             for (int v = 0; v < 3; ++v) {
-                fills.push_back(FillVertex{ t.x[v], t.y[v], paletteIdx, cx, cy, depths[v],
-                                            bary.v[v][0], bary.v[v][1], bary.v[v][2] });
+                pushFill(t.x[v], t.y[v], paletteIdx, cx, cy, depths[v], bary.v[v], mat);
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
                 minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
             }
@@ -157,12 +183,9 @@ bool Renderer::buildGeometry() {
                 const int w = (v + 1) % vc;
                 // Corners: centroid (-1), polygon vertex v, polygon vertex w.
                 const Bary3 bary = computeBary(vc, -1, v, w);
-                fills.push_back(FillVertex{ cx,     cy,     paletteIdx, cx, cy, cd,
-                                            bary.v[0][0], bary.v[0][1], bary.v[0][2] });
-                fills.push_back(FillVertex{ t.x[v], t.y[v], paletteIdx, cx, cy, 0.0f,
-                                            bary.v[1][0], bary.v[1][1], bary.v[1][2] });
-                fills.push_back(FillVertex{ t.x[w], t.y[w], paletteIdx, cx, cy, 0.0f,
-                                            bary.v[2][0], bary.v[2][1], bary.v[2][2] });
+                pushFill(cx,     cy,     paletteIdx, cx, cy, cd,   bary.v[0], mat);
+                pushFill(t.x[v], t.y[v], paletteIdx, cx, cy, 0.0f, bary.v[1], mat);
+                pushFill(t.x[w], t.y[w], paletteIdx, cx, cy, 0.0f, bary.v[2], mat);
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
                 minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
             }
@@ -183,12 +206,9 @@ bool Renderer::buildGeometry() {
             for (int v = 1; v + 1 < vc; ++v) {
                 // Corners: polygon vertices 0, v, v+1.
                 const Bary3 bary = computeBary(vc, 0, v, v + 1);
-                fills.push_back(FillVertex{ t.x[0],     t.y[0],     paletteIdx, cx, cy, depth[0],
-                                            bary.v[0][0], bary.v[0][1], bary.v[0][2] });
-                fills.push_back(FillVertex{ t.x[v],     t.y[v],     paletteIdx, cx, cy, depth[v],
-                                            bary.v[1][0], bary.v[1][1], bary.v[1][2] });
-                fills.push_back(FillVertex{ t.x[v + 1], t.y[v + 1], paletteIdx, cx, cy, depth[v + 1],
-                                            bary.v[2][0], bary.v[2][1], bary.v[2][2] });
+                pushFill(t.x[0],     t.y[0],     paletteIdx, cx, cy, depth[0],     bary.v[0], mat);
+                pushFill(t.x[v],     t.y[v],     paletteIdx, cx, cy, depth[v],     bary.v[1], mat);
+                pushFill(t.x[v + 1], t.y[v + 1], paletteIdx, cx, cy, depth[v + 1], bary.v[2], mat);
             }
             for (int v = 0; v < vc; ++v) {
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);

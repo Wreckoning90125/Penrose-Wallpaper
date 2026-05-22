@@ -22,8 +22,8 @@ architecture and drop the slider farm — see §4.
 | Phase | State | Commit |
 |-------|-------|--------|
 | A — edge-distance attribute, bevel+wave normal, base BRDF | **done** | `50c7599`, `dba42ef` |
-| B — material channels from the tiling's own fields | todo | — |
-| C — sheen / clearcoat / thin-film iridescence lobes | todo | — |
+| B — material channels from the tiling's own fields | **in progress** | `inTileMat` + roughness/metalness/emissive done; bulge-normal + UBO migration remain |
+| C — sheen / clearcoat / iridescence / anisotropy lobes | todo | — |
 | D — key + fill + ambient lights, light tint, tonemap | todo | — |
 | E — HDR offscreen + bloom | todo | — |
 | F — border merge + curated audio-graph wiring | todo | — |
@@ -216,11 +216,12 @@ Everything else — which channel keys to which field, the modulation amounts �
 is fixed in the shader. The material is expressive because the *tiling* and the
 *audio* are expressive, not because the user tunes 50 numbers.
 
-**Storage.** Phase B moves the `X_base` constants and the few sliders into
-`PaletteUbo` (new `vec4` rows, std140, all vec4-aligned — see Risks for the
-shared-include mitigation). Per-tile `type` / `orientation` / `ring` reach the
-shader as one new `vec4` vertex attribute, `inTileMat`, written by
-`buildGeometry()` from the `classify()` result it already computes.
+**Storage.** Per-tile `type` / `orientation` / `ring` reach the shader as one
+`vec4` vertex attribute, `inTileMat`, written by `buildGeometry()` (done in
+Phase B). The `X_base` constants stay `fill.frag` `const`s until the Material
+preset picker needs to drive them; that step appends them as `PaletteUbo`
+`vec4` rows (std140, all vec4-aligned — see Risks for the shared-include
+mitigation). Nothing is plumbed through the UBO while it is static.
 
 ---
 
@@ -231,22 +232,52 @@ verifiable step; phase N renders correctly on its own.
 
 ### Phase B — material channels from the tiling's own fields
 
-- **Complete the normal.** Fold the parallax bulge into the shading normal:
-  `vDepth` is linear across a triangle, so `dFdx(vDepth)/dFdy(vDepth)` is its
-  exact constant gradient. Add it to `slope` in `fill.frag` and **retire the
-  `depthMod` albedo fake** — the bulge becomes real shading relief, not a
-  brightness trick (avoids double-counting).
-- **`inTileMat` attribute.** Add `vec4 inTileMat` to `FillVertex` =
-  `(typeNorm, orientCos, orientSin, ringNorm)`, written per tile in
-  `buildGeometry()` from `classify()`. Grow `fillAttrs` 5→6.
-- **`PaletteUbo` material block.** Append `material0/1/2` `vec4` rows holding
-  the `X_base` constants + mod amounts; `updatePaletteUbo()` writes them from
-  the active preset.
-- **`fill.frag` channels.** Implement the §4 table: `roughness`, `metalness`,
-  `emissive`, `sheenIntensity` as `base + mod·f(field)`. Feed `roughness` into
-  the existing GGX lobe; add the `emissive` term to the output.
+- ✓ **`inTileMat` attribute** (`50c7599`+ — committed). `vec4 inTileMat` on
+  `FillVertex` = `(typeNorm, orientCos, orientSin, ring)`, written per tile in
+  `buildGeometry()` from the tile `type` and the `ClassSpec` classifier edge;
+  `fillAttrs` 5→6.
+- ✓ **`fill.frag` channels** (committed). `roughness = base + mod·seam` (seam =
+  `1 − smoothstep` of `edgeDist`), `metalness = base + mod·inTileMat.x`, and an
+  `emissive` term from the ripple crest. The ripple no longer modulates albedo;
+  it is carried by the normal (Phase A) and this emissive term.
+- **Complete the normal** (remaining). Fold the parallax bulge into the shading
+  normal and retire the `depthMod` albedo fake. The bulge gradient is screen-
+  space-zoom-dependent like the bevel; it needs the same normalised-direction
+  treatment, or a per-tile bulge-magnitude term — a deliberate small step, not
+  the half-baked `dFdx(vDepth)` version.
+- **UBO migration** (remaining, rides with the Material preset picker). The
+  `X_base` constants are `fill.frag` `const`s today; they move into `PaletteUbo`
+  when the preset picker exists to drive them — there is no value plumbing them
+  through the UBO while they are static.
 - **Done when:** seam valleys read rougher; alternating tile types read as
-  different finishes; ripple crests glow; the bulge tilts light, not brightness.
+  different metals; ripple crests glow. *(Channels done; normal completion and
+  UBO migration outstanding.)*
+
+### Phase C — sheen, clearcoat, iridescence, anisotropy
+
+Hand-written lobes added to `fill.frag`, summed with the Phase-A GGX. Reference
+implementations are the glTF Sample Viewer GLSL — port, do not re-derive (the
+exact functions are checked against the live sources):
+
+- **Sheen** — `KHR_materials_sheen`: Estevez–Kulla "Charlie" distribution
+  `D_Charlie` + `V_Sheen` (with its `lambdaSheen` numeric fit, ~25 lines total).
+  Sheen colour is an OKLCH value from the preset; intensity keys to `edgeDist`.
+- **Clearcoat** — `KHR_materials_clearcoat`: a second `D_GGX`/`V_GGX` lobe at
+  fixed F0 0.04 with its own roughness, layered over the base lobes;
+  energy-conserve by attenuating the base by `(1 − Fc)`.
+- **Anisotropy** — `D_GGX_anisotropic` + `V_GGX_anisotropic` (the `at`/`ab`
+  split-roughness form). The tangent frame is `inTileMat.yz` — the per-tile
+  orientation already in the attribute — so each tile gets brushed-metal
+  streaks aligned to its own classifier edge. A single continuous field cannot
+  do this; the tiling can.
+- **Iridescence** — `KHR_materials_iridescence` (Belcour & Barla 2017): the
+  thin-film term `evalIridescence(outsideIOR, eta2, cosθ1, thickness, baseF0)`
+  with its `evalSensitivity` spectral fit (~80 lines). Film thickness keys to
+  `inTileMat.w` (centroid radius) offset by ripple/audio so the slick shifts
+  across the tiling and with the music.
+- **Done when:** the `Pearl` and `Oil-slick` presets read as iridescent; sheen
+  catches a velvet rim on grazing tiles; clearcoat adds a wet gloss layer;
+  brushed-metal presets streak along each tile's orientation.
 
 ### Phase C — sheen, clearcoat, thin-film iridescence
 

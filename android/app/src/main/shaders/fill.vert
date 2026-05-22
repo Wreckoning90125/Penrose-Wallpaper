@@ -4,6 +4,7 @@ layout(location = 0) in vec2 inPos;
 layout(location = 1) in uint inColorIdx;
 layout(location = 2) in vec2 inCenter;
 layout(location = 3) in float inDepth;
+layout(location = 4) in vec3 inBary;
 
 layout(push_constant) uniform PC {
     vec4 view0;
@@ -25,6 +26,7 @@ layout(set = 0, binding = 0, std140) uniform Palette {
 layout(location = 0) flat out uint vColorIdx;
 layout(location = 1) flat out float vRipple;
 layout(location = 2)      out float vDepth;
+layout(location = 3)      out vec3 vBary;
 
 const float TWO_PI = 6.2831853072;
 
@@ -70,6 +72,7 @@ vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float symF) {
 void main() {
     vColorIdx = inColorIdx;
     vDepth = inDepth;
+    vBary = inBary;
 
     float amp = ubo.anim.y;
     float waveSym = ubo.anim.z;

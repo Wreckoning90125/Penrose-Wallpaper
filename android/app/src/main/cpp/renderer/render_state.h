@@ -21,11 +21,20 @@ namespace penrose {
 //   location 1: uint  inColorIdx
 //   location 2: vec2  inCenter  (tile centroid)
 //   location 3: float inDepth   (parallax depth, [-1, +1])
+//   location 4: vec3  inBary    (edge-distance basis — see buildGeometry)
+//
+// inBary is a per-triangle barycentric basis (vertex k → unit component k).
+// The fragment shader takes min(bary) as the distance to the nearest tile
+// boundary edge and lifts a bevel height field from it. Triangulation
+// diagonals that are interior to a tile (fan splits, centroid spokes) are
+// neutralised by pinning their component to 1 at every vertex so the bevel
+// never creases along a seam that is not a real tile edge.
 struct FillVertex {
     float    x, y;
     uint32_t colorIdx;
     float    cx, cy;
     float    depth;
+    float    bx, by, bz;
 };
 
 // Vertex-shader-expanded border quad. Each unique edge emits four

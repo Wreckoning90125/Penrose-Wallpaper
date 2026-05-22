@@ -53,6 +53,37 @@ struct EdgeKeyHash {
     }
 };
 
+// Edge-distance barycentric basis for one emitted triangle. p0/p1/p2 are
+// the tile-polygon vertex indices of the triangle's three corners, or -1
+// for the centroid of a centroid-fan. A triangle edge is a real tile
+// boundary only when both its endpoints are polygon vertices adjacent on
+// the tile perimeter; interior fan / centroid-spoke edges get their
+// barycentric component pinned to 1 at every vertex so the fragment
+// shader's min(bary) never dips to 0 along a seam that is not a tile edge.
+struct Bary3 { float v[3][3]; };
+
+inline Bary3 computeBary(int vcount, int p0, int p1, int p2) {
+    Bary3 b;
+    for (int v = 0; v < 3; ++v)
+        for (int c = 0; c < 3; ++c)
+            b.v[v][c] = (v == c) ? 1.0f : 0.0f;
+    const int p[3] = { p0, p1, p2 };
+    for (int k = 0; k < 3; ++k) {
+        // The edge opposite vertex k joins the other two corners.
+        const int a = p[(k + 1) % 3];
+        const int c = p[(k + 2) % 3];
+        bool boundary = false;
+        if (a >= 0 && c >= 0) {
+            int d = a - c;
+            if (d < 0) d = -d;
+            boundary = (d == 1 || d == vcount - 1);
+        }
+        if (!boundary)
+            for (int v = 0; v < 3; ++v) b.v[v][k] = 1.0f;
+    }
+    return b;
+}
+
 inline bool hideSeam(Family fam, EdgeKind k1, EdgeKind k2) {
     switch (familyInfo(fam).hideSeamMode) {
         case 1:  return k1 == EdgeKind::Base && k2 == EdgeKind::Base;  // P3
@@ -109,8 +140,10 @@ bool Renderer::buildGeometry() {
             // the apex, vertex 0 — fi.depthVertex selects it.
             float depths[3] = { 0.0f, 0.0f, 0.0f };
             if (fi.depthParallax) depths[fi.depthVertex] = dsign;
+            const Bary3 bary = computeBary(3, 0, 1, 2);
             for (int v = 0; v < 3; ++v) {
-                fills.push_back(FillVertex{ t.x[v], t.y[v], paletteIdx, cx, cy, depths[v] });
+                fills.push_back(FillVertex{ t.x[v], t.y[v], paletteIdx, cx, cy, depths[v],
+                                            bary.v[v][0], bary.v[v][1], bary.v[v][2] });
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
                 minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
             }
@@ -122,9 +155,14 @@ bool Renderer::buildGeometry() {
             const float cd = fi.depthParallax ? dsign : 0.0f;
             for (int v = 0; v < vc; ++v) {
                 const int w = (v + 1) % vc;
-                fills.push_back(FillVertex{ cx,     cy,     paletteIdx, cx, cy, cd });
-                fills.push_back(FillVertex{ t.x[v], t.y[v], paletteIdx, cx, cy, 0.0f });
-                fills.push_back(FillVertex{ t.x[w], t.y[w], paletteIdx, cx, cy, 0.0f });
+                // Corners: centroid (-1), polygon vertex v, polygon vertex w.
+                const Bary3 bary = computeBary(vc, -1, v, w);
+                fills.push_back(FillVertex{ cx,     cy,     paletteIdx, cx, cy, cd,
+                                            bary.v[0][0], bary.v[0][1], bary.v[0][2] });
+                fills.push_back(FillVertex{ t.x[v], t.y[v], paletteIdx, cx, cy, 0.0f,
+                                            bary.v[1][0], bary.v[1][1], bary.v[1][2] });
+                fills.push_back(FillVertex{ t.x[w], t.y[w], paletteIdx, cx, cy, 0.0f,
+                                            bary.v[2][0], bary.v[2][1], bary.v[2][2] });
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
                 minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
             }
@@ -143,9 +181,14 @@ bool Renderer::buildGeometry() {
                     depth[1] = depth[3] = dsign;
             }
             for (int v = 1; v + 1 < vc; ++v) {
-                fills.push_back(FillVertex{ t.x[0],     t.y[0],     paletteIdx, cx, cy, depth[0] });
-                fills.push_back(FillVertex{ t.x[v],     t.y[v],     paletteIdx, cx, cy, depth[v] });
-                fills.push_back(FillVertex{ t.x[v + 1], t.y[v + 1], paletteIdx, cx, cy, depth[v + 1] });
+                // Corners: polygon vertices 0, v, v+1.
+                const Bary3 bary = computeBary(vc, 0, v, v + 1);
+                fills.push_back(FillVertex{ t.x[0],     t.y[0],     paletteIdx, cx, cy, depth[0],
+                                            bary.v[0][0], bary.v[0][1], bary.v[0][2] });
+                fills.push_back(FillVertex{ t.x[v],     t.y[v],     paletteIdx, cx, cy, depth[v],
+                                            bary.v[1][0], bary.v[1][1], bary.v[1][2] });
+                fills.push_back(FillVertex{ t.x[v + 1], t.y[v + 1], paletteIdx, cx, cy, depth[v + 1],
+                                            bary.v[2][0], bary.v[2][1], bary.v[2][2] });
             }
             for (int v = 0; v < vc; ++v) {
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);

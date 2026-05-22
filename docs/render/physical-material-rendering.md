@@ -23,7 +23,7 @@ architecture and drop the slider farm — see §4.
 |-------|-------|--------|
 | A — edge-distance attribute, bevel+wave normal, base BRDF | **done** | `50c7599`, `dba42ef` |
 | B — per-tile material identity, field-driven channels, bulge normal | **done** | `73ba5aa` + bulge commit |
-| C — sheen / clearcoat / iridescence / anisotropy lobes | todo | — |
+| C — sheen / clearcoat / iridescence / anisotropy lobes | **done** | `d2e43ea`, `7933d4d` |
 | D — key + fill + ambient lights, light tint, tonemap | todo | — |
 | E — HDR offscreen + bloom | todo | — |
 | F — border merge + curated audio-graph wiring | todo | — |
@@ -251,51 +251,28 @@ The material `X_base` constants live as `fill.frag` `const`s. Phase D moves
 them into `PaletteUbo` alongside the light uniforms it adds there; the Phase F
 Material preset picker then writes those rows.
 
-### Phase C — sheen, clearcoat, iridescence, anisotropy
+### Phase C — sheen, clearcoat, iridescence, anisotropy — done
 
-Hand-written lobes added to `fill.frag`, summed with the Phase-A GGX. Reference
-implementations are the glTF Sample Viewer GLSL — port, do not re-derive (the
-exact functions are checked against the live sources):
+Four BRDF lobes hand-written in `fill.frag`, ported from the glTF Sample
+Viewer GLSL (commits `d2e43ea`, `7933d4d`):
 
-- **Sheen** — `KHR_materials_sheen`: Estevez–Kulla "Charlie" distribution
-  `D_Charlie` + `V_Sheen` (with its `lambdaSheen` numeric fit, ~25 lines total).
-  Sheen colour is an OKLCH value from the preset; intensity keys to `edgeDist`.
-- **Clearcoat** — `KHR_materials_clearcoat`: a second `D_GGX`/`V_GGX` lobe at
-  fixed F0 0.04 with its own roughness, layered over the base lobes;
-  energy-conserve by attenuating the base by `(1 − Fc)`.
-- **Anisotropy** — `D_GGX_anisotropic` + `V_GGX_anisotropic` (the `at`/`ab`
-  split-roughness form). The tangent frame is `inTileMat.yz` — the per-tile
-  orientation already in the attribute — so each tile gets brushed-metal
-  streaks aligned to its own classifier edge. A single continuous field cannot
-  do this; the tiling can.
-- **Iridescence** — `KHR_materials_iridescence` (Belcour & Barla 2017): the
-  thin-film term `evalIridescence(outsideIOR, eta2, cosθ1, thickness, baseF0)`
-  with its `evalSensitivity` spectral fit (~80 lines). Film thickness keys to
-  `inTileMat.w` (centroid radius) offset by ripple/audio so the slick shifts
-  across the tiling and with the music.
-- **Done when:** the `Pearl` and `Oil-slick` presets read as iridescent; sheen
-  catches a velvet rim on grazing tiles; clearcoat adds a wet gloss layer;
-  brushed-metal presets streak along each tile's orientation.
+- **Sheen.** Estevez–Kulla "Charlie" distribution with Ashikhmin visibility —
+  a retroreflective velvet lobe that peaks at grazing angles, so the beveled
+  chamfers gain a soft fabric rim. Tinted by `kSheenColor`, independent of
+  metalness.
+- **Clearcoat.** A second tight GGX lobe at the fixed dielectric F0 0.04. Its
+  Fresnel attenuates the base lobes by `(1 − clearcoat·Fc)` to conserve energy.
+- **Anisotropy.** The base GGX is replaced by the anisotropic `D`/`V` pair; the
+  tangent frame is the per-tile orientation (`inTileMat.yz`) re-orthogonalised
+  against the shading normal, so each tile streaks its highlight along its own
+  classifier edge. `at == ab` is exact isotropy, so the term degrades cleanly.
+- **Iridescence.** A thin-film interference Fresnel (Belcour & Barla 2017)
+  blended over the plain Schlick Fresnel. Film thickness sweeps with the tile's
+  distance from the origin (`inTileMat.w`) and the ripple phase, so an
+  oil-slick drifts across the tiling and pulses with the wave.
 
-### Phase C — sheen, clearcoat, thin-film iridescence
-
-Hand-written lobes added to `fill.frag`, summed with the Phase-A GGX. Reference
-implementations are the glTF Sample Viewer GLSL — port, do not re-derive:
-
-- **Sheen** — `KHR_materials_sheen`: Estevez–Kulla "Charlie" sheen distribution
-  `D_Charlie` + `V_Ashikhmin`/`V_Charlie` visibility (~15 lines). Sheen colour
-  is an OKLCH value from the preset; intensity keys to `edgeDist` (§4).
-- **Clearcoat** — `KHR_materials_clearcoat`: a second GGX lobe at fixed F0 0.04,
-  its own roughness, layered over the base lobes; energy-conserve by attenuating
-  the base by `(1 − Fc)`.
-- **Iridescence** — `KHR_materials_iridescence` (Belcour & Barla 2017, "A
-  Practical Extension to Microfacet Theory for the Modeling of Varying
-  Iridescence"): the thin-film term `evalIridescence(outIOR, eta2, cosθ1,
-  thickness, baseF0)` with its `evalSensitivity` spectral fit (~80 lines). Film
-  thickness keys to the per-tile `ring` field offset by ripple/audio so the
-  slick shifts across the tiling and with the music.
-- **Done when:** the `Pearl` and `Oil-slick` presets read as iridescent; sheen
-  catches a velvet rim on grazing tiles; clearcoat adds a wet gloss layer.
+The lobe `X_base` values are `fill.frag` `const`s; Phase D moves the material
+and light block into `PaletteUbo`, and the Phase F preset picker drives it.
 
 ### Phase D — lights + tonemap
 

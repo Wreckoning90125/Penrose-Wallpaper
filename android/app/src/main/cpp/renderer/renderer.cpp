@@ -453,6 +453,14 @@ void Renderer::drawFrame() {
         fxMat.iridescence   = fxMatIridescence_;
         fxMat.emissive      = fxMatEmissive_;
         fxMat.bevelStrength = fxMatRelief_;
+        // Per-preset characteristic colours — sheen tint and iridescent
+        // film thickness range. Not graph-modulated (no Target nodes
+        // for them today), so they go straight from settings_.
+        fxMat.sheenColor[0] = settings_.matSheenColorR;
+        fxMat.sheenColor[1] = settings_.matSheenColorG;
+        fxMat.sheenColor[2] = settings_.matSheenColorB;
+        fxMat.iridThickMin  = settings_.matIridThickMin;
+        fxMat.iridThickMax  = settings_.matIridThickMax;
         applyLightControls(fxMat, fxLightAngle_, fxLightElevation_,
                            fxLightIntensity_, fxLightWarmth_, fxLightAmbient_);
         writeMaterialRows(

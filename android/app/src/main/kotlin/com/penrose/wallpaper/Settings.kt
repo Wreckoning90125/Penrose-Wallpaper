@@ -49,6 +49,14 @@ internal class Settings(
     val lightIntensity: Float,
     val lightWarmth: Float,
     val lightAmbient: Float,
+    // Per-preset characteristic colours. No slider UI today — these are
+    // seeded by the Material preset picker so each preset has its own
+    // sheen tint and iridescence band; defaults match MaterialParams.
+    val matSheenColorR: Float,
+    val matSheenColorG: Float,
+    val matSheenColorB: Float,
+    val matIridThickMin: Float,
+    val matIridThickMax: Float,
     val customOklch: FloatArray,
 ) {
     fun toNative(): Pair<IntArray, FloatArray> {
@@ -64,6 +72,8 @@ internal class Settings(
             matRoughness, matMetalness, matSheen, matClearcoat,
             matAnisotropy, matIridescence, matEmissive, matRelief,
             lightAngle, lightElevation, lightIntensity, lightWarmth, lightAmbient,
+            matSheenColorR, matSheenColorG, matSheenColorB,
+            matIridThickMin, matIridThickMax,
         )
         val floats = FloatArray(baseFloats.size + customOklch.size)
         baseFloats.copyInto(floats)
@@ -122,6 +132,15 @@ internal class Settings(
         const val KEY_LIGHT_INTENSITY = "light_intensity"
         const val KEY_LIGHT_WARMTH    = "light_warmth"
         const val KEY_LIGHT_AMBIENT   = "light_ambient"
+
+        // Per-preset characteristic colours (sheen tint + iridescent
+        // thin-film range). Set by the Material preset picker only;
+        // todo.md tracks adding picker / slider UI for direct tuning.
+        const val KEY_MAT_SHEEN_COLOR_R  = "mat_sheen_color_r"
+        const val KEY_MAT_SHEEN_COLOR_G  = "mat_sheen_color_g"
+        const val KEY_MAT_SHEEN_COLOR_B  = "mat_sheen_color_b"
+        const val KEY_MAT_IRID_THICK_MIN = "mat_irid_thick_min"
+        const val KEY_MAT_IRID_THICK_MAX = "mat_irid_thick_max"
 
         // Bumped by PresetStore.applyToPrefs whenever a preset writes a
         // fresh modulation_graph.json, and by the node editor when it
@@ -228,6 +247,11 @@ internal class Settings(
                 lightIntensity = safeInt(prefs, KEY_LIGHT_INTENSITY, 100) / 100f,
                 lightWarmth    = safeInt(prefs, KEY_LIGHT_WARMTH, 50) / 100f,
                 lightAmbient   = safeInt(prefs, KEY_LIGHT_AMBIENT, 22) / 100f,
+                matSheenColorR  = safeInt(prefs, KEY_MAT_SHEEN_COLOR_R, 100) / 100f,
+                matSheenColorG  = safeInt(prefs, KEY_MAT_SHEEN_COLOR_G, 97)  / 100f,
+                matSheenColorB  = safeInt(prefs, KEY_MAT_SHEEN_COLOR_B, 92)  / 100f,
+                matIridThickMin = safeInt(prefs, KEY_MAT_IRID_THICK_MIN, 280).toFloat(),
+                matIridThickMax = safeInt(prefs, KEY_MAT_IRID_THICK_MAX, 560).toFloat(),
                 customOklch  = custom,
             )
         }

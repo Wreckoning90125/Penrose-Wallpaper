@@ -61,6 +61,15 @@ forward-looking list — no duplication of "done" across files.
   generation depth; the home-screen page offset feeds the same
   translation. Detail: `docs/tilings/ROADMAP.md`.
 
+- **Sheen / iridescence pickers in the Material screen.** Per-preset
+  characteristic-colour overrides (sheen tint RGB, thin-film thickness
+  range) plumb through `Settings` → `MaterialParams` today but are
+  only seeded by the preset picker — no slider / colour-picker UI for
+  direct tuning. Add an HSV picker for sheen colour and a min/max
+  slider pair (100..800 nm) for the iridescent film range under the
+  Material screen, keyed off the same `Settings.KEY_MAT_*` constants
+  the presets already write.
+
 ## Docs
 
 - **Bibliography refactor.** Convert each per-doc `### References`

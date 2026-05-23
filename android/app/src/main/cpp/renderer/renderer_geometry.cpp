@@ -448,6 +448,11 @@ void Renderer::updatePaletteUbo() {
     m.iridescence   = settings_.matIridescence;
     m.emissive      = settings_.matEmissive;
     m.bevelStrength = settings_.matRelief;
+    m.sheenColor[0] = settings_.matSheenColorR;
+    m.sheenColor[1] = settings_.matSheenColorG;
+    m.sheenColor[2] = settings_.matSheenColorB;
+    m.iridThickMin  = settings_.matIridThickMin;
+    m.iridThickMax  = settings_.matIridThickMax;
     applyLightControls(m, settings_.lightAngle, settings_.lightElevation,
                        settings_.lightIntensity, settings_.lightWarmth,
                        settings_.lightAmbient);

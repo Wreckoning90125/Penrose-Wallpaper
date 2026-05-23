@@ -88,6 +88,16 @@ struct Settings {
     float  lightWarmth    = 0.50f;   // 0 cool .. 0.5 neutral .. 1 warm
     float  lightAmbient   = 0.22f;   // flat ambient level
 
+    // Per-preset material colour overrides. No slider UI today — these
+    // are seeded by the Material preset picker so each preset has its
+    // own characteristic sheen tint and iridescence band. Defaults
+    // match MaterialParams (render_state.h).
+    float  matSheenColorR  = 1.00f;
+    float  matSheenColorG  = 0.97f;
+    float  matSheenColorB  = 0.92f;
+    float  matIridThickMin = 280.0f;  // nm — Belcour-Barla thin-film range
+    float  matIridThickMax = 560.0f;
+
     // Custom palette — used when `preset == Preset::Custom`. 10 OKLCH
     // triples; only the first `colorCount` are actually consumed.
     Oklch  customOklch[kMaxColors] = {

@@ -2,13 +2,18 @@
 """Bake material-preset thumbnails as PNG drawables.
 
 Mirrors `MaterialPreset.kt`'s `bundle()` calls (six built-in presets) and
-renders each one to a 192×192 RGBA PNG of a beveled circular tile chip,
+renders each one to a 192×192 RGBA PNG of a hemispherical material chip,
 lit by the preset's own key + fill + ambient rig. The BRDF here is a
 stripped port of `fill.frag` — Lambert + GGX (anisotropic when relevant)
-+ Charlie sheen + clearcoat + a thin-film-ish iridescence + emissive —
-not pixel-identical to the on-device render but using the same lobes so
-each preset's character (matte vs glossy, metallic, pearly, oil-slick…)
-reads in the picker.
++ Charlie sheen + clearcoat + a thin-film iridescence palette + emissive
+— plus a fake environment-reflection term so metals show their F0 tint
+across the surface instead of only at a small highlight.
+
+Each preset declares its own characteristic colours: a tinted bake
+albedo (preview only — on-device, albedo comes from the palette), a
+sheen tint, and an iridescence-stop palette. The sheen tint and the
+thin-film thickness range are also written into MaterialParams on the
+on-device side so the live wallpaper picks up the same character.
 
 Outputs:  android/app/src/main/res/drawable/preset_<name>.png
 Run:      python3 tools/bake_preset_thumbnails.py
@@ -17,40 +22,118 @@ committed as static assets.
 """
 
 import math
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import List, Optional, Tuple
 
 import numpy as np
 from PIL import Image
 
-# -----------------------------------------------------------------------------
-# Presets — MUST mirror MaterialPreset.kt::bundle(). Stored here in float form
-# (sliders / 100 where applicable). Order of fields matches that file's named
-# arguments: roughness, metalness, iridescence, sheen, clearcoat, anisotropy,
-# emissive, relief, then lighting: angle (deg), elevation (deg), intensity,
-# warmth, ambient.
-# -----------------------------------------------------------------------------
-PRESETS = [
-    # name,                rough metal  irid sheen coat aniso emis relief  ang elev int  warm amb
-    ("preset_matte",         0.85, 0.00, 0.00, 0.20, 0.00, 0.00, 0.30, 0.90, 230, 55, 1.00, 0.55, 0.30),
-    ("preset_ceramic",       0.35, 0.00, 0.05, 0.25, 0.60, 0.00, 0.35, 1.10, 230, 60, 1.10, 0.52, 0.22),
-    ("preset_pearl",         0.30, 0.20, 0.90, 0.60, 0.50, 0.00, 0.40, 1.00, 220, 55, 1.00, 0.45, 0.25),
-    ("preset_brushed_metal", 0.45, 0.95, 0.10, 0.10, 0.10, 0.90, 0.25, 1.05, 235, 50, 1.20, 0.50, 0.15),
-    ("preset_lacquer",       0.15, 0.10, 0.20, 0.15, 1.00, 0.00, 0.45, 1.15, 225, 62, 1.15, 0.60, 0.18),
-    ("preset_oil_slick",     0.25, 0.60, 1.00, 0.40, 0.70, 0.30, 0.70, 1.00, 240, 48, 1.10, 0.50, 0.20),
+RGB = Tuple[float, float, float]
+
+
+@dataclass
+class Preset:
+    """One row of the preset table. Material + lighting fields mirror
+    MaterialPreset.kt::bundle() (sliders / 100 where applicable); the
+    last three are preview / on-device colour overrides."""
+    file: str
+    # MaterialParams sliders (the eight + the lighting five).
+    roughness: float; metalness: float; iridescence: float; sheen: float
+    clearcoat: float; anisotropy: float; emissive: float; relief: float
+    angle: float; elevation: float; intensity: float; warmth: float; ambient: float
+    # Bake-only neutral tint so thumbnails are visually distinct; the
+    # on-device renderer takes albedo from the palette and ignores this.
+    bake_albedo: RGB
+    # On-device + thumbnail: characteristic sheen colour for this preset.
+    sheen_color: RGB
+    # Thin-film thickness range (nm) that produces the iridescence colour
+    # via the Belcour & Barla math on-device. The thumbnail uses
+    # `irid_palette` directly (Belcour is too heavy to port for a static
+    # preview); these stops are chosen to match the band that thickness
+    # range produces on-device, so picker and wallpaper agree.
+    irid_thick_min: float
+    irid_thick_max: float
+    irid_palette: Optional[List[RGB]] = None
+
+
+PRESETS: List[Preset] = [
+    # Matte — flat, no spec, dim diffuse. Warm gray.
+    Preset(
+        "preset_matte", 0.85, 0.00, 0.00, 0.20, 0.00, 0.00, 0.30, 0.90,
+        230, 55, 1.00, 0.55, 0.30,
+        bake_albedo=(0.58, 0.55, 0.50),
+        sheen_color=(1.00, 0.97, 0.92),
+        irid_thick_min=280.0, irid_thick_max=560.0,
+    ),
+    # Ceramic — glossy clearcoat, neutral cream.
+    Preset(
+        "preset_ceramic", 0.35, 0.00, 0.05, 0.25, 0.60, 0.00, 0.35, 1.10,
+        230, 60, 1.10, 0.52, 0.22,
+        bake_albedo=(0.85, 0.81, 0.74),
+        sheen_color=(1.00, 0.96, 0.90),
+        irid_thick_min=280.0, irid_thick_max=560.0,
+    ),
+    # Pearl — cool opal: teal/violet iridescence over a near-white base.
+    # Thin film (250–400 nm) gives the teal→violet band; the palette
+    # below matches that band so the thumbnail and the on-device film
+    # agree on the character.
+    Preset(
+        "preset_pearl", 0.30, 0.20, 0.90, 0.60, 0.50, 0.00, 0.40, 1.00,
+        220, 55, 1.00, 0.45, 0.25,
+        bake_albedo=(0.86, 0.88, 0.92),
+        sheen_color=(0.96, 0.98, 1.00),
+        irid_thick_min=250.0, irid_thick_max=400.0,
+        irid_palette=[(0.92, 0.95, 0.98),   # white-blue
+                      (0.55, 0.92, 0.88),   # teal
+                      (0.78, 0.68, 0.95)],  # violet
+    ),
+    # Brushed metal — silvery, anisotropic streak.
+    Preset(
+        "preset_brushed_metal", 0.45, 0.95, 0.10, 0.10, 0.10, 0.90, 0.25, 1.05,
+        235, 50, 1.20, 0.50, 0.15,
+        bake_albedo=(0.78, 0.78, 0.80),
+        sheen_color=(1.00, 0.99, 0.95),
+        irid_thick_min=280.0, irid_thick_max=560.0,
+    ),
+    # Lacquer — deep warm red with a glossy clearcoat highlight.
+    Preset(
+        "preset_lacquer", 0.15, 0.10, 0.20, 0.15, 1.00, 0.00, 0.45, 1.15,
+        225, 62, 1.15, 0.60, 0.18,
+        bake_albedo=(0.55, 0.15, 0.18),
+        sheen_color=(1.00, 0.92, 0.82),
+        irid_thick_min=320.0, irid_thick_max=520.0,
+        irid_palette=[(0.85, 0.45, 0.30),
+                      (0.75, 0.35, 0.55),
+                      (0.45, 0.30, 0.65)],
+    ),
+    # Oil-slick — green / purple / magenta over a dark base. Wide film
+    # range (380–700 nm) drives the full visible-spectrum cycle.
+    Preset(
+        "preset_oil_slick", 0.25, 0.60, 1.00, 0.40, 0.70, 0.30, 0.70, 1.00,
+        240, 48, 1.10, 0.50, 0.20,
+        bake_albedo=(0.18, 0.20, 0.22),
+        sheen_color=(0.85, 0.95, 0.78),
+        irid_thick_min=380.0, irid_thick_max=700.0,
+        irid_palette=[(0.10, 0.70, 0.35),   # green
+                      (0.28, 0.22, 0.82),   # blue/violet
+                      (0.78, 0.30, 0.55)],  # magenta
+    ),
 ]
+
 
 W, H = 192, 192
 CHIP_R = 80          # chip radius (pixels)
-BEVEL_R = 24         # bevel falloff distance (pixels) at the chip edge
 ALPHA_AA = 1.5       # antialiased edge width (pixels)
 
-# Neutral warm-grey albedo. The on-device renderer pulls albedo from the
-# palette; a fixed colour here keeps every thumbnail comparable and lets the
-# material parameters tell the story instead of a palette choice.
-ALBEDO = np.array([0.58, 0.55, 0.50], dtype=np.float32)
-
-# Background fills the corners outside the chip — dark so the chip pops.
 BG = np.array([0.07, 0.08, 0.10], dtype=np.float32)
+SHEEN_ROUGH = 0.30   # MaterialParams default; not slider-backed today
+COAT_ROUGH = 0.10    # MaterialParams default; not slider-backed today
+
+# A slightly-warm silver F0 for full metalness; on-device, F0 is mixed
+# from the palette colour with metalness as the weight (see fill.frag),
+# but the thumbnail has no palette so a generic metallic F0 is used.
+METAL_F0 = np.array([0.95, 0.93, 0.88], dtype=np.float32)
 
 
 def apply_light_controls(angle_deg, elev_deg, intensity, warmth, ambient):
@@ -78,13 +161,11 @@ def apply_light_controls(angle_deg, elev_deg, intensity, warmth, ambient):
 def chip_normal(relief):
     """Per-pixel shading normal for a hemispherical preview chip.
 
-    Beveled-tile previews dump 80 % of the chip onto a flat plateau where
-    every pixel has N = (0,0,1) and the same highlight, so material
-    differences read only along a thin chamfer ring. A hemisphere instead
-    varies N continuously from (0,0,1) at the centre to nearly horizontal
-    at the rim — every preset's highlight paints across the whole disc.
-    `relief` scales the x/y tilt so high-relief presets read as a steeper
-    dome and matte presets read flatter, matching the on-device bevel cue.
+    A hemisphere varies N continuously from (0,0,1) at the centre to
+    nearly horizontal at the rim, so every preset's highlight + sheen
+    + iridescent band paint across the whole disc rather than landing
+    on a thin chamfer ring. `relief` scales the x/y tilt so high-relief
+    presets read as a steeper dome and matte presets read flatter.
     """
     y_idx, x_idx = np.mgrid[0:H, 0:W].astype(np.float32)
     dx = (x_idx - W * 0.5) / CHIP_R
@@ -96,17 +177,33 @@ def chip_normal(relief):
     Nz = z
     n_len = np.sqrt(Nx * Nx + Ny * Ny + Nz * Nz) + 1e-7
     N = np.stack([Nx / n_len, Ny / n_len, Nz / n_len], axis=-1)
-    # r in pixels — used by the AA band at the chip edge and by the
-    # centred emissive bump.
     return N, np.sqrt(r2) * CHIP_R
+
+
+def iridescent_color(N, V, palette):
+    """Per-preset iridescence: cyclic interpolation between palette
+    stops keyed off the view-angle (NdotV). Stands in for the Belcour &
+    Barla thin-film evaluation the on-device shader does — too heavy to
+    port for a static preview, so each preset declares the colour band
+    that its thickness range produces and the thumbnail interpolates it.
+    """
+    if palette is None:
+        return None
+    NdotV = np.clip(np.einsum("...i,i->...", N, V), 0.0, 1.0)
+    phase = (1.0 - NdotV) * 3.0           # ~3 colour bands across the disc
+    seg = np.floor(phase).astype(int) % len(palette)
+    nxt = (seg + 1) % len(palette)
+    t = (phase - np.floor(phase))[..., None]
+    stops = np.array(palette, dtype=np.float32)
+    return stops[seg] * (1.0 - t) + stops[nxt] * t
 
 
 def shade_light(N, V, L, light_color, intensity,
                 roughness, metalness, anisotropy,
-                sheen, sheen_rough, sheen_color,
-                clearcoat, coat_rough,
-                iridescence, irid_color, F0):
-    """Single-light response. Vectorised over the (H, W, _) image."""
+                sheen, sheen_color,
+                clearcoat,
+                iridescence, irid_color, F0, albedo):
+    """Single-light response, vectorised over the (H, W, _) image."""
     NdotL = np.clip(np.einsum("...i,i->...", N, L), 0.0, 1.0)
     Hh = L + V
     Hh = Hh / np.linalg.norm(Hh)
@@ -115,8 +212,6 @@ def shade_light(N, V, L, light_color, intensity,
     VdotH = float(np.clip(np.dot(V, Hh), 0.0, 1.0))
 
     a = roughness * roughness
-
-    # Base specular — anisotropic GGX when aniso != 0, isotropic otherwise.
     if anisotropy > 1e-3:
         at = max(a * (1.0 + anisotropy), 1e-4)
         ab = max(a * (1.0 - anisotropy), 1e-4)
@@ -132,29 +227,28 @@ def shade_light(N, V, L, light_color, intensity,
         d = NdotH * NdotH * (a2 - 1.0) + 1.0
         D = a2 / (math.pi * d * d + 1e-7)
 
-    # Smith G (height-correlated approximation good enough for previews).
     k = a * 0.5
     Gv = NdotV / (NdotV * (1 - k) + k + 1e-7)
     Gl = NdotL / (NdotL * (1 - k) + k + 1e-7)
     G = Gv * Gl
 
-    # Fresnel — Schlick, blended with the iridescent colour.
     F_schlick = F0 + (1.0 - F0) * ((1.0 - VdotH) ** 5)
-    F = F_schlick * (1.0 - iridescence) + irid_color * iridescence
+    if irid_color is not None:
+        F = F_schlick * (1.0 - iridescence) + irid_color * iridescence
+    else:
+        F = np.broadcast_to(F_schlick, NdotH.shape + (3,))
 
     spec = (D * G)[..., None] * F * NdotL[..., None] \
            / (4.0 * NdotV * NdotL[..., None] + 1e-4)
 
-    diffuse = ALBEDO * (1.0 - metalness) * NdotL[..., None]
+    diffuse = albedo * (1.0 - metalness) * NdotL[..., None]
 
-    # Charlie sheen — peaks at grazing.
     sin2h = np.clip(1.0 - NdotH * NdotH, 1e-7, 1.0)
-    inv_sa = 1.0 / max(sheen_rough * sheen_rough, 1e-4)
+    inv_sa = 1.0 / max(SHEEN_ROUGH * SHEEN_ROUGH, 1e-4)
     sheenD = (2.0 + inv_sa) * (sin2h ** (inv_sa * 0.5)) / (2.0 * math.pi)
-    sheen_term = sheen_color * (sheen * sheenD * NdotL)[..., None]
+    sheen_term = np.array(sheen_color, dtype=np.float32) * (sheen * sheenD * NdotL)[..., None]
 
-    # Clearcoat — second tight GGX at dielectric F0 0.04.
-    coat_a = coat_rough * coat_rough
+    coat_a = COAT_ROUGH * COAT_ROUGH
     coat_a2 = coat_a * coat_a
     coat_d = coat_a2 / (math.pi * (NdotH * NdotH * (coat_a2 - 1.0) + 1.0) ** 2 + 1e-7)
     coat_F = 0.04 + 0.96 * ((1.0 - VdotH) ** 5)
@@ -165,63 +259,50 @@ def shade_light(N, V, L, light_color, intensity,
            * light_color * intensity
 
 
-def iridescent_color(N, V):
-    """Rainbow tint that shifts with the view-to-normal angle — the cheap
-    stand-in for the Belcour & Barla film here, picking up the same
-    intuition: a colour-shifting reflectance keyed off the geometry."""
-    NdotV = np.clip(np.einsum("...i,i->...", N, V), 0.0, 1.0)
-    # Shift the wave so high iridescence presets show several colour bands
-    # rather than just one tint.
-    phase = (1.0 - NdotV) * 8.0
-    r = 0.5 + 0.5 * np.cos(phase)
-    g = 0.5 + 0.5 * np.cos(phase + 2.094)  # 2π/3
-    b = 0.5 + 0.5 * np.cos(phase + 4.189)  # 4π/3
-    return np.stack([r, g, b], axis=-1).astype(np.float32)
+def fake_environment(N, V, F0, roughness, ambient_color):
+    """Cheap image-based-lighting stand-in: a uniform sky tinted by the
+    ambient colour, reflected with the surface Fresnel. Without this,
+    metallic chips look almost black (no diffuse, tight spec lobe), even
+    though real metals show their F0 tint across the whole surface."""
+    NdotV = np.clip(np.einsum("...i,i->...", N, V), 0.0, 1.0)[..., None]
+    f = F0 + (1.0 - F0) * ((1.0 - NdotV) ** 5)
+    sky = ambient_color * 0.85
+    return sky * f * (1.0 - roughness * 0.6)
 
 
-def render_preset(p):
-    (roughness, metalness, iridescence, sheen, clearcoat, anisotropy,
-     emissive, relief, angle_deg, elev_deg, intensity, warmth, ambient) = p
-
+def render_preset(p: Preset):
     (key_dir, key_color, key_int,
      fill_dir, fill_color, fill_int,
-     ambient_color) = apply_light_controls(angle_deg, elev_deg, intensity,
-                                           warmth, ambient)
+     ambient_color) = apply_light_controls(p.angle, p.elevation, p.intensity,
+                                           p.warmth, p.ambient)
 
-    N, r = chip_normal(relief)
+    N, r = chip_normal(p.relief)
     V = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    albedo = np.array(p.bake_albedo, dtype=np.float32)
+    F0 = (1.0 - p.metalness) * 0.04 + METAL_F0 * p.metalness
 
-    # F0: dielectric 0.04 for non-metals; a slightly-warm silver for full
-    # metalness so high-metalness presets read as bright reflective metal
-    # rather than tinted gray (the on-device path uses palette colour as
-    # metal F0, which we do not have for a context-free preview).
-    METAL_F0 = np.array([0.95, 0.93, 0.88], dtype=np.float32)
-    F0 = (1.0 - metalness) * 0.04 + METAL_F0 * metalness
-    sheen_color = np.array([1.0, 0.97, 0.92], dtype=np.float32)
-    irid_color = iridescent_color(N, V) if iridescence > 1e-3 else np.zeros(
-        (H, W, 3), dtype=np.float32)
+    irid_color = (iridescent_color(N, V, p.irid_palette)
+                  if p.iridescence > 1e-3 else None)
 
     key = shade_light(N, V, key_dir, key_color, key_int,
-                      roughness, metalness, anisotropy,
-                      sheen, sheen_rough=0.30, sheen_color=sheen_color,
-                      clearcoat=clearcoat, coat_rough=0.10,
-                      iridescence=iridescence, irid_color=irid_color, F0=F0)
+                      p.roughness, p.metalness, p.anisotropy,
+                      p.sheen, p.sheen_color,
+                      p.clearcoat,
+                      p.iridescence, irid_color, F0, albedo)
     fill = shade_light(N, V, fill_dir, fill_color, fill_int,
-                       roughness, metalness, anisotropy,
-                       sheen, sheen_rough=0.30, sheen_color=sheen_color,
-                       clearcoat=clearcoat, coat_rough=0.10,
-                       iridescence=iridescence, irid_color=irid_color, F0=F0)
+                       p.roughness, p.metalness, p.anisotropy,
+                       p.sheen, p.sheen_color,
+                       p.clearcoat,
+                       p.iridescence, irid_color, F0, albedo)
+    env = fake_environment(N, V, F0, p.roughness, ambient_color)
 
-    ambient_term = ALBEDO * ambient_color
-    # Emissive — a soft glow modulated by a centred bump so it reads as a
-    # crest rather than a flat fill.
+    ambient_term = albedo * ambient_color
     centre_bump = np.clip(1.0 - r / CHIP_R, 0.0, 1.0)
-    emissive_term = ALBEDO * (emissive * 0.4 * centre_bump)[..., None]
+    emissive_term = albedo * (p.emissive * 0.4 * centre_bump)[..., None]
 
-    color = ambient_term + key + fill + emissive_term
+    color = ambient_term + key + fill + env + emissive_term
     color = np.clip(color, 0.0, 1.0)
 
-    # Compose with the dark background, with an AA band at the chip edge.
     alpha_chip = np.clip((CHIP_R + 0.5 - r) / ALPHA_AA, 0.0, 1.0)
     color = color * alpha_chip[..., None] + BG * (1.0 - alpha_chip[..., None])
 
@@ -234,10 +315,9 @@ def render_preset(p):
 def main():
     out = Path(__file__).resolve().parent.parent / "android/app/src/main/res/drawable"
     out.mkdir(parents=True, exist_ok=True)
-    for name, *p in PRESETS:
-        img = render_preset(tuple(p))
-        Image.fromarray(img, "RGBA").save(out / f"{name}.png")
-        print(f"baked {out / (name + '.png')}")
+    for p in PRESETS:
+        Image.fromarray(render_preset(p), "RGBA").save(out / f"{p.file}.png")
+        print(f"baked {out / (p.file + '.png')}")
 
 
 if __name__ == "__main__":

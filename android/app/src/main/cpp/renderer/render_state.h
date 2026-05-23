@@ -98,10 +98,10 @@ struct MaterialParams {
     float ambient = 0.22f;
 };
 
-// Palette UBO laid out as std140 — every member is vec4-aligned.
-// fill.vert and border.* declare the block through `audioBeat`; fill.frag
-// declares it in full. A shader may omit trailing members it does not read,
-// so only fill.frag carries the material rows.
+// Palette UBO laid out as std140 — every member is vec4-aligned. The
+// matching shader-side declaration lives once in shaders/uniforms.glsl
+// and is #included by every stage, so a row added here only needs to be
+// added there — no four-way mirror to keep in sync.
 struct PaletteUbo {
     float    palette[kMaxColors][4];
     float    borderColor[4];

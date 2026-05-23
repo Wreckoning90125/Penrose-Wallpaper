@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 inPos;
 layout(location = 1) in float inSide;
@@ -9,17 +10,7 @@ layout(push_constant) uniform PC {
     vec4 view1;
 } pc;
 
-layout(set = 0, binding = 0, std140) uniform Palette {
-    vec4 palette[16];
-    vec4 borderColor;
-    vec4 bgColor;
-    uvec4 flags;
-    vec4 anim;
-    vec4 borderGeom;
-    vec4 effects;
-    vec4 audioBands[2];
-    vec4 audioBeat;
-} ubo;
+#include "uniforms.glsl"
 
 const float TWO_PI = 6.2831853072;
 

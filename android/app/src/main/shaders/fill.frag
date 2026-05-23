@@ -1,28 +1,7 @@
 #version 460
+#extension GL_GOOGLE_include_directive : require
 
-layout(set = 0, binding = 0, std140) uniform Palette {
-    vec4 palette[16];
-    vec4 borderColor;
-    vec4 bgColor;
-    uvec4 flags;
-    vec4 anim;
-    vec4 borderGeom;
-    vec4 effects;
-    vec4 audioBands[2];
-    vec4 audioBeat;
-    // Physical-material parameters — see MaterialParams in render_state.h.
-    vec4 matNormal;    // bevelWidth, bevelStrength, waveHeight, bulgeTilt
-    vec4 matSurface;   // roughBase, roughMod, metalBase, metalMod
-    vec4 matLobeA;     // emissive, sheen, sheenRough, clearcoat
-    vec4 matLobeB;     // coatRough, anisotropy, iridescence, iridIOR
-    vec4 matIrid;      // iridThickMin, iridThickMax, --, --
-    vec4 matSheenCol;  // sheenColor.rgb, --
-    vec4 keyLight;     // keyDir.xyz, keyIntensity
-    vec4 keyColor;     // keyColor.rgb, --
-    vec4 fillLight;    // fillDir.xyz, fillIntensity
-    vec4 fillColor;    // fillColor.rgb, --
-    vec4 ambient;      // ambientColor.rgb, ambientAmount
-} ubo;
+#include "uniforms.glsl"
 
 layout(location = 0) flat in uint vColorIdx;
 layout(location = 1) flat in float vRipple;

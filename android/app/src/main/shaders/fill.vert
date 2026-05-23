@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 inPos;
 layout(location = 1) in uint inColorIdx;
@@ -12,17 +13,7 @@ layout(push_constant) uniform PC {
     vec4 view1;
 } pc;
 
-layout(set = 0, binding = 0, std140) uniform Palette {
-    vec4 palette[16];
-    vec4 borderColor;
-    vec4 bgColor;
-    uvec4 flags;
-    vec4 anim;       // x=time, y=rippleAmount, z=waveSymmetry, w=pageOffset
-    vec4 borderGeom;
-    vec4 effects;    // x=brightness, y=depthAmount, z=rippleSpeed, w=rippleKind
-    vec4 audioBands[2];
-    vec4 audioBeat;
-} ubo;
+#include "uniforms.glsl"
 
 layout(location = 0) flat out uint vColorIdx;
 layout(location = 1) flat out float vRipple;

@@ -26,7 +26,7 @@ architecture and drop the slider farm — see §4.
 | C — sheen / clearcoat / iridescence / anisotropy lobes | **done** | `d2e43ea`, `7933d4d` |
 | D — key + fill + ambient lights | **done** | `ea43bf6` |
 | E — HDR offscreen + bloom + AgX tonemap | todo | — |
-| F — parameterized look: settings, modulation, presets, border merge | in progress | UBO migration, 13 sliders + graph targets, light rig, material presets done (`43be608`–`497fe06`); border merge remains |
+| F — parameterized look: settings, modulation, presets, border merge | in progress | UBO migration, 13 sliders + graph targets, light rig, material presets, shared `shaders/uniforms.glsl` factor, baked preset thumbnails — all done; border merge remains (see `todo.md`) |
 
 Phase A landed: `FillVertex` carries a per-triangle edge-distance basis
 (`inBary`); `fill.frag` lifts a bevel chamfer height field from it, derives the
@@ -227,7 +227,7 @@ struct to the persisted settings and the node graph.
 Phase A is done (§0). Each remaining phase is one commit-sized, on-device-
 verifiable step; phase N renders correctly on its own.
 
-### Phase B — per-tile material identity, field-driven channels, bulge normal — done
+### Phase B — per-tile material identity, field-driven channels, bulge normal
 
 - **`inTileMat` attribute.** `vec4 inTileMat` on `FillVertex` = type normalised
   over the family's distinct kinds, the unit `(cos,sin)` of the `ClassSpec`
@@ -248,7 +248,7 @@ The material `X_base` constants live as `fill.frag` `const`s. Phase D moves
 them into `PaletteUbo` alongside the light uniforms it adds there; the Phase F
 Material preset picker then writes those rows.
 
-### Phase C — sheen, clearcoat, iridescence, anisotropy — done
+### Phase C — sheen, clearcoat, iridescence, anisotropy
 
 Four BRDF lobes hand-written in `fill.frag`, ported from the glTF Sample
 Viewer GLSL (commits `d2e43ea`, `7933d4d`):
@@ -271,7 +271,7 @@ Viewer GLSL (commits `d2e43ea`, `7933d4d`):
 The lobe `X_base` values are `fill.frag` `const`s; Phase D moves the material
 and light block into `PaletteUbo`, and the Phase F preset picker drives it.
 
-### Phase D — key + fill + ambient lights — done
+### Phase D — key + fill + ambient lights
 
 `fill.frag`'s single hard-coded key light is replaced by a key + fill +
 ambient rig, and the per-light BRDF is factored into `shadeLight()` —
@@ -313,37 +313,49 @@ encode, so AgX is applied once, in linear, regardless of the swapchain path.
 
 ### Phase F — parameterized look: settings, modulation, presets, border merge
 
-The material is fully in the UBO (`MaterialParams` → `PaletteUbo`, `43be608`).
+The material is fully in the UBO (`MaterialParams` → `PaletteUbo`).
 
-- ✓ **Settings sliders** (`087bb55`, `bd02c76`, `497fe06`). Thirteen controls
-  on a Material settings screen: eight material — roughness, metalness,
-  iridescence, sheen, clearcoat, anisotropy, emissive glow, surface relief —
-  and five lighting — angle, elevation, intensity, warmth, ambient. The
-  renderer derives the full key/fill/ambient rig from the five
-  (`applyLightControls`). The wallpaper renders exactly as the sliders are
-  set, with no audio: the static-look requirement.
-- ✓ **Modulation** (`087bb55`, `497fe06`). Each of the thirteen is a
-  node-graph Target whose value *adds onto* its slider base, and the
-  home-screen page-scroll offset is a new graph Source alongside the audio
-  bands, beat, and clock. The per-frame UBO patch writes the modulated
-  result. The surface can sit still, breathe to a clock, sway with panning,
-  or pulse to sound; an unwired target leaves the slider base untouched.
-- ✓ **Material presets** (`497fe06`). Six built-in bundles — `Matte`,
-  `Ceramic`, `Pearl`, `Brushed metal`, `Lacquer`, `Oil-slick`. Picking one is
-  a one-shot apply: its values are written into `SharedPreferences`, the
+- **Settings sliders.** Thirteen controls on a Material settings screen:
+  eight material — roughness, metalness, iridescence, sheen, clearcoat,
+  anisotropy, emissive glow, surface relief — and five lighting — angle,
+  elevation, intensity, warmth, ambient. The renderer derives the full
+  key/fill/ambient rig from the five (`applyLightControls`). The wallpaper
+  renders exactly as the sliders are set, with no audio: the static-look
+  requirement.
+- **Modulation.** Each of the thirteen is a node-graph Target whose value
+  *adds onto* its slider base, and the home-screen page-scroll offset is a
+  new graph Source alongside the audio bands, beat, and clock. The
+  per-frame UBO patch writes the modulated result. The surface can sit
+  still, breathe to a clock, sway with panning, or pulse to sound; an
+  unwired target leaves the slider base untouched.
+- **Material presets.** Six built-in bundles — `Matte`, `Ceramic`,
+  `Pearl`, `Brushed metal`, `Lacquer`, `Oil-slick`. Picking one is a
+  one-shot apply: its values are written into `SharedPreferences`, the
   Material screen re-inflates so every slider re-binds to them, and the
-  preset is done — no stored "active preset" state, no toggle. Because the
-  light rig is now slider-backed too, a preset never moves anything the user
-  cannot then see and tune.
-- **Border merge.** Draw the border inside `fill.frag` as a `smoothstep` on
-  the Phase-A `edgeDist`; remove the `border.*` shaders, the `BorderVertex`
-  path, and the border pipeline. One pipeline draws fill + border.
-- **Shader-rendered preset thumbnails** (optional). Render each preset's
-  material to a small offscreen sample so the picker shows the look, not just
-  a name. A real render-to-texture pass — its own focused task.
-- **Done when:** every look is reachable from the settings UI with no audio;
-  presets seed it; the graph layers audio / clock / pan on top; one pipeline
-  draws fill + border.
+  preset is done — no stored "active preset" state, no toggle. Because
+  the light rig is now slider-backed too, a preset never moves anything
+  the user cannot then see and tune.
+- **Shared uniforms factor.** `shaders/uniforms.glsl` carries the std140
+  `Palette` block; every stage `#include`s it via the Khronos-blessed
+  `GL_GOOGLE_include_directive` extension, so a row added to
+  `MaterialParams` only has to land in one shader file. `CompileShadersTask`
+  tracks `*.glsl` in a second `@InputFiles` collection so an edit
+  invalidates the dependent shaders without being fed to `glslc`.
+- **Baked preset thumbnails.** `tools/bake_preset_thumbnails.py` ports
+  the relevant lobes from `fill.frag` to CPU (Lambert + GGX + anisotropic
+  GGX + Charlie sheen + clearcoat + iridescent Fresnel approximation +
+  emissive) and writes one 192×192 PNG per preset to
+  `res/drawable/preset_*.png`; the picker dialog
+  (`SettingsFragment::PresetPickerAdapter`) shows the thumbnail next to
+  each preset name. Re-run the script when the preset bundles in
+  `MaterialPreset.kt` change.
+- **Border merge** *(remaining — see `todo.md`)*. Draw the border inside
+  `fill.frag` as a `smoothstep` on the Phase-A `edgeDist`; remove the
+  `border.*` shaders, the `BorderVertex` path, and the border pipeline.
+  One pipeline draws fill + border.
+- **Done when:** every look is reachable from the settings UI with no
+  audio; presets seed it; the graph layers audio / clock / pan on top;
+  one pipeline draws fill + border.
 
 ---
 
@@ -357,7 +369,7 @@ The material is fully in the UBO (`MaterialParams` → `PaletteUbo`, `43be608`).
 | `renderer.cpp` | E F | multi-pass `drawFrame` (E); audio-graph targets (F) |
 | `shaders/fill.vert` | A✓ B✓ | `inBary`, `inBulge`, `vWaveGrad`, `inTileMat` — done |
 | `shaders/fill.frag` | A✓ B✓ C✓ D✓ F | normal, channels, four lobes, key/fill/ambient lights done; border merge (F) |
-| `shaders/uniforms.glsl` (new) | F | shared uniform block, `#include`d, added with the UBO migration |
+| `shaders/uniforms.glsl` | F✓ | shared `Palette` block, `#include`d by every stage via `GL_GOOGLE_include_directive` — replaces the four-way duplication |
 | `shaders/border.*` | F | removed |
 | `shaders/bloom_down/up.frag`, `composite.frag` (new) | E | post chain + AgX tonemap |
 | node-graph params + Android UI | F | Material preset picker; curated audio-modulation targets |
@@ -366,14 +378,6 @@ The material is fully in the UBO (`MaterialParams` → `PaletteUbo`, `43be608`).
 
 ## 7. Risks / gotchas
 
-- **The uniform block is duplicated across four shaders.** Any `PaletteUbo`
-  change must land identically in `fill.vert`, `fill.frag`, `border.vert`,
-  `border.frag` or std140 offsets drift and every uniform reads garbage.
-  Phase F factors the block into a shared `shaders/uniforms.glsl` and
-  `#include`s it — `glslc` resolves `#include` relative to the source file by
-  default, so no build-script change is needed beyond adding `*.glsl` to the
-  shader task's input-tracking glob (so an edit retriggers compilation) while
-  keeping it out of the compile list.
 - `dFdx` / `dFdy` are valid only in the fragment stage under uniform control
   flow — satisfied here. The bevel `min()` crease is the one non-smooth point;
   it is the intended bevel ridge, not an artefact.

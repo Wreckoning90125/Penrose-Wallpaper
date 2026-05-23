@@ -63,6 +63,42 @@
             app:showSeekBarValue="true" />
     </PreferenceCategory>
 
+    <PreferenceCategory android:title="Sheen tint">
+        <SeekBarPreference
+            android:key="mat_sheen_color_r"
+            android:title="Sheen red"
+            android:summary="Red channel of the Charlie sheen lobe tint (0–100%)"
+            android:min="0" android:max="100" android:defaultValue="100"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_sheen_color_g"
+            android:title="Sheen green"
+            android:summary="Green channel of the Charlie sheen lobe tint"
+            android:min="0" android:max="100" android:defaultValue="97"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_sheen_color_b"
+            android:title="Sheen blue"
+            android:summary="Blue channel of the Charlie sheen lobe tint"
+            android:min="0" android:max="100" android:defaultValue="92"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Iridescent film">
+        <SeekBarPreference
+            android:key="mat_irid_thick_min"
+            android:title="Film thickness (min, nm)"
+            android:summary="Thin end of the Belcour–Barla thin-film sweep"
+            android:min="100" android:max="800" android:defaultValue="280"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_irid_thick_max"
+            android:title="Film thickness (max, nm)"
+            android:summary="Thick end of the sweep — wider range = more colour cycles"
+            android:min="100" android:max="800" android:defaultValue="560"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="Lighting">
         <SeekBarPreference
             android:key="light_angle"

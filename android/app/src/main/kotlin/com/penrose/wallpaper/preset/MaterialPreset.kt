@@ -83,9 +83,9 @@ internal object MaterialPresets {
         // Brushed metal: silvery sheen; iridescence is low so default
         // range is fine.
         MaterialPreset("Brushed metal", R.drawable.preset_brushed_metal, bundle(
-            roughness = 45, metalness = 95, iridescence = 10, sheen = 10,
-            clearcoat = 10, anisotropy = 90, emissive = 25, relief = 105,
-            angle = 235, elevation = 50, intensity = 120, warmth = 50, ambient = 15,
+            roughness = 40, metalness = 95, iridescence = 10, sheen = 10,
+            clearcoat = 10, anisotropy = 95, emissive = 25, relief = 105,
+            angle = 235, elevation = 50, intensity = 120, warmth = 50, ambient = 18,
             sheenColorR = 100, sheenColorG = 99, sheenColorB = 95)),
         // Lacquer: warm sheen, narrow mid-band thin-film (warm shifts).
         MaterialPreset("Lacquer", R.drawable.preset_lacquer, bundle(

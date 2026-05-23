@@ -88,11 +88,12 @@ PRESETS: List[Preset] = [
                       (0.55, 0.92, 0.88),   # teal
                       (0.78, 0.68, 0.95)],  # violet
     ),
-    # Brushed metal — silvery, anisotropic streak.
+    # Brushed metal — silvery aluminum-stainless mix; harder anisotropy
+    # so the streak is unmistakeable, slightly tighter spec.
     Preset(
-        "preset_brushed_metal", 0.45, 0.95, 0.10, 0.10, 0.10, 0.90, 0.25, 1.05,
-        235, 50, 1.20, 0.50, 0.15,
-        bake_albedo=(0.78, 0.78, 0.80),
+        "preset_brushed_metal", 0.40, 0.95, 0.10, 0.10, 0.10, 0.95, 0.25, 1.05,
+        235, 50, 1.20, 0.50, 0.18,
+        bake_albedo=(0.80, 0.80, 0.82),
         sheen_color=(1.00, 0.99, 0.95),
         irid_thick_min=280.0, irid_thick_max=560.0,
     ),
@@ -107,17 +108,21 @@ PRESETS: List[Preset] = [
                       (0.75, 0.35, 0.55),
                       (0.45, 0.30, 0.65)],
     ),
-    # Oil-slick — green / purple / magenta over a dark base. Wide film
-    # range (380–700 nm) drives the full visible-spectrum cycle.
+    # Oil-slick — dark wet base with high-saturation Newton's-rings
+    # cycling green→blue→violet→magenta→gold. Five stops + the angular
+    # twist in iridescent_color() gives the swirling bands a real oil
+    # film shows, not a tidy radial halo.
     Preset(
         "preset_oil_slick", 0.25, 0.60, 1.00, 0.40, 0.70, 0.30, 0.70, 1.00,
         240, 48, 1.10, 0.50, 0.20,
-        bake_albedo=(0.18, 0.20, 0.22),
+        bake_albedo=(0.10, 0.11, 0.13),
         sheen_color=(0.85, 0.95, 0.78),
         irid_thick_min=380.0, irid_thick_max=700.0,
-        irid_palette=[(0.10, 0.70, 0.35),   # green
-                      (0.28, 0.22, 0.82),   # blue/violet
-                      (0.78, 0.30, 0.55)],  # magenta
+        irid_palette=[(0.05, 0.85, 0.40),
+                      (0.10, 0.45, 0.95),
+                      (0.55, 0.15, 0.95),
+                      (0.95, 0.20, 0.65),
+                      (0.98, 0.70, 0.20)],
     ),
 ]
 
@@ -182,15 +187,20 @@ def chip_normal(relief):
 
 def iridescent_color(N, V, palette):
     """Per-preset iridescence: cyclic interpolation between palette
-    stops keyed off the view-angle (NdotV). Stands in for the Belcour &
-    Barla thin-film evaluation the on-device shader does — too heavy to
-    port for a static preview, so each preset declares the colour band
-    that its thickness range produces and the thumbnail interpolates it.
+    stops, with a radial component (NdotV across the disc) and a
+    smaller angular twist (atan2 around the disc) so the result reads
+    as swirling bands rather than concentric rings. Stands in for the
+    Belcour & Barla thin-film evaluation the on-device shader does —
+    too heavy to port for a static preview, so each preset declares
+    the colour band its thickness range produces and the thumbnail
+    interpolates it directly.
     """
     if palette is None:
         return None
     NdotV = np.clip(np.einsum("...i,i->...", N, V), 0.0, 1.0)
-    phase = (1.0 - NdotV) * 3.0           # ~3 colour bands across the disc
+    radial  = (1.0 - NdotV) * len(palette)
+    angular = np.arctan2(N[..., 1], N[..., 0]) * len(palette) / (2.0 * math.pi)
+    phase   = radial + angular * 0.7
     seg = np.floor(phase).astype(int) % len(palette)
     nxt = (seg + 1) % len(palette)
     t = (phase - np.floor(phase))[..., None]
@@ -259,15 +269,17 @@ def shade_light(N, V, L, light_color, intensity,
            * light_color * intensity
 
 
-def fake_environment(N, V, F0, roughness, ambient_color):
-    """Cheap image-based-lighting stand-in: a uniform sky tinted by the
-    ambient colour, reflected with the surface Fresnel. Without this,
-    metallic chips look almost black (no diffuse, tight spec lobe), even
-    though real metals show their F0 tint across the whole surface."""
+def fake_environment(N, V, F0, roughness):
+    """Cheap image-based-lighting stand-in: a fixed studio sky
+    reflected with the surface Fresnel. Independent of the preset's
+    ambient level on purpose — real metals pick up a bright environment
+    wash regardless of how dim the rest of the lighting is, so scaling
+    by preset ambient (which can be very low) made high-F0 surfaces
+    look black instead of metallic."""
     NdotV = np.clip(np.einsum("...i,i->...", N, V), 0.0, 1.0)[..., None]
     f = F0 + (1.0 - F0) * ((1.0 - NdotV) ** 5)
-    sky = ambient_color * 0.85
-    return sky * f * (1.0 - roughness * 0.6)
+    sky = np.array([0.55, 0.55, 0.60], dtype=np.float32)
+    return sky * f * (1.0 - roughness * 0.5)
 
 
 def render_preset(p: Preset):
@@ -294,7 +306,7 @@ def render_preset(p: Preset):
                        p.sheen, p.sheen_color,
                        p.clearcoat,
                        p.iridescence, irid_color, F0, albedo)
-    env = fake_environment(N, V, F0, p.roughness, ambient_color)
+    env = fake_environment(N, V, F0, p.roughness)
 
     ambient_term = albedo * ambient_color
     centre_bump = np.clip(1.0 - r / CHIP_R, 0.0, 1.0)

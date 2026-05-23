@@ -441,7 +441,9 @@ void Renderer::updatePaletteUbo() {
     // this is the cold-path seed for the first frame after a settings change.
     MaterialParams m{};
     m.roughBase     = settings_.matRoughness;
-    m.metalMod      = settings_.matMetalness;
+    // See renderer.cpp drawFrame — Metalness slider drives the uniform
+    // base; variation is its own settings_.matMetalMod knob.
+    m.metalBase     = settings_.matMetalness;
     m.sheen         = settings_.matSheen;
     m.clearcoat     = settings_.matClearcoat;
     m.anisotropy    = settings_.matAnisotropy;
@@ -453,6 +455,8 @@ void Renderer::updatePaletteUbo() {
     m.sheenColor[2] = settings_.matSheenColorB;
     m.iridThickMin  = settings_.matIridThickMin;
     m.iridThickMax  = settings_.matIridThickMax;
+    m.roughMod      = settings_.matRoughMod;
+    m.metalMod      = settings_.matMetalMod;
     applyLightControls(m, settings_.lightAngle, settings_.lightElevation,
                        settings_.lightIntensity, settings_.lightWarmth,
                        settings_.lightAmbient);

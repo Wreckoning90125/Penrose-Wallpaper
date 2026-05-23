@@ -446,21 +446,28 @@ void Renderer::drawFrame() {
         // clock / page-scroll modulation reaches the shader.
         MaterialParams fxMat{};
         fxMat.roughBase     = fxMatRoughness_;
-        fxMat.metalMod      = fxMatMetalness_;
+        // Metalness slider drives the BASE term (uniform metalness)
+        // rather than the per-tile-type MOD it used to — a slider
+        // labelled "Metalness" should make the wallpaper metallic, not
+        // just create variation between tile kinds. The variation lives
+        // on its own settings_.matMetalMod knob now (default 0).
+        fxMat.metalBase     = fxMatMetalness_;
         fxMat.sheen         = fxMatSheen_;
         fxMat.clearcoat     = fxMatClearcoat_;
         fxMat.anisotropy    = fxMatAnisotropy_;
         fxMat.iridescence   = fxMatIridescence_;
         fxMat.emissive      = fxMatEmissive_;
         fxMat.bevelStrength = fxMatRelief_;
-        // Per-preset characteristic colours — sheen tint and iridescent
-        // film thickness range. Not graph-modulated (no Target nodes
-        // for them today), so they go straight from settings_.
+        // Direct-from-settings: per-preset characteristic colours
+        // (sheen tint + iridescent film range) and the seam / per-tile
+        // variation knobs. None are graph-modulated today.
         fxMat.sheenColor[0] = settings_.matSheenColorR;
         fxMat.sheenColor[1] = settings_.matSheenColorG;
         fxMat.sheenColor[2] = settings_.matSheenColorB;
         fxMat.iridThickMin  = settings_.matIridThickMin;
         fxMat.iridThickMax  = settings_.matIridThickMax;
+        fxMat.roughMod      = settings_.matRoughMod;
+        fxMat.metalMod      = settings_.matMetalMod;
         applyLightControls(fxMat, fxLightAngle_, fxLightElevation_,
                            fxLightIntensity_, fxLightWarmth_, fxLightAmbient_);
         writeMaterialRows(

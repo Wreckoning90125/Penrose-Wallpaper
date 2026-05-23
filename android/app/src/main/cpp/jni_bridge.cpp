@@ -31,9 +31,10 @@ inline Renderer* asRenderer(jlong ptr) { return reinterpret_cast<Renderer*>(ptr)
 //            lightAngle, lightElevation, lightIntensity, lightWarmth, lightAmbient,
 //            matSheenColorR, matSheenColorG, matSheenColorB,
 //            matIridThickMin, matIridThickMax,
+//            matRoughMod, matMetalMod,
 //            custom_0_L, custom_0_C, custom_0_H, ..., custom_9_L, custom_9_C, custom_9_H]
 constexpr int kIntCount = 11;
-constexpr int kFloatCount = 16 + 8 + 5 + 5 + 3 * kMaxColors;
+constexpr int kFloatCount = 16 + 8 + 5 + 5 + 2 + 3 * kMaxColors;
 
 Settings decodeSettings(const jint* ints, const jfloat* floats) {
     Settings s{};
@@ -86,7 +87,9 @@ Settings decodeSettings(const jint* ints, const jfloat* floats) {
     s.matSheenColorB  = floats[31];
     s.matIridThickMin = floats[32];
     s.matIridThickMax = floats[33];
-    int base = 34;
+    s.matRoughMod     = floats[34];
+    s.matMetalMod     = floats[35];
+    int base = 36;
     for (int i = 0; i < kMaxColors; ++i) {
         s.customOklch[i] = { floats[base + 3 * i + 0],
                              floats[base + 3 * i + 1],

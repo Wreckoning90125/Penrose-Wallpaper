@@ -61,6 +61,16 @@ forward-looking list — no duplication of "done" across files.
   generation depth; the home-screen page offset feeds the same
   translation. Detail: `docs/tilings/ROADMAP.md`.
 
+- **Per-family preview tile shapes.** Material picker thumbnails
+  currently render onto a single Penrose fat-rhomb (`tools/bake_preset_thumbnails.py::chip_normal`)
+  for every preset, regardless of the active tiling family. The bake
+  could emit `family × preset` PNGs using a representative tile shape
+  per family (rhomb / triangle / chair / L-tile / etc.) so the picker
+  preview matches the active family's geometry. Either bake all
+  combinations as static drawables, or move the preview to a runtime
+  offscreen render pass with the actual `fill.frag` (heavier — see
+  Phase E groundwork).
+
 ## Docs
 
 - **Bibliography refactor.** Convert each per-doc `### References`

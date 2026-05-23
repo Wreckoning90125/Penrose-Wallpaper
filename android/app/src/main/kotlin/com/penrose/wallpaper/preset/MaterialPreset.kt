@@ -38,6 +38,7 @@ internal object MaterialPresets {
         angle: Int, elevation: Int, intensity: Int, warmth: Int, ambient: Int,
         sheenColorR: Int = 100, sheenColorG: Int = 97, sheenColorB: Int = 92,
         iridThickMin: Int = 280, iridThickMax: Int = 560,
+        roughMod: Int = 0, metalMod: Int = 0,
     ): Map<String, Int> = mapOf(
         Settings.KEY_MAT_ROUGHNESS to roughness,
         Settings.KEY_MAT_METALNESS to metalness,
@@ -57,6 +58,8 @@ internal object MaterialPresets {
         Settings.KEY_MAT_SHEEN_COLOR_B to sheenColorB,
         Settings.KEY_MAT_IRID_THICK_MIN to iridThickMin,
         Settings.KEY_MAT_IRID_THICK_MAX to iridThickMax,
+        Settings.KEY_MAT_ROUGH_MOD to roughMod,
+        Settings.KEY_MAT_METAL_MOD to metalMod,
     )
 
     val all: List<MaterialPreset> = listOf(

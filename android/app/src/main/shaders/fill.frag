@@ -275,9 +275,13 @@ void main() {
                            albedo, F0, iridF, a, metalness, mat)
               * ubo.fillColor.rgb * ubo.fillLight.w;
 
-    // Ambient fills the unlit side; ripple crests add an emissive glow.
+    // Ambient fills the unlit side; emissive glows uniformly with a
+    // crest boost. A pure ripple-coupled form (`emissive * max(vRipple,
+    // 0)`) meant the slider did nothing without an active ripple — the
+    // 0.25 base term keeps the glow visible while the ripple amplitude
+    // still adds the per-crest accent the wave-driven look depends on.
     vec3 ambient  = albedo * ubo.ambient.rgb * ubo.ambient.w;
-    vec3 emissive = albedo * emissiveGain * max(vRipple, 0.0);
+    vec3 emissive = albedo * emissiveGain * (0.25 + max(vRipple, 0.0));
 
     outColor = vec4(clamp(ambient + key + fill + emissive, 0.0, 1.0), c.a);
 }

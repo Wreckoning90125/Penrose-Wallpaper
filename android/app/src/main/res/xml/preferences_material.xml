@@ -16,14 +16,26 @@
         <SeekBarPreference
             android:key="mat_roughness"
             android:title="Roughness"
-            android:summary="Matte at high values, glossy at low"
+            android:summary="Uniform surface roughness — matte at high, glossy at low"
             android:min="0" android:max="100" android:defaultValue="50"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_rough_mod"
+            android:title="Worn edges"
+            android:summary="Extra roughness in the bevel valleys — seam wear / patina"
+            android:min="0" android:max="100" android:defaultValue="0"
             app:showSeekBarValue="true" />
         <SeekBarPreference
             android:key="mat_metalness"
             android:title="Metalness"
-            android:summary="How metallic the alternate tile type reads"
+            android:summary="Uniform metallic-ness — 0 dielectric, 100 fully metal"
             android:min="0" android:max="100" android:defaultValue="40"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_metal_mod"
+            android:title="Metal variation"
+            android:summary="Extra metalness on alternate tile types — distinct kinds, distinct metals"
+            android:min="0" android:max="100" android:defaultValue="0"
             app:showSeekBarValue="true" />
         <SeekBarPreference
             android:key="mat_iridescence"

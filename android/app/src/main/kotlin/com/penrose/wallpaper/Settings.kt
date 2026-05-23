@@ -57,6 +57,12 @@ internal class Settings(
     val matSheenColorB: Float,
     val matIridThickMin: Float,
     val matIridThickMax: Float,
+    // Variation knobs. Defaults 0 — the Roughness / Metalness sliders
+    // above give uniform looks (the way users expect), and dialling
+    // these up brings back seam-modulated roughness + per-tile-type
+    // metalness from Phase B.
+    val matRoughMod: Float,
+    val matMetalMod: Float,
     val customOklch: FloatArray,
 ) {
     fun toNative(): Pair<IntArray, FloatArray> {
@@ -74,6 +80,7 @@ internal class Settings(
             lightAngle, lightElevation, lightIntensity, lightWarmth, lightAmbient,
             matSheenColorR, matSheenColorG, matSheenColorB,
             matIridThickMin, matIridThickMax,
+            matRoughMod, matMetalMod,
         )
         val floats = FloatArray(baseFloats.size + customOklch.size)
         baseFloats.copyInto(floats)
@@ -141,6 +148,10 @@ internal class Settings(
         const val KEY_MAT_SHEEN_COLOR_B  = "mat_sheen_color_b"
         const val KEY_MAT_IRID_THICK_MIN = "mat_irid_thick_min"
         const val KEY_MAT_IRID_THICK_MAX = "mat_irid_thick_max"
+
+        // Variation knobs — opt-in seam roughness + per-tile metalness.
+        const val KEY_MAT_ROUGH_MOD = "mat_rough_mod"
+        const val KEY_MAT_METAL_MOD = "mat_metal_mod"
 
         // Bumped by PresetStore.applyToPrefs whenever a preset writes a
         // fresh modulation_graph.json, and by the node editor when it
@@ -252,6 +263,8 @@ internal class Settings(
                 matSheenColorB  = safeInt(prefs, KEY_MAT_SHEEN_COLOR_B, 92)  / 100f,
                 matIridThickMin = safeInt(prefs, KEY_MAT_IRID_THICK_MIN, 280).toFloat(),
                 matIridThickMax = safeInt(prefs, KEY_MAT_IRID_THICK_MAX, 560).toFloat(),
+                matRoughMod = safeInt(prefs, KEY_MAT_ROUGH_MOD, 0) / 100f,
+                matMetalMod = safeInt(prefs, KEY_MAT_METAL_MOD, 0) / 100f,
                 customOklch  = custom,
             )
         }

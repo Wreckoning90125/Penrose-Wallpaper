@@ -128,8 +128,13 @@ PRESETS: List[Preset] = [
 
 
 W, H = 192, 192
-CHIP_R = 80          # chip radius (pixels)
-ALPHA_AA = 1.5       # antialiased edge width (pixels)
+# Penrose fat-rhomb half-extents in normalised [-1, 1] coordinates.
+# 72° at the top/bottom tips, 108° at the left/right tips — the
+# classic fat rhomb (h_o = w_o * tan(36°)).
+RHOMB_W = 0.78
+RHOMB_H = RHOMB_W * math.tan(math.radians(36.0))
+BEVEL_W = 0.18       # bevel chamfer width in normalised units
+INSCRIBED_R = (RHOMB_W * RHOMB_H) / math.sqrt(RHOMB_W * RHOMB_W + RHOMB_H * RHOMB_H)
 
 BG = np.array([0.07, 0.08, 0.10], dtype=np.float32)
 SHEEN_ROUGH = 0.30   # MaterialParams default; not slider-backed today
@@ -164,43 +169,83 @@ def apply_light_controls(angle_deg, elev_deg, intensity, warmth, ambient):
 
 
 def chip_normal(relief):
-    """Per-pixel shading normal for a hemispherical preview chip.
+    """Per-pixel shading normal for a Penrose fat-rhomb preview chip.
 
-    A hemisphere varies N continuously from (0,0,1) at the centre to
-    nearly horizontal at the rim, so every preset's highlight + sheen
-    + iridescent band paint across the whole disc rather than landing
-    on a thin chamfer ring. `relief` scales the x/y tilt so high-relief
-    presets read as a steeper dome and matte presets read flatter.
+    Earlier previews used a hemisphere — easy to read but unrelated to
+    the actual wallpaper, which renders beveled tiles. The rhomb shape
+    + cosine chamfer normal matches what fill.frag does on-device, so
+    the picker preview reads as a tile sample with that material, not
+    a generic material ball. `relief` scales the chamfer tilt the same
+    way bevelStrength does on-device.
+
+    Returns (N, px, py, inward) — the shading normal, normalised pixel
+    coords (math convention, y-up), and the signed distance from the
+    rhomb boundary (positive inside; used for AA + the emissive bump).
     """
     y_idx, x_idx = np.mgrid[0:H, 0:W].astype(np.float32)
-    dx = (x_idx - W * 0.5) / CHIP_R
-    dy = (y_idx - H * 0.5) / CHIP_R
-    r2 = dx * dx + dy * dy
-    z = np.sqrt(np.clip(1.0 - r2, 0.0, 1.0))
-    Nx = dx * relief
-    Ny = dy * relief
-    Nz = z
+    # Math-convention coords, normalised to [-1, 1] with y up so the
+    # light azimuth from applyLightControls (which uses math angles)
+    # lands where it visually should on the chip.
+    px = (x_idx - W * 0.5) / (W * 0.5)
+    py = -(y_idx - H * 0.5) / (H * 0.5)
+
+    # CCW vertex ring (math coords): right tip, top, left tip, bottom.
+    verts = [( RHOMB_W,        0.0),
+             (     0.0,  RHOMB_H),
+             (-RHOMB_W,        0.0),
+             (     0.0, -RHOMB_H)]
+    edge_n = []
+    edge_d = []
+    for i in range(4):
+        a = verts[i]
+        b = verts[(i + 1) % 4]
+        tx, ty = b[0] - a[0], b[1] - a[1]
+        nx, ny = -ty, tx                                 # rotate tangent 90° CCW
+        nlen = math.sqrt(nx * nx + ny * ny)
+        nx /= nlen; ny /= nlen
+        edge_n.append((nx, ny))
+        edge_d.append(-(nx * a[0] + ny * a[1]))
+
+    edge_dists = np.stack(
+        [n[0] * px + n[1] * py + d for n, d in zip(edge_n, edge_d)],
+        axis=-1,
+    )
+    inward  = edge_dists.min(axis=-1)                    # >0 inside, <0 outside
+    nearest = edge_dists.argmin(axis=-1)
+
+    edge_clamp = np.clip(inward, 0.0, BEVEL_W)
+    tilt = np.cos(edge_clamp / BEVEL_W * (math.pi * 0.5)) * relief
+
+    norms = np.array(edge_n, dtype=np.float32)           # (4, 2)
+    Nx = -norms[nearest, 0] * tilt                       # outward chamfer tilt
+    Ny = -norms[nearest, 1] * tilt
+    Nz = np.ones_like(Nx)
     n_len = np.sqrt(Nx * Nx + Ny * Ny + Nz * Nz) + 1e-7
     N = np.stack([Nx / n_len, Ny / n_len, Nz / n_len], axis=-1)
-    return N, np.sqrt(r2) * CHIP_R
+    return N, px, py, inward
 
 
-def iridescent_color(N, V, palette):
+def iridescent_color(N, V, px, py, palette):
     """Per-preset iridescence: cyclic interpolation between palette
-    stops, with a radial component (NdotV across the disc) and a
-    smaller angular twist (atan2 around the disc) so the result reads
-    as swirling bands rather than concentric rings. Stands in for the
-    Belcour & Barla thin-film evaluation the on-device shader does —
-    too heavy to port for a static preview, so each preset declares
-    the colour band its thickness range produces and the thumbnail
-    interpolates it directly.
+    stops, with a radial component (NdotV — strongest at the bevel rim
+    where the normal points outward) and an angular twist keyed off
+    PIXEL position rather than the normal. Stands in for the Belcour &
+    Barla thin-film evaluation the on-device shader does — too heavy
+    to port for a static preview, so each preset declares the colour
+    band its thickness range produces and the thumbnail interpolates
+    it directly.
+
+    The angular component uses pixel position because the rhomb's
+    plateau has N = (0, 0, 1) and atan2(Ny, Nx) collapses to 0 there;
+    using atan2(py, px) gives the iridescence a visible swirl across
+    the whole tile (especially needed for the Oil-slick).
     """
     if palette is None:
         return None
     NdotV = np.clip(np.einsum("...i,i->...", N, V), 0.0, 1.0)
     radial  = (1.0 - NdotV) * len(palette)
-    angular = np.arctan2(N[..., 1], N[..., 0]) * len(palette) / (2.0 * math.pi)
-    phase   = radial + angular * 0.7
+    angular = np.arctan2(py, px) * len(palette) / (2.0 * math.pi)
+    phase   = radial + angular * 0.9
     seg = np.floor(phase).astype(int) % len(palette)
     nxt = (seg + 1) % len(palette)
     t = (phase - np.floor(phase))[..., None]
@@ -288,12 +333,12 @@ def render_preset(p: Preset):
      ambient_color) = apply_light_controls(p.angle, p.elevation, p.intensity,
                                            p.warmth, p.ambient)
 
-    N, r = chip_normal(p.relief)
+    N, px, py, inward = chip_normal(p.relief)
     V = np.array([0.0, 0.0, 1.0], dtype=np.float32)
     albedo = np.array(p.bake_albedo, dtype=np.float32)
     F0 = (1.0 - p.metalness) * 0.04 + METAL_F0 * p.metalness
 
-    irid_color = (iridescent_color(N, V, p.irid_palette)
+    irid_color = (iridescent_color(N, V, px, py, p.irid_palette)
                   if p.iridescence > 1e-3 else None)
 
     key = shade_light(N, V, key_dir, key_color, key_int,
@@ -309,13 +354,19 @@ def render_preset(p: Preset):
     env = fake_environment(N, V, F0, p.roughness)
 
     ambient_term = albedo * ambient_color
-    centre_bump = np.clip(1.0 - r / CHIP_R, 0.0, 1.0)
+    # Plateau-strongest emissive bump that fades into the bevel rim,
+    # so a high-emissive preset reads as glowing-from-the-inside on
+    # the rhomb rather than a uniform wash.
+    centre_bump = np.clip(inward / INSCRIBED_R, 0.0, 1.0)
     emissive_term = albedo * (p.emissive * 0.4 * centre_bump)[..., None]
 
     color = ambient_term + key + fill + env + emissive_term
     color = np.clip(color, 0.0, 1.0)
 
-    alpha_chip = np.clip((CHIP_R + 0.5 - r) / ALPHA_AA, 0.0, 1.0)
+    # Antialiased rhomb boundary — inward goes negative outside the
+    # rhomb; clipping (inward * pixels-per-unit) to a 1-pixel band
+    # gives a clean edge on the dark background.
+    alpha_chip = np.clip(inward * (W * 0.5), 0.0, 1.0)
     color = color * alpha_chip[..., None] + BG * (1.0 - alpha_chip[..., None])
 
     rgba = np.zeros((H, W, 4), dtype=np.uint8)

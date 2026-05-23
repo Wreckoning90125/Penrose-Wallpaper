@@ -98,6 +98,16 @@ struct Settings {
     float  matIridThickMin = 280.0f;  // nm — Belcour-Barla thin-film range
     float  matIridThickMax = 560.0f;
 
+    // Variation knobs. Defaults are 0 — the Roughness slider gives a
+    // uniform surface and the Metalness slider gives a uniform metal,
+    // the way users expect from those names. Dial these up to bring
+    // back the seam-modulated roughness (worn edges in the bevel
+    // valleys) and the per-tile-type metalness from Phase B — both
+    // were always-on before and made the main sliders feel like they
+    // were stuck or only doing half a job.
+    float  matRoughMod = 0.0f;
+    float  matMetalMod = 0.0f;
+
     // Custom palette — used when `preset == Preset::Custom`. 10 OKLCH
     // triples; only the first `colorCount` are actually consumed.
     Oklch  customOklch[kMaxColors] = {

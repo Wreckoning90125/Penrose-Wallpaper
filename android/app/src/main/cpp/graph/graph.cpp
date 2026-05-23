@@ -101,6 +101,21 @@ inline float widestBandLabelWidth() {
     return w;
 }
 
+// Pixel width of the widest Target label. Used by every TargetNode to
+// pad its body so the right-side stack is uniform-width regardless of
+// which Targets the user has wired in. Iterates the contiguous Target
+// block in NodeKind (OutRippleAmount .. OutLightAmbient).
+inline float widestTargetLabelWidth() {
+    float w = 0.0f;
+    const int first = static_cast<int>(NodeKind::OutRippleAmount);
+    const int last  = static_cast<int>(NodeKind::OutLightAmbient);
+    for (int i = first; i <= last; ++i) {
+        w = std::max(w, ImGui::CalcTextSize(
+            descriptor(static_cast<NodeKind>(i)).label).x);
+    }
+    return w;
+}
+
 class SourceNode : public FlowNode {
 public:
     SourceNode(NodeKind k, Graph* g) : FlowNode(k, g) {
@@ -250,6 +265,11 @@ public:
     TargetNode(NodeKind k, Graph* g) : FlowNode(k, g) {
         setTitle(descriptor(k).label);
         addIN<float>("in", 0.0f, ImFlow::ConnectionFilter::SameType());
+    }
+    // Pad each Target node body to the widest Target label so the
+    // right-side stack reads as one uniform column.
+    void draw() override {
+        ImGui::Dummy(ImVec2(widestTargetLabelWidth(), 0.0f));
     }
     float pull() { return getInVal<float>("in"); }
 };

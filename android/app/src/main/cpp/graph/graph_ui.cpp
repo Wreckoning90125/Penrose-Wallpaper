@@ -86,10 +86,10 @@ void GraphUi::drawToolbar(Graph& graph) {
                  ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoCollapse |
                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
 
-    // The app-bar buttons are big touch targets; at the default font the
-    // labels look lost in them. Scale this window's text up so Add /
-    // Delete / Reset / Close fill their buttons and read at a glance.
-    ImGui::SetWindowFontScale(1.7f);
+    // App-bar text is density-scaled by FontGlobalScale; nudge it a bit
+    // larger so Add / Delete / Reset / Close clearly fill their large
+    // touch targets rather than just sit in the middle.
+    ImGui::SetWindowFontScale(1.3f);
 
     // Four buttons equally spaced across the bar. Width per slot =
     // (bar usable width) / 4; height = bar height minus inset on both
@@ -142,9 +142,15 @@ void GraphUi::drawSpawnPopup(Graph& graph) {
         openSpawnPopup_ = false;
     }
     if (ImGui::BeginPopup("##GraphSpawn")) {
+        // BeginMenu opens each submenu in its own window, so the popup's
+        // font scale doesn't reach the submenu items — set it on the
+        // popup AND inside each submenu so the whole spawn flow reads
+        // at the same comfortable size.
+        ImGui::SetWindowFontScale(1.3f);
         const char* cats[] = { "Source", "Operator", "Target" };
         for (const char* cat : cats) {
             if (ImGui::BeginMenu(cat)) {
+                ImGui::SetWindowFontScale(1.3f);
                 for (int i = 0; i < descriptorCount(); ++i) {
                     const NodeDescriptor& d = descriptors()[i];
                     if (std::string_view(d.category) != cat) continue;
@@ -296,6 +302,18 @@ void GraphUi::clampNodes(Graph& graph) {
 
 void GraphUi::render(Graph& graph) {
     if (!initialized_ || !visible_.load(std::memory_order_relaxed)) return;
+
+    // Propagate density-scaled fonts into ImNodeFlow's inner ImGuiContext.
+    // ContainedContext copies the outer style at first begin() but NOT
+    // the outer IO — so the inner ctx's FontGlobalScale stays at 1.0
+    // and the canvas would render with miniscule text even though the
+    // toolbar / popup / Settings UI are density-scaled. Write directly
+    // to the inner ctx's IO each frame (idempotent, cheap). It is null
+    // until the first update() creates it, so frame 1 draws at scale 1
+    // — acceptable; frame 2 onward is correct.
+    if (auto* rc = graph.handler().getGrid().getRawContext()) {
+        rc->IO.FontGlobalScale = densityScale_;
+    }
 
     // The editor previously rode ImNodeFlow's hardcoded viewport-sized
     // wrapper, which (a) painted under the status bar and (b) made the

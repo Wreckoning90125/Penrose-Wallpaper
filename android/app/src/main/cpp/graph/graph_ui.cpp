@@ -303,18 +303,6 @@ void GraphUi::clampNodes(Graph& graph) {
 void GraphUi::render(Graph& graph) {
     if (!initialized_ || !visible_.load(std::memory_order_relaxed)) return;
 
-    // Propagate density-scaled fonts into ImNodeFlow's inner ImGuiContext.
-    // ContainedContext copies the outer style at first begin() but NOT
-    // the outer IO — so the inner ctx's FontGlobalScale stays at 1.0
-    // and the canvas would render with miniscule text even though the
-    // toolbar / popup / Settings UI are density-scaled. Write directly
-    // to the inner ctx's IO each frame (idempotent, cheap). It is null
-    // until the first update() creates it, so frame 1 draws at scale 1
-    // — acceptable; frame 2 onward is correct.
-    if (auto* rc = graph.handler().getGrid().getRawContext()) {
-        rc->IO.FontGlobalScale = densityScale_;
-    }
-
     // The editor previously rode ImNodeFlow's hardcoded viewport-sized
     // wrapper, which (a) painted under the status bar and (b) made the
     // whole viewport into one big resize-target via ImGui's default

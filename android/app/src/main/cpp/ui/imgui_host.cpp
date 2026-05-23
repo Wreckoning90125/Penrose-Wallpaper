@@ -92,12 +92,16 @@ bool ImGuiHost::initialize(const VulkanContext& ctx, float densityScale) {
     // and item sizes (which is why buttons look big), but the default
     // ImGui font is a fixed 13px bitmap, so on a high-density phone you
     // get fat density-sized buttons with miniscule text inside — the
-    // toolbar / popup / node-text "lost in the space" symptom. Density-
-    // scaling the font puts glyphs on the same dp footing as the rest
-    // of the UI, the same idiom Android apps use for sp/dp units, and
+    // toolbar / popup / node-text "lost in the space" symptom. Setting
+    // style.FontScaleMain (the 1.92 replacement for io.FontGlobalScale,
+    // imgui.cpp:532) puts glyphs on the same dp footing as the rest of
+    // the UI — the same idiom Android apps use for sp/dp units — and
     // adapts naturally across phones, landscape, tablets and foldables
-    // since density and DisplaySize are reported per surface.
-    io.FontGlobalScale = densityScale_;
+    // since density and DisplaySize are reported per surface. The inner
+    // ImGuiContext ImNodeFlow runs the editor in copies this style from
+    // the outer ctx on every ContainedContext::begin (its `new_style =
+    // orig_style` line), so the canvas scales without separate wiring.
+    style.FontScaleMain = densityScale_;
 
     ImGui_ImplVulkan_InitInfo init{};
     init.ApiVersion        = VK_API_VERSION_1_3;

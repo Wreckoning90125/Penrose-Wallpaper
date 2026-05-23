@@ -86,6 +86,23 @@ if(_inf_collider_patched EQUAL -1)
     file(WRITE "${_INF_CPP}" "${_INF_CPP_TEXT}")
 endif()
 
+# Patch ImNodeFlow: tint a selected link red on the base bezier, not just
+# its outline. The library draws an outline on top of a pin-coloured base
+# bezier when m_selected — fine on a desktop, far too subtle on a phone
+# where the user has tapped a link expressly to delete it. Switching the
+# base smart_bezier call to red on m_selected gives the whole link an
+# unmistakable red accent the second it is selected. Idempotent across
+# rebuilds via the PENROSE_LINK_RED marker.
+file(READ "${_INF_CPP}" _INF_CPP_TEXT)
+string(FIND "${_INF_CPP_TEXT}" "PENROSE_LINK_RED" _inf_redlink_patched)
+if(_inf_redlink_patched EQUAL -1)
+    string(REPLACE
+        "smart_bezier(start, end, m_left->getStyle()->color, thickness);"
+        "smart_bezier(start, end, m_selected ? IM_COL32(225, 65, 65, 235) /* PENROSE_LINK_RED */ : m_left->getStyle()->color, thickness);"
+        _INF_CPP_TEXT "${_INF_CPP_TEXT}")
+    file(WRITE "${_INF_CPP}" "${_INF_CPP_TEXT}")
+endif()
+
 add_library(penrose SHARED
     # JNI entrypoints
     jni_bridge.cpp

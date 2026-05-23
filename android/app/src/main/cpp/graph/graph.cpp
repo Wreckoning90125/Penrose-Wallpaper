@@ -397,6 +397,12 @@ Graph::Graph() {
     // and equal to the real scale so a stray reset-zoom can't desync it.
     auto& cfg = handler_.getGrid().config();
     cfg.default_zoom = 1.0f;
+    // ContainedContext fills its BeginChild with this colour as the
+    // canvas backing. Drop the alpha so the wallpaper shows through the
+    // editor while it is open — the user can see what audio / clock /
+    // page-scroll modulation is doing to the tiles in real time while
+    // wiring the graph, instead of staring at an opaque slab.
+    cfg.color = IM_COL32(28, 34, 40, 130);
     // Leave scroll_button at ImNodeFlow's default (middle mouse). A
     // touchscreen never synthesises a middle button, so the canvas
     // never pans and the scroll offset stays fixed at (0,0). The

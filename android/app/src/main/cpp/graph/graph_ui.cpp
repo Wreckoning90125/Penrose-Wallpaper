@@ -61,7 +61,9 @@ void GraphUi::shutdown() {
     initialized_ = false;
 }
 
-void GraphUi::drawToolbar(Graph& graph) {
+void GraphUi::drawToolbar(Graph& graph,
+                          FlowNode* selNode,
+                          const std::shared_ptr<ImFlow::Link>& selLink) {
     const ImGuiIO& io = ImGui::GetIO();
     const float barH  = kAppBarHeightDp * densityScale_;
     const float inset = kAppBarInsetDp  * densityScale_;
@@ -94,8 +96,8 @@ void GraphUi::drawToolbar(Graph& graph) {
     // Four buttons equally spaced across the bar. Width per slot =
     // (bar usable width) / 4; height = bar height minus inset on both
     // sides so taps near the top/bottom edge still land inside.
-    FlowNode* selNode = selectedNode(graph);
-    std::shared_ptr<ImFlow::Link> selLink = selectedLink(graph);
+    // selNode and selLink are snapshotted by render() before
+    // handler.update() runs — see the comment in render() for why.
     const float usableW = io.DisplaySize.x - 2.0f * inset;
     const float slotW   = usableW * 0.25f;
     const float btnW    = slotW - inset;
@@ -303,6 +305,18 @@ void GraphUi::clampNodes(Graph& graph) {
 void GraphUi::render(Graph& graph) {
     if (!initialized_ || !visible_.load(std::memory_order_relaxed)) return;
 
+    // Snapshot the selected node + link BEFORE handler.update() runs.
+    // ImNodeFlow's Link::update deselects every selected link on any
+    // left-click event ("if (!Ctrl && IsMouseClicked(Left)) m_selected
+    // = false"), regardless of where the click landed — so a tap on our
+    // toolbar's Delete button deselects the link the same frame the
+    // user is trying to delete it. Capturing the selection here, before
+    // update(), keeps the link reference alive long enough for the
+    // toolbar to act on it; the shared_ptr also pins the Link until the
+    // toolbar's deleteLink() call goes through.
+    FlowNode* preSelNode = selectedNode(graph);
+    std::shared_ptr<ImFlow::Link> preSelLink = selectedLink(graph);
+
     // The editor previously rode ImNodeFlow's hardcoded viewport-sized
     // wrapper, which (a) painted under the status bar and (b) made the
     // whole viewport into one big resize-target via ImGui's default
@@ -311,21 +325,34 @@ void GraphUi::render(Graph& graph) {
     //   - non-movable (panning is the canvas's job, not the window's),
     //   - resizable only at the bottom-right corner (ConfigWindows-
     //     ResizeFromEdges=false), so a drag on the canvas edge can't
-    //     be mistaken for a resize gesture mid-pan.
-    // ImNodeFlow opens its own viewport-sized window inside its
-    // separate ImGuiContext during handler.update() — that's harmless,
-    // its draw data is merged into our BeginChild rect by
+    //     be mistaken for a resize gesture mid-pan,
+    //   - kept above the gesture-nav region by the bottomSafe margin
+    //     below, so the resize grip is reachable on phones where the
+    //     navbar inset is small but the system gesture area extends
+    //     well above the screen edge.
+    // The host window background is semi-transparent so the wallpaper
+    // (and the audio/clock-driven tiling) shows through the editor —
+    // the user gets feedback on what their graph is driving while they
+    // wire it. ImNodeFlow opens its own viewport-sized window inside
+    // its separate ImGuiContext during handler.update() — that's
+    // harmless, its draw data is merged into our BeginChild rect by
     // AppendDrawData and clipped to fit.
     ImGui::GetIO().ConfigWindowsResizeFromEdges = false;
 
     const ImGuiIO& io = ImGui::GetIO();
-    const float barH  = kAppBarHeightDp * densityScale_;
-    const float topY  = insetTopPx_ + barH;
+    const float barH       = kAppBarHeightDp * densityScale_;
+    const float topY       = insetTopPx_ + barH;
+    // ~56dp of clearance above the bottom screen edge so the visible
+    // resize grip + ImGui's hit rect both sit above Android's gesture
+    // strip. WindowInsets reports the nav-bar inset, but on gesture nav
+    // the inset is small (often ~16dp) and the gesture region extends
+    // higher — this is the conservative margin.
+    const float bottomSafe = 56.0f * densityScale_;
 
     ImGui::SetNextWindowPos(ImVec2(insetLeftPx_, topY), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(
         ImVec2(io.DisplaySize.x - insetLeftPx_ - insetRightPx_,
-               io.DisplaySize.y - topY - insetBottomPx_),
+               io.DisplaySize.y - topY - insetBottomPx_ - bottomSafe),
         ImGuiCond_FirstUseEver);
 
     constexpr ImGuiWindowFlags kHostFlags =
@@ -344,6 +371,7 @@ void GraphUi::render(Graph& graph) {
     // Zero out window padding so the canvas fills the host window
     // edge-to-edge. ImNodeFlow's BeginChild uses GetContentRegionAvail
     // for its own size, which respects this padding.
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(15, 18, 22, 150));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::Begin("##GraphEditorHost", nullptr, kHostFlags);
     graph.handler().update();
@@ -368,6 +396,7 @@ void GraphUi::render(Graph& graph) {
     }
     ImGui::End();
     ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
 
     // Keep the graph reachable. arrangeNodes lays the default graph
     // into a canvas-fitted grid once (a loaded custom graph keeps its
@@ -379,7 +408,7 @@ void GraphUi::render(Graph& graph) {
     }
     clampNodes(graph);
 
-    drawToolbar(graph);
+    drawToolbar(graph, preSelNode, preSelLink);
     drawSpawnPopup(graph);
 }
 

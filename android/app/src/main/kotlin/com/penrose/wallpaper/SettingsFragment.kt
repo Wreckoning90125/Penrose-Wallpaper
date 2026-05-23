@@ -11,6 +11,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
+import android.widget.GridView
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
@@ -183,39 +184,50 @@ class SettingsFragment : PreferenceFragmentCompat(),
     }
 
     /**
-     * The Material-preset row. Picking a preset is a one-shot apply: its
-     * values are written into SharedPreferences and the screen re-inflates
-     * so every slider re-binds to the new values. There is no stored
-     * "active preset" — the preset just seeds the sliders and is done.
+     * The Material-preset row. Opens a 2-column grid of preset tile
+     * thumbnails (see `tools/bake_preset_thumbnails.py` — transparent
+     * background so the dialog reads as clean tiles, not boxed images).
+     * The tile itself is the selector — tap a tile to apply that preset.
+     * Material's selectableItemBackground gives a ripple on touch so
+     * each tile responds like an interactive button. Picking a preset
+     * is a one-shot apply: its values are written into SharedPreferences
+     * and the Material screen re-inflates so every slider re-binds to
+     * the new values. There is no stored "active preset" state.
      */
     private fun bindMaterialPresetRow() {
         findPreference<Preference>("material_preset_pick")?.setOnPreferenceClickListener {
             val ctx = requireContext()
             val presets = MaterialPresets.all
-            AlertDialog.Builder(ctx)
+            val grid = LayoutInflater.from(ctx)
+                .inflate(R.layout.preset_picker_grid, null) as GridView
+            grid.adapter = PresetPickerAdapter(ctx, presets)
+
+            val dialog = AlertDialog.Builder(ctx)
                 .setTitle("Material preset")
-                .setAdapter(PresetPickerAdapter(ctx, presets)) { _, which ->
-                    val prefs = preferenceManager.sharedPreferences
-                        ?: return@setAdapter
-                    val editor = prefs.edit()
-                    for ((key, value) in presets[which].values) {
-                        editor.putInt(key, value)
-                    }
-                    editor.apply()
-                    loadScreen(ScreenKey.Material)
-                    Toast.makeText(ctx, presets[which].name, Toast.LENGTH_SHORT).show()
-                }
+                .setView(grid)
                 .setNegativeButton(android.R.string.cancel, null)
                 .show()
+
+            grid.setOnItemClickListener { _, _, which, _ ->
+                val prefs = preferenceManager.sharedPreferences
+                    ?: return@setOnItemClickListener
+                val editor = prefs.edit()
+                for ((key, value) in presets[which].values) {
+                    editor.putInt(key, value)
+                }
+                editor.apply()
+                loadScreen(ScreenKey.Material)
+                Toast.makeText(ctx, presets[which].name, Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            }
             true
         }
     }
 
     /**
-     * Picker row: a baked preset thumbnail (see
-     * `tools/bake_preset_thumbnails.py`) next to the preset's name. The
-     * thumbnail conveys character — matte / metallic / iridescent /
-     * lacquered — so the picker isn't a name-only list.
+     * GridView cell adapter: each cell is the baked transparent-background
+     * thumbnail above the preset name, with selectableItemBackground on
+     * the cell root so a tap shows the Material ripple over the tile.
      */
     private class PresetPickerAdapter(
         ctx: Context,

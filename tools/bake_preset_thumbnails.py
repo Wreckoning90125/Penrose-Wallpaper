@@ -135,8 +135,6 @@ RHOMB_W = 0.78
 RHOMB_H = RHOMB_W * math.tan(math.radians(36.0))
 BEVEL_W = 0.18       # bevel chamfer width in normalised units
 INSCRIBED_R = (RHOMB_W * RHOMB_H) / math.sqrt(RHOMB_W * RHOMB_W + RHOMB_H * RHOMB_H)
-
-BG = np.array([0.07, 0.08, 0.10], dtype=np.float32)
 SHEEN_ROUGH = 0.30   # MaterialParams default; not slider-backed today
 COAT_ROUGH = 0.10    # MaterialParams default; not slider-backed today
 
@@ -354,6 +352,14 @@ def render_preset(p: Preset):
     env = fake_environment(N, V, F0, p.roughness)
 
     ambient_term = albedo * ambient_color
+    # High-iridescence presets carry their colour into the ambient too,
+    # so the surface reads as oil-slick / pearl AT REST instead of only
+    # picking up colour at the bevel rim where Fresnel is high. The real
+    # Belcour-Barla film is a Fresnel modifier (no diffuse iridescence)
+    # — this is a preview-only cheat to convey character without forcing
+    # the user to catch a highlight to see what the material is.
+    if irid_color is not None and p.iridescence > 0.3:
+        ambient_term = ambient_term + irid_color * (0.40 * p.iridescence)
     # Plateau-strongest emissive bump that fades into the bevel rim,
     # so a high-emissive preset reads as glowing-from-the-inside on
     # the rhomb rather than a uniform wash.
@@ -363,15 +369,14 @@ def render_preset(p: Preset):
     color = ambient_term + key + fill + env + emissive_term
     color = np.clip(color, 0.0, 1.0)
 
-    # Antialiased rhomb boundary — inward goes negative outside the
-    # rhomb; clipping (inward * pixels-per-unit) to a 1-pixel band
-    # gives a clean edge on the dark background.
+    # Antialiased rhomb boundary — outside the rhomb the chip is fully
+    # transparent so the dialog (or wallpaper) shows through; the AA
+    # band fades over ~1 pixel for a clean edge. Straight-alpha so the
+    # Android ImageView decoder composites correctly.
     alpha_chip = np.clip(inward * (W * 0.5), 0.0, 1.0)
-    color = color * alpha_chip[..., None] + BG * (1.0 - alpha_chip[..., None])
-
     rgba = np.zeros((H, W, 4), dtype=np.uint8)
     rgba[..., :3] = np.clip(color * 255.0, 0, 255).astype(np.uint8)
-    rgba[..., 3] = 255
+    rgba[..., 3]  = np.clip(alpha_chip * 255.0, 0, 255).astype(np.uint8)
     return rgba
 
 

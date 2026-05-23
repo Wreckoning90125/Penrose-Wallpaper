@@ -1,33 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  One row in the Material-preset picker dialog. A square thumbnail of the
-  baked preset (tools/bake_preset_thumbnails.py) and the preset name; the
-  whole row is a touch target so the list reads as picker cards rather
-  than a name-only list.
+  One cell in the Material-preset picker grid. The baked thumbnail
+  (tools/bake_preset_thumbnails.py — transparent background) is the
+  primary touch target, with the preset name underneath; ?attr/
+  selectableItemBackground gives a Material ripple on press so the cell
+  responds to touch like an interactive tile rather than a static icon.
+  Sized so a 2-column grid fills a typical dialog comfortably.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="horizontal"
-    android:gravity="center_vertical"
-    android:minHeight="88dp"
-    android:paddingStart="20dp"
-    android:paddingEnd="20dp"
-    android:paddingTop="8dp"
-    android:paddingBottom="8dp">
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="?attr/selectableItemBackground"
+    android:clickable="true"
+    android:focusable="true"
+    android:padding="12dp">
 
     <ImageView
         android:id="@+id/preset_thumbnail"
-        android:layout_width="72dp"
-        android:layout_height="72dp"
+        android:layout_width="128dp"
+        android:layout_height="128dp"
         android:scaleType="fitCenter"
         android:contentDescription="@null" />
 
     <TextView
         android:id="@+id/preset_name"
-        android:layout_width="0dp"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_weight="1"
-        android:layout_marginStart="20dp"
-        android:textAppearance="?android:attr/textAppearanceLarge" />
+        android:layout_marginTop="8dp"
+        android:textAppearance="?android:attr/textAppearanceMedium" />
 </LinearLayout>

@@ -2,10 +2,17 @@ package com.penrose.wallpaper
 
 import android.app.WallpaperManager
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ArrayAdapter
+import android.widget.ImageView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -14,6 +21,7 @@ import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.SeekBarPreference
 import com.penrose.wallpaper.audio.AudioPlaybackService
+import com.penrose.wallpaper.preset.MaterialPreset
 import com.penrose.wallpaper.preset.MaterialPresets
 import com.penrose.wallpaper.preset.PresetStore
 
@@ -186,9 +194,9 @@ class SettingsFragment : PreferenceFragmentCompat(),
             val presets = MaterialPresets.all
             AlertDialog.Builder(ctx)
                 .setTitle("Material preset")
-                .setItems(presets.map { it.name }.toTypedArray()) { _, which ->
+                .setAdapter(PresetPickerAdapter(ctx, presets)) { _, which ->
                     val prefs = preferenceManager.sharedPreferences
-                        ?: return@setItems
+                        ?: return@setAdapter
                     val editor = prefs.edit()
                     for ((key, value) in presets[which].values) {
                         editor.putInt(key, value)
@@ -200,6 +208,28 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 .setNegativeButton(android.R.string.cancel, null)
                 .show()
             true
+        }
+    }
+
+    /**
+     * Picker row: a baked preset thumbnail (see
+     * `tools/bake_preset_thumbnails.py`) next to the preset's name. The
+     * thumbnail conveys character — matte / metallic / iridescent /
+     * lacquered — so the picker isn't a name-only list.
+     */
+    private class PresetPickerAdapter(
+        ctx: Context,
+        private val presets: List<MaterialPreset>,
+    ) : ArrayAdapter<MaterialPreset>(ctx, R.layout.preset_picker_item, presets) {
+        private val inflater = LayoutInflater.from(ctx)
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val view = convertView
+                ?: inflater.inflate(R.layout.preset_picker_item, parent, false)
+            val preset = presets[position]
+            view.findViewById<ImageView>(R.id.preset_thumbnail)
+                .setImageResource(preset.thumbnailRes)
+            view.findViewById<TextView>(R.id.preset_name).text = preset.name
+            return view
         }
     }
 

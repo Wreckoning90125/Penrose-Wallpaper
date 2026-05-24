@@ -61,12 +61,24 @@ struct BorderVertex {
     float nx, ny;      // unit edge normal
 };
 
-// Vertex push constants. 32-byte affine model→clip view matrix.
+// Vertex push constants.
+//
+// view0/view1 are the 2x3 affine model→clip view matrix (rotation, zoom,
+// pan). When projection mode is Euclidean (projection == 0) the vertex
+// shader applies this directly to inPos. When PoincareDisk
+// (projection == 1) the shader first projects inPos through the radial
+// hyperbolic-radius map E² → B² then the hyperbolic translation τ_b in
+// B², and the resulting disk point goes through the view matrix — so
+// screen rotation / zoom still work on top of the projected disk.
+//   hypBoostX/Y  — b ∈ B² (|b| < 1) for the τ_b boost
+//   hypScale     — world-radius → unit-disk-radius scale
+//   projection   — 0 = Euclidean passthrough, 1 = PoincareDisk
 struct PushBlock {
     float view0x, view0y, view0z, _pad0;
     float view1x, view1y, view1z, _pad1;
+    float hypBoostX, hypBoostY, hypScale, projection;
 };
-static_assert(sizeof(PushBlock) == 32, "PushBlock layout drift");
+static_assert(sizeof(PushBlock) == 48, "PushBlock layout drift");
 
 // Physical-material parameters. Every appearance knob the fill shader once
 // hard-coded lives here as a base value, so the look is fully settable

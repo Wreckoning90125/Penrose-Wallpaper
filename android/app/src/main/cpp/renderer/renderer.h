@@ -245,6 +245,13 @@ private:
     float fxLightIntensity_ = 1.00f;
     float fxLightWarmth_    = 0.50f;
     float fxLightAmbient_   = 0.22f;
+    // Hyperbolic-projection targets — slider/setting baseline plus the
+    // sum of any connected OutHypBoost{X,Y} / OutHypScale Target nodes.
+    // The boost is clamped to |b| <= 0.92 in the graph so the τ_b
+    // transform never goes singular near the disk boundary.
+    float fxHypBoostX_      = 0.0f;
+    float fxHypBoostY_      = 0.0f;
+    float fxHypScale_       = 1.5f;
 
     // Effective generation for the currently-built geometry. Equal to
     // settings_.generation in Locked pan mode; grows past it in Generative

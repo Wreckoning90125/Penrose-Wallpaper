@@ -39,8 +39,9 @@ enum class NodeKind : uint16_t {
     OutRippleSpeed,
     OutBrightness,
     OutDepthAmount,
-    // Material + lighting targets — must stay contiguous with the four
-    // above; the target block runs OutRippleAmount .. OutLightAmbient.
+    // Material + lighting + hyperbolic-projection targets — must stay
+    // contiguous with the four above; the target block runs
+    // OutRippleAmount .. OutHypScale.
     OutMatRoughness,
     OutMatMetalness,
     OutMatSheen,
@@ -54,6 +55,12 @@ enum class NodeKind : uint16_t {
     OutLightIntensity,
     OutLightWarmth,
     OutLightAmbient,
+    // Hyperbolic-projection targets — drive the τ_b boost coordinates
+    // and the world-radius scale of the Poincaré-disk mode. Inert when
+    // Settings::projection is Euclidean.
+    OutHypBoostX,
+    OutHypBoostY,
+    OutHypScale,
 
     // Appended after the target block so existing saved-graph node indices
     // never shift. A Source by category despite its enum position.
@@ -99,6 +106,9 @@ struct EvalResult {
     float lightIntensity = 1.00f;
     float lightWarmth    = 0.50f;
     float lightAmbient   = 0.22f;
+    float hypBoostX      = 0.0f;
+    float hypBoostY      = 0.0f;
+    float hypScale       = 1.5f;
 };
 
 // FlowNode is the common base for every modulation node in the editor.

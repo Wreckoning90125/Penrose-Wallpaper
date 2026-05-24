@@ -8,6 +8,7 @@ layout(location = 2) in vec2 inNormal;
 layout(push_constant) uniform PC {
     vec4 view0;
     vec4 view1;
+    vec4 hyp;     // x=hypBoostX, y=hypBoostY, z=hypScale, w=projection (0=E², 1=B²)
 } pc;
 
 #include "uniforms.glsl"
@@ -47,6 +48,24 @@ void main() {
         base += waveGradient(base, omegaT, pagePhase, waveSym) * amp * 0.006;
     }
     vec2 world = base + inNormal * (inSide * ubo.borderGeom.x);
+
+    // Hyperbolic projection — same as fill.vert. See
+    // docs/hyperbolic/projection-design.md.
+    if (pc.hyp.w > 0.5) {
+        float r = length(world);
+        vec2 dir = (r > 1e-6) ? (world / r) : vec2(0.0);
+        float d = tanh(r * pc.hyp.z * 0.5);
+        vec2 z = dir * d;
+        vec2 b  = pc.hyp.xy;
+        float bb = dot(b, b);
+        float zz = dot(z, z);
+        float zb = dot(z, b);
+        float denom = bb * zz + 2.0 * zb + 1.0;
+        if (abs(denom) < 1e-6) denom = 1e-6;
+        vec2 num = (1.0 - bb) * z + (zz + 2.0 * zb + 1.0) * b;
+        world = num / denom;
+    }
+
     float x = pc.view0.x * world.x + pc.view0.y * world.y + pc.view0.z;
     float y = pc.view1.x * world.x + pc.view1.y * world.y + pc.view1.z;
     gl_Position = vec4(x, y, 0.0, 1.0);

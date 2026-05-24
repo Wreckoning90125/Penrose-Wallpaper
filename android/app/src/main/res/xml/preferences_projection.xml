@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <Preference
+        android:key="nav_back"
+        android:title="← Back"
+        android:summary="" />
+
+    <PreferenceCategory android:title="Projection">
+        <ListPreference
+            android:key="projection"
+            android:title="Mode"
+            android:summary="Euclidean (default; affine view) or Poincaré disk (the Circle Limit projection)"
+            android:entries="@array/projection_entries"
+            android:entryValues="@array/projection_values"
+            android:defaultValue="0" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Poincaré disk">
+        <SeekBarPreference
+            android:key="hyp_scale"
+            android:title="World-to-disk scale"
+            android:summary="How aggressively world radius squeezes into the disk. Low → big tiles near the centre, far tiles compress to the boundary; high → the whole tiling is small and central. 50 = default."
+            android:min="5" android:max="100" android:defaultValue="50"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="hyp_boost_x"
+            android:title="Disk centre — X"
+            android:summary="Hyperbolic translation along the X axis. 50 = centred at the origin; 0/100 shifts the disk centre to b ≈ (-0.9, 0) / (+0.9, 0)."
+            android:min="0" android:max="100" android:defaultValue="50"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="hyp_boost_y"
+            android:title="Disk centre — Y"
+            android:summary="Hyperbolic translation along the Y axis. 50 = centred at the origin."
+            android:min="0" android:max="100" android:defaultValue="50"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="hyp_edge_subdiv"
+            android:title="Edge polyline subdivision"
+            android:summary="Each tile edge is split into this many sub-segments before projection. 1 = straight chord (cheapest); 16 reads as a true geodesic arc at typical zoom. Triggers a geometry rebuild."
+            android:min="1" android:max="32" android:defaultValue="1"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+</PreferenceScreen>

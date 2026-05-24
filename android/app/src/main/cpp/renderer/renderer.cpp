@@ -369,6 +369,9 @@ void Renderer::drawFrame() {
         gres.lightIntensity = settings_.lightIntensity;
         gres.lightWarmth    = settings_.lightWarmth;
         gres.lightAmbient   = settings_.lightAmbient;
+        gres.hypBoostX      = settings_.hypBoostX;
+        gres.hypBoostY      = settings_.hypBoostY;
+        gres.hypScale       = settings_.hypScale;
         graph_.evaluate(gctx, gres);
         fxRippleAmount_ = gres.rippleAmount;
         fxRippleSpeed_  = gres.rippleSpeed;
@@ -387,6 +390,9 @@ void Renderer::drawFrame() {
         fxLightIntensity_ = gres.lightIntensity;
         fxLightWarmth_    = gres.lightWarmth;
         fxLightAmbient_   = gres.lightAmbient;
+        fxHypBoostX_      = gres.hypBoostX;
+        fxHypBoostY_      = gres.hypBoostY;
+        fxHypScale_       = gres.hypScale;
     }
 
     // Lazily bring ImGui up only when the editor is actually wanted.
@@ -590,9 +596,28 @@ void Renderer::drawFrame() {
     // Affine model→clip. Model space is math-convention (y-up); Vulkan
     // clip is y-down. The tilings are symmetric so passing coords
     // through unflipped looks identical either way.
+    //
+    // Hyperbolic mode: the shader pre-projects each world point through
+    // E² → B² (radial hyperbolic-radius map) and τ_b (the B² boost)
+    // before this affine view matrix takes the result to clip space.
+    // The boost vector b is clamped to |b| <= 0.92 to keep the τ_b
+    // denominator away from zero near the disk boundary. The scale is
+    // clamped >= 1e-3 so a runaway graph can't collapse the world to
+    // the origin via tanh(0).
     PushBlock pc{};
     pc.view0x =  cosR * sX; pc.view0y = -sinR * sY; pc.view0z = tX;
     pc.view1x =  sinR * sX; pc.view1y =  cosR * sY; pc.view1z = tY;
+    {
+        const float bx = fxHypBoostX_;
+        const float by = fxHypBoostY_;
+        const float bm = std::sqrt(bx * bx + by * by);
+        const float bmClamp = 0.92f;
+        const float bsc = (bm > bmClamp) ? (bmClamp / bm) : 1.0f;
+        pc.hypBoostX = bx * bsc;
+        pc.hypBoostY = by * bsc;
+        pc.hypScale  = std::max(fxHypScale_, 1e-3f);
+        pc.projection = (settings_.projection == Projection::PoincareDisk) ? 1.0f : 0.0f;
+    }
 
     vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             pipelineLayout_, 0, 1, &descSet_, 0, nullptr);

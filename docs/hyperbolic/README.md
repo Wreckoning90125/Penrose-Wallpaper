@@ -1,10 +1,13 @@
 # Hyperbolic geometry — notes for the planned H² projection mode
 
-Background for the **Hyperbolic projection mode (Poincaré disk)** item in
-`todo.md`. The renderer's tiling generators are Euclidean; rendering a tiling
-in the hyperbolic plane would be a new *projection*, not a new `Family`. Doing
-that well requires knowing the same things the maths and graphics literature
-already says, so this directory consolidates what is settled and what is not.
+Background for the **Hyperbolic projection mode (Poincaré disk)**, which
+ships in this build (Settings → Projection). The renderer's tiling
+generators are Euclidean; the hyperbolic mode is a *projection* — the
+vertex shader maps each world coordinate through the E² → B² radial
+homeomorphism and the τ_b hyperbolic boost before the affine view
+transform takes it to clip space. Validity table per family is in
+`projection-design.md`. The maths reference material backing every
+choice is here so the next change has its derivations within reach.
 
 Two parallel tracks:
 

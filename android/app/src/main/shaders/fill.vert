@@ -11,6 +11,7 @@ layout(location = 5) in vec4 inTileMat;
 layout(push_constant) uniform PC {
     vec4 view0;
     vec4 view1;
+    vec4 hyp;     // x=hypBoostX, y=hypBoostY, z=hypScale, w=projection (0=E², 1=B²)
 } pc;
 
 #include "uniforms.glsl"
@@ -102,8 +103,38 @@ void main() {
         }
     }
 
-    float x = pc.view0.x * displacedPos.x + pc.view0.y * displacedPos.y + pc.view0.z;
-    float y = pc.view1.x * displacedPos.x + pc.view1.y * displacedPos.y + pc.view1.z;
+    // Hyperbolic projection (Poincaré disk): when pc.hyp.w >= 0.5 the
+    // world point is first mapped through the radial homeomorphism
+    // E² → B² for which hyperbolic distance from the origin equals
+    // Euclidean distance from the origin (x ↦ x̂ · tanh(|x|·scale/2)),
+    // then the hyperbolic translation τ_b is applied in B² so the
+    // disk re-centres on b. The result is a point of the unit disk;
+    // the view matrix then maps disk → clip in the usual way. When
+    // hyp.w < 0.5 (Euclidean mode) the projection block is a no-op.
+    // See docs/hyperbolic/projection-design.md and Ratcliffe Eq. 4.5.5.
+    vec2 world = displacedPos;
+    if (pc.hyp.w > 0.5) {
+        float r = length(world);
+        vec2 dir = (r > 1e-6) ? (world / r) : vec2(0.0);
+        // Hyperbolic-radius map; squish by scale so a moderate-size
+        // patch reaches a moderate fraction of the disk radius.
+        float d = tanh(r * pc.hyp.z * 0.5);
+        vec2 z = dir * d;
+
+        // τ_b(z) = ((1-|b|²)·z + (|z|²+2·z·b+1)·b) / (|b|²·|z|² + 2·z·b + 1)
+        // Real-vector form of Ratcliffe Eq. 4.5.5; identity when b = 0.
+        vec2 b  = pc.hyp.xy;
+        float bb = dot(b, b);
+        float zz = dot(z, z);
+        float zb = dot(z, b);
+        float denom = bb * zz + 2.0 * zb + 1.0;
+        if (abs(denom) < 1e-6) denom = 1e-6;
+        vec2 num = (1.0 - bb) * z + (zz + 2.0 * zb + 1.0) * b;
+        world = num / denom;
+    }
+
+    float x = pc.view0.x * world.x + pc.view0.y * world.y + pc.view0.z;
+    float y = pc.view1.x * world.x + pc.view1.y * world.y + pc.view1.z;
     gl_Position = vec4(x, y, 0.0, 1.0);
 
     vRipple = phiCenter * amp * 0.5;

@@ -63,12 +63,25 @@ internal class Settings(
     // metalness from Phase B.
     val matRoughMod: Float,
     val matMetalMod: Float,
+    // Hyperbolic projection mode (docs/hyperbolic/projection-design.md).
+    // `projection` 0 = Euclidean (default; original affine view),
+    //              1 = Poincaré disk.
+    // `hypScale` controls how aggressively world radius is mapped into
+    // the unit disk; `hypBoostX/Y` is the τ_b boost point in B² (clamped
+    // to |b|≤0.92 server-side); `hypEdgeSubdiv` is the per-edge polyline
+    // tessellation count when in disk mode (1 = no tessellation).
+    val projection: Int,
+    val hypScale: Float,
+    val hypBoostX: Float,
+    val hypBoostY: Float,
+    val hypEdgeSubdiv: Int,
     val customOklch: FloatArray,
 ) {
     fun toNative(): Pair<IntArray, FloatArray> {
         val ints = intArrayOf(
             family, seedIdx, generation, preset, colorCount, colorMode,
             if (borderOn) 1 else 0, bgMode, rippleMode, panMode, rippleKind,
+            projection, hypEdgeSubdiv,
         )
         val baseFloats = floatArrayOf(
             borderWidth, borderL, borderC, borderH, borderAlpha,
@@ -81,6 +94,7 @@ internal class Settings(
             matSheenColorR, matSheenColorG, matSheenColorB,
             matIridThickMin, matIridThickMax,
             matRoughMod, matMetalMod,
+            hypScale, hypBoostX, hypBoostY,
         )
         val floats = FloatArray(baseFloats.size + customOklch.size)
         baseFloats.copyInto(floats)
@@ -152,6 +166,16 @@ internal class Settings(
         // Variation knobs — opt-in seam roughness + per-tile metalness.
         const val KEY_MAT_ROUGH_MOD = "mat_rough_mod"
         const val KEY_MAT_METAL_MOD = "mat_metal_mod"
+
+        // Hyperbolic projection. PROJECTION is a ListPreference ("0"=E²,
+        // "1"=Poincaré disk); HYP_SCALE / HYP_BOOST_{X,Y} are 0..100
+        // SeekBars (load() converts to floats, BOOST_{X,Y} re-centred to
+        // [-1, +1]); HYP_EDGE_SUBDIV is a 1..32 SeekBar.
+        const val KEY_PROJECTION       = "projection"
+        const val KEY_HYP_SCALE        = "hyp_scale"
+        const val KEY_HYP_BOOST_X      = "hyp_boost_x"
+        const val KEY_HYP_BOOST_Y      = "hyp_boost_y"
+        const val KEY_HYP_EDGE_SUBDIV  = "hyp_edge_subdiv"
 
         // Bumped by PresetStore.applyToPrefs whenever a preset writes a
         // fresh modulation_graph.json, and by the node editor when it
@@ -265,6 +289,19 @@ internal class Settings(
                 matIridThickMax = safeInt(prefs, KEY_MAT_IRID_THICK_MAX, 560).toFloat(),
                 matRoughMod = safeInt(prefs, KEY_MAT_ROUGH_MOD, 0) / 100f,
                 matMetalMod = safeInt(prefs, KEY_MAT_METAL_MOD, 0) / 100f,
+                // Projection. Stored as a "0"/"1" string from the
+                // ListPreference. The disk-mode params: scale 0..100 →
+                // 0..3.0 world-radius gain (60 → default 0.6); boost
+                // 0..100 → -0.9..+0.9 in B² (50 → 0); edge subdiv 1..32.
+                projection    = safeStr(prefs, KEY_PROJECTION, "0").toIntOrNull() ?: 0,
+                // Slider 0..100 → scale 0..3.0; the shader applies
+                // tanh(r·scale/2), so scale=1.5 (slider default 50) maps
+                // unit world radius to tanh(0.75) ≈ 0.64 — well within
+                // the disk and visually a moderate squeeze.
+                hypScale      = safeInt(prefs, KEY_HYP_SCALE, 50) / 100f * 3.0f,
+                hypBoostX     = (safeInt(prefs, KEY_HYP_BOOST_X, 50) - 50) / 50f * 0.9f,
+                hypBoostY     = (safeInt(prefs, KEY_HYP_BOOST_Y, 50) - 50) / 50f * 0.9f,
+                hypEdgeSubdiv = safeInt(prefs, KEY_HYP_EDGE_SUBDIV, 1).coerceIn(1, 32),
                 customOklch  = custom,
             )
         }

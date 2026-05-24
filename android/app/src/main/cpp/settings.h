@@ -19,6 +19,24 @@ enum class BackgroundMode : int {
     Match = 1,  // use palette[0]
 };
 
+// Projection of the (Euclidean) tile generators onto the screen.
+//
+// Euclidean is the original mode — affine view transform, straight tile
+// sides. PoincareDisk maps each world coordinate through the
+// hyperbolic-radius homeomorphism E² → B² then a hyperbolic translation
+// τ_b in B², so the tiling appears inside the unit disk *Circle Limit*-
+// style. Every Family in this repo is Euclidean by construction
+// (substitution + de Bruijn dualisation); the hyperbolic mode is a
+// projection of those generators, not a Fuchsian-group orbit. Cosmetic
+// for the Penrose / Ammann–Beenker / Pinwheel / Danzer families;
+// geometrically meaningful for the Binary family, whose Godrèche–Lançon
+// construction descends from the H² horocyclic binary tiling — see
+// docs/hyperbolic/projection-design.md.
+enum class Projection : int {
+    Euclidean    = 0,
+    PoincareDisk = 1,
+};
+
 struct Settings {
     Family family       = Family::P3;
     int    seedIdx      = 0;
@@ -56,6 +74,25 @@ struct Settings {
     float  panX         = 0.0f;
     float  panY         = 0.0f;
     int    panMode      = 0;
+
+    // Hyperbolic projection mode. `projection` selects Euclidean (the
+    // default; the original affine view transform) or Poincaré-disk
+    // (the Circle Limit projection — see docs/hyperbolic/). `hypScale`
+    // tunes how aggressively world radius is mapped into the disk — at
+    // 1.0 the unit Euclidean ball maps near the disk centre, at 0.3 the
+    // world reaches well into the boundary at unit radius. `hypBoostX`
+    // and `hypBoostY` give the hyperbolic translation τ_b (a point of
+    // B², |b|<1) applied AFTER the radial map; the graph's
+    // OutHypBoost{X,Y} targets can drive these so audio / time / page
+    // scroll feed an animating boost. `hypEdgeSubdiv` is the number of
+    // edge sub-segments per tile edge (1 = no tessellation, the v1
+    // shipping choice; larger values progressively approximate the
+    // true geodesic arc by polyline).
+    Projection projection = Projection::Euclidean;
+    float  hypScale       = 1.5f;
+    float  hypBoostX      = 0.0f;
+    float  hypBoostY      = 0.0f;
+    int    hypEdgeSubdiv  = 1;
 
     // Tile look: master brightness multiplier and per-tile depth/parallax
     // gradient amplitude. Depth follows the tile's geometric apex — fat
@@ -126,11 +163,14 @@ struct Settings {
 
 // Returns true if any setting that affects geometry (tile generation) changed.
 // Used by the renderer to decide whether to rebuild vertex buffers or just
-// re-record draw commands.
+// re-record draw commands. Edge subdivision is geometry-affecting because
+// it changes the vertex/index count emitted per edge — the projection
+// flag itself is shader-side and does NOT trigger a rebuild.
 inline bool geometryChanged(const Settings& a, const Settings& b) {
     return a.family != b.family
         || a.seedIdx != b.seedIdx
-        || a.generation != b.generation;
+        || a.generation != b.generation
+        || a.hypEdgeSubdiv != b.hypEdgeSubdiv;
 }
 
 // Returns true if anything that affects per-tile classification changed.

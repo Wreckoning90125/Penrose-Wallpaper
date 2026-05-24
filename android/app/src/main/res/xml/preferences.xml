@@ -39,6 +39,10 @@
             android:title="Motion"
             android:summary="Ripple amplitude, speed, kind, mode" />
         <Preference
+            android:key="nav_projection"
+            android:title="Projection"
+            android:summary="Euclidean (default) or Poincaré-disk projection (Circle Limit style); world-to-disk scale; hyperbolic pan" />
+        <Preference
             android:key="nav_material"
             android:title="Material"
             android:summary="Roughness, metalness, iridescence, sheen, lobes" />

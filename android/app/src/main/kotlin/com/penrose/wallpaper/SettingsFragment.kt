@@ -44,6 +44,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
         Color(R.xml.preferences_color),
         Borders(R.xml.preferences_borders),
         Motion(R.xml.preferences_motion),
+        Projection(R.xml.preferences_projection),
         Material(R.xml.preferences_material),
         Background(R.xml.preferences_background),
         Audio(R.xml.preferences_audio),
@@ -96,6 +97,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
             }
             ScreenKey.Borders,
             ScreenKey.Motion,
+            ScreenKey.Projection,
             ScreenKey.Background,
             ScreenKey.CustomPalette -> bindBack()
         }
@@ -152,6 +154,9 @@ class SettingsFragment : PreferenceFragmentCompat(),
         }
         findPreference<Preference>("nav_motion")?.setOnPreferenceClickListener {
             loadScreen(ScreenKey.Motion); true
+        }
+        findPreference<Preference>("nav_projection")?.setOnPreferenceClickListener {
+            loadScreen(ScreenKey.Projection); true
         }
         findPreference<Preference>("nav_material")?.setOnPreferenceClickListener {
             loadScreen(ScreenKey.Material); true

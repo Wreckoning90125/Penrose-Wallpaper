@@ -51,10 +51,16 @@ across files.
 - **Harriss 7-fold rhomb substitution.** Blocked on the rhomb-packing
   closure solver below. Detail: `docs/tilings/heptagonal.md`.
 
-- **Hyperbolic projection mode (Poincaré disk).** Distinct geometry
-  path; generators stay Euclidean. Background, design questions and
-  recommended answers in `docs/hyperbolic/`; boundary against the
-  Euclidean engine in `docs/tilings/hyperbolic-and-tooling.md`.
+- **Hyperbolic projection refinements.** The Poincaré-disk mode is
+  live (Settings → Projection): vertex-shader projection, τ_b boost,
+  edge-tessellation up to 32 sub-segments, three node-graph Target
+  nodes for boost X/Y + scale. Pending nice-to-haves:
+    - Fill-triangle interior tessellation (currently only edges are
+      tessellated; visible only at very large tiles).
+    - Screen-space-diameter cull for tiles compressed near the disk
+      boundary — shared with `Endless home-screen pan` below.
+  Background docs: `docs/hyperbolic/`; boundary against the Euclidean
+  engine in `docs/tilings/hyperbolic-and-tooling.md`.
 
 - **Endless home-screen pan.** Rework `Generative` from "grow the
   patch under view" to "translate the view across an unbounded

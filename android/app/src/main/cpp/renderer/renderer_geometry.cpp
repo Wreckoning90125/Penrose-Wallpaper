@@ -274,6 +274,34 @@ bool Renderer::buildGeometry() {
             else               edgesChair(t, edges);
         }
 
+        // In Poincaré-disk projection, straight world-space edges map to
+        // straight clip-space chords (the shader projects per-vertex,
+        // clip-space interpolation is linear). Splitting each edge into
+        // hypEdgeSubdiv sub-segments before the dedup map sees them
+        // gives a polyline that approximates the true hyperbolic
+        // geodesic arc; the dedup map keeps a sub-segment's two
+        // endpoints shared with the adjacent tile's matching
+        // sub-segment, so the border still draws once per shared edge.
+        const int sub = (settings_.projection == Projection::PoincareDisk)
+                        ? std::clamp(settings_.hypEdgeSubdiv, 1, 32) : 1;
+        if (sub > 1) {
+            std::vector<Edge> tess;
+            tess.reserve(edges.size() * sub);
+            for (const Edge& e : edges) {
+                const float dx = e.p2x - e.p1x;
+                const float dy = e.p2y - e.p1y;
+                float prevX = e.p1x, prevY = e.p1y;
+                for (int k = 1; k <= sub; ++k) {
+                    const float t = static_cast<float>(k) / static_cast<float>(sub);
+                    const float curX = e.p1x + dx * t;
+                    const float curY = e.p1y + dy * t;
+                    tess.push_back(Edge{ prevX, prevY, curX, curY, e.kind, e.tileType });
+                    prevX = curX; prevY = curY;
+                }
+            }
+            edges = std::move(tess);
+        }
+
         std::unordered_map<EdgeKey, EdgeRec, EdgeKeyHash> edgeMap;
         edgeMap.reserve(edges.size() / 2 + 16);
         constexpr float kKeyScale = 1.0e5f;

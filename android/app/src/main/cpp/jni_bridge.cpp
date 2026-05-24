@@ -21,7 +21,8 @@ inline Renderer* asRenderer(jlong ptr) { return reinterpret_cast<Renderer*>(ptr)
 // Decode a Settings struct from the flat int/float arrays the Kotlin side
 // passes us. Layout (ints / floats):
 //   ints:   [family, seedIdx, generation, preset, colorCount, colorMode,
-//            borderOn, bgMode, rippleMode, panMode, rippleKind]
+//            borderOn, bgMode, rippleMode, panMode, rippleKind,
+//            projection, hypEdgeSubdiv]
 //   floats: [borderWidth, borderL, borderC, borderH, borderAlpha,
 //            bgL, bgC, bgH, rippleAmount,
 //            zoom, rotation, panX, panY,
@@ -32,9 +33,10 @@ inline Renderer* asRenderer(jlong ptr) { return reinterpret_cast<Renderer*>(ptr)
 //            matSheenColorR, matSheenColorG, matSheenColorB,
 //            matIridThickMin, matIridThickMax,
 //            matRoughMod, matMetalMod,
-//            custom_0_L, custom_0_C, custom_0_H, ..., custom_9_L, custom_9_C, custom_9_H]
-constexpr int kIntCount = 11;
-constexpr int kFloatCount = 16 + 8 + 5 + 5 + 2 + 3 * kMaxColors;
+//            hypScale, hypBoostX, hypBoostY,
+//            custom_0_L, custom_0_C, custom_0_H, ..., custom_15_L, custom_15_C, custom_15_H]
+constexpr int kIntCount   = 13;
+constexpr int kFloatCount = 16 + 8 + 5 + 5 + 2 + 3 + 3 * kMaxColors;
 
 Settings decodeSettings(const jint* ints, const jfloat* floats) {
     Settings s{};
@@ -56,6 +58,10 @@ Settings decodeSettings(const jint* ints, const jfloat* floats) {
     s.panMode = pm;
     int rk = ints[10]; if (rk < 0 || rk > 2) rk = 0;
     s.rippleKind = rk;
+    int pj = ints[11]; if (pj < 0 || pj > 1) pj = 0;
+    s.projection = static_cast<Projection>(pj);
+    int sub = ints[12]; if (sub < 1) sub = 1; if (sub > 32) sub = 32;
+    s.hypEdgeSubdiv = sub;
 
     s.borderWidth = floats[0];
     s.borderColor = { floats[1], floats[2], floats[3] };
@@ -89,7 +95,10 @@ Settings decodeSettings(const jint* ints, const jfloat* floats) {
     s.matIridThickMax = floats[33];
     s.matRoughMod     = floats[34];
     s.matMetalMod     = floats[35];
-    int base = 36;
+    s.hypScale        = floats[36];
+    s.hypBoostX       = floats[37];
+    s.hypBoostY       = floats[38];
+    int base = 39;
     for (int i = 0; i < kMaxColors; ++i) {
         s.customOklch[i] = { floats[base + 3 * i + 0],
                              floats[base + 3 * i + 1],

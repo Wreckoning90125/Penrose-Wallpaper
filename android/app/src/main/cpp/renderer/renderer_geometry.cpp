@@ -201,6 +201,7 @@ bool Renderer::buildGeometry() {
 
     float minX =  1e9f, minY =  1e9f;
     float maxX = -1e9f, maxY = -1e9f;
+    float rSqMax = 0.0f;
 
     for (size_t i = 0; i < tiles.size(); ++i) {
         const Tile& t = tiles[i];
@@ -247,10 +248,6 @@ bool Renderer::buildGeometry() {
                      depths[0], depths[1], depths[2], bgx, bgy);
             emitFillTri(t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2],
                         paletteIdx, cx, cy, bgx, bgy, bary, mat);
-            for (int v = 0; v < vc; ++v) {
-                minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
-                minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
-            }
         } else if (fi.centroidFan) {
             // Concave polygons (P1 star / boat) — fan from the centroid so
             // the triangulation stays inside a star-shaped tile. The
@@ -266,8 +263,6 @@ bool Renderer::buildGeometry() {
                          cd, 0.0f, 0.0f, bgx, bgy);
                 emitFillTri(cx, cy, t.x[v], t.y[v], t.x[w], t.y[w],
                             paletteIdx, cx, cy, bgx, bgy, bary, mat);
-                minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
-                minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
             }
         } else {
             // Convex polygons fanned from vertex 0. A rhomb (the de Bruijn
@@ -292,15 +287,22 @@ bool Renderer::buildGeometry() {
                 emitFillTri(t.x[0], t.y[0], t.x[v], t.y[v], t.x[v + 1], t.y[v + 1],
                             paletteIdx, cx, cy, bgx, bgy, bary, mat);
             }
-            for (int v = 0; v < vc; ++v) {
-                minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
-                minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
-            }
+        }
+        // Per-vertex extents: bbox AND true farthest |vertex| for the
+        // hyperbolic auto-fit. Tracked once per tile across all vc
+        // vertices (shared by every emit branch above).
+        for (int v = 0; v < vc; ++v) {
+            const float vx = t.x[v], vy = t.y[v];
+            minX = std::min(minX, vx); maxX = std::max(maxX, vx);
+            minY = std::min(minY, vy); maxY = std::max(maxY, vy);
+            const float rSq = vx * vx + vy * vy;
+            if (rSq > rSqMax) rSqMax = rSq;
         }
     }
     fillVertexCount_ = static_cast<uint32_t>(fills.size());
     geomMinX_ = minX; geomMaxX_ = maxX;
     geomMinY_ = minY; geomMaxY_ = maxY;
+    geomRmax_ = std::sqrt(rSqMax);
 
     // -------- Border geometry: indexed triangle quads -----------------------
     // For each unique edge (dedup via midpoint hash, honouring hideSeam) we

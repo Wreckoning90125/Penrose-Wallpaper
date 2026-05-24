@@ -43,9 +43,6 @@ vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float symF) {
 // by f(r)/r = tanh(r·s/2)/r. Replaces a finite-difference step that
 // loses all precision when the jacobian shrinks below ~1e-7 (i.e. just
 // past r·s/2 ≈ 4, which a default-zoom gen-6 patch hits routinely).
-// Does NOT include the τ_b rotation; for the normal direction the
-// missing factor is a uniform conformal rotation that is small for the
-// |b|≤0.92 boost range and acceptable for border alignment.
 vec2 projTangentRadial(vec2 p, vec2 tangW, float s) {
     float r = length(p);
     if (r < 1e-6) return tangW * (s * 0.5);
@@ -57,6 +54,25 @@ vec2 projTangentRadial(vec2 p, vec2 tangW, float s) {
     float fpR = (s * 0.5) / (ch * ch);
     float ftOverR = tanh(rs2) / r;
     return fpR * vr * er + ftOverR * vt;
+}
+
+// τ_b applied to a tangent vector at z (the radial-map output). τ_b is
+// conformal: dτ_b/dz = (1-|b|²) / (1+b̄z)². The magnitude doesn't matter
+// for the unit normal but the rotation does. arg(1/(1+b̄z)²) = -2·arg(q)
+// with q = 1+b̄z; rotating tangD by -2·arg(q) gives the post-τ_b tangent
+// direction. In real-vector form, q = (1 + b·z, -b×z) and the rotation
+// factor (as a unit complex number) is q̄²/|q|² = (qx²-qy², -2·qx·qy)/|q|²,
+// which we multiply against tangD via standard complex multiplication.
+vec2 boostTangent(vec2 z, vec2 b, vec2 tangD) {
+    float qx = 1.0 + b.x * z.x + b.y * z.y;
+    float qy = b.x * z.y - b.y * z.x;
+    float qm = qx * qx + qy * qy;
+    if (qm < 1e-12) return tangD;
+    // c = q̄² / |q|² as a unit complex direction multiplier.
+    float cRe = (qx * qx - qy * qy) / qm;
+    float cIm = -2.0 * qx * qy / qm;
+    return vec2(cRe * tangD.x - cIm * tangD.y,
+                cRe * tangD.y + cIm * tangD.x);
 }
 
 vec2 projectHyp(vec2 world) {
@@ -93,19 +109,22 @@ void main() {
         // for a typical r=5, s=1.5), so world-space extrusion produces
         // sub-pixel borders exactly where the arc curvature matters
         // most. Project the base point, compute the projected tangent
-        // analytically (finite-difference would underflow against the
-        // disk-space position once r·s/2 ≳ 4), perpendicular = disk
-        // normal, and extrude in disk space at width = world halfwidth
-        // × hypScale/2 (the central scale-factor s/2 that converts
-        // world units to disk units near the origin). Result: borders
-        // are visibly constant-thickness across the entire disk, so
-        // edge polyline subdivision reads as a true arc-approximating
-        // ribbon instead of vanishing.
-        vec2 z      = projectHyp(base);
-        vec2 tangW  = vec2(inNormal.y, -inNormal.x);
-        vec2 tangD  = projTangentRadial(base, tangW, pc.hyp.z);
-        float tLen  = length(tangD);
-        vec2 nDisk  = (tLen > 1e-9) ? vec2(-tangD.y, tangD.x) / tLen : inNormal;
+        // analytically through both the radial map (projTangentRadial)
+        // and the τ_b boost (boostTangent — conformal rotation by
+        // -2·arg(1+b̄z)), perpendicular = disk normal, and extrude in
+        // disk space at width = world halfwidth × hypScale/2 (the
+        // central scale-factor s/2 that converts world units to disk
+        // units near the origin). Result: borders are visibly constant-
+        // thickness across the entire disk and orient correctly under
+        // any boost, so edge polyline subdivision reads as a true
+        // arc-approximating ribbon instead of vanishing or skewing.
+        vec2 zRadial = (length(base) > 1e-6) ? base / length(base) * tanh(length(base) * pc.hyp.z * 0.5) : vec2(0.0);
+        vec2 z       = projectHyp(base);
+        vec2 tangW   = vec2(inNormal.y, -inNormal.x);
+        vec2 tangR   = projTangentRadial(base, tangW, pc.hyp.z);
+        vec2 tangD   = boostTangent(zRadial, pc.hyp.xy, tangR);
+        float tLen   = length(tangD);
+        vec2 nDisk   = (tLen > 1e-9) ? vec2(-tangD.y, tangD.x) / tLen : inNormal;
         float halfWidth = ubo.borderGeom.x * pc.hyp.z * 0.5;
         finalPos = z + nDisk * (inSide * halfWidth);
     } else {

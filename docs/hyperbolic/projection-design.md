@@ -121,10 +121,10 @@ inverse-projection-per-fragment cost.
 | `cpp/settings.h` | `Projection` enum + 5 new fields (`projection`, `hypScale`, `hypBoostX/Y`, `hypBorderSubdiv`, `hypFillSubdiv`); `geometryChanged` triggers on either subdivision count AND on `projection` — all three gate the tessellation path so toggling any of them has to rebuild for the polyline split to apply or strip. |
 | `cpp/jni_bridge.cpp` | `kIntCount=14`, `kFloatCount=87`. Decodes the new ints/floats; clamps `hypBorderSubdiv` to [1,32] and `hypFillSubdiv` to [1,8] defensively. |
 | `cpp/renderer/render_state.h` | `PushBlock` extended to 48 bytes — `hypBoostX/Y`, `hypScale`, `projection`. |
-| `cpp/renderer/renderer.cpp` | Populates the new push-constant slots from `fx*` graph results; clamps `\|b\|` to 0.92 and `hypScale` ≥ 1e-3 against runaway graph modulation. In disk mode the view matrix auto-fits the projected geometry (baseScale = 1 / tanh(r_max · hypScale / 2)) instead of using the Euclidean bbox sizing. |
-| `cpp/renderer/renderer_geometry.cpp` | When `projection==PoincareDisk`: if `hypBorderSubdiv>1`, splits each border edge into N sub-segments before the dedup map; if `hypFillSubdiv>1`, tessellates each fill triangle into N² child triangles via barycentric grid + linear attribute interpolation. |
+| `cpp/renderer/renderer.cpp` | Populates the new push-constant slots from `fx*` graph results; clamps `\|b\|` to 0.92 and `hypScale` ≥ 1e-3 against runaway graph modulation. In disk mode the view matrix auto-fits the projected and boosted geometry: `baseScale = 1 / postR` where `postR = (projR + \|b\|) / (1 + projR·\|b\|)` is the Möbius-addition max of `\|τ_b(z)\|` over the projected ball — exact bound across the full boost range, no off-screen overflow. `projR = tanh(geomRmax · hypScale / 2)` uses the true farthest vertex computed in buildGeometry, not the bbox corner. |
+| `cpp/renderer/renderer_geometry.cpp` | When `projection==PoincareDisk`: if `hypBorderSubdiv>1`, splits each border edge into N sub-segments before the dedup map; if `hypFillSubdiv>1`, tessellates each fill triangle into N² child triangles via barycentric grid + linear attribute interpolation. Records `geomRmax_` = max |vertex| across the actual emitted tile vertices for the auto-fit. |
 | `shaders/fill.vert` | `hyp` push-constant vec4; projection block (radial map + τ_b) gated on `pc.hyp.w > 0.5`. |
-| `shaders/border.vert` | Same projection block as `fill.vert`, factored as `projectHyp(vec2)`. In disk mode, computes the disk-space tangent analytically via `projTangentRadial` (polar-basis decomposition: radial component scaled by f'(r)=(s/2)·sech²(r·s/2), tangential by f(r)/r=tanh(r·s/2)/r — finite-difference would underflow against the float position once r·s/2 ≳ 4, which a default-zoom gen-6 patch hits routinely). Perpendicular = disk normal, extrude at width = world halfwidth × hypScale/2 so borders stay visibly thick across the entire disk instead of going sub-pixel near the boundary. |
+| `shaders/border.vert` | Same projection block as `fill.vert`, factored as `projectHyp(vec2)`. In disk mode, computes the disk-space tangent analytically by composing the radial-map jacobian (`projTangentRadial`: polar-basis decomposition with radial component scaled by f'(r)=(s/2)·sech²(r·s/2), tangential by f(r)/r=tanh(r·s/2)/r) and the τ_b conformal rotation (`boostTangent`: complex multiply by q̄²/\|q\|² where q = 1 + b̄z). Perpendicular = disk normal, extrude at width = world halfwidth × hypScale/2. Borders stay visibly thick across the entire disk and orient correctly under any boost. |
 | `cpp/graph/graph.{h,cpp}` | Three new `Target` node kinds: `OutHypBoostX`, `OutHypBoostY`, `OutHypScale`. Clamp ranges defined in the graph's `evaluate()` lo/hi tables. |
 | `kotlin/Settings.kt` | Five new fields with conversion (boost 0..100 → -0.9..+0.9, scale 0..100 → 0..3.0, etc.) and SharedPreferences keys. |
 | `kotlin/SettingsFragment.kt` | New `Projection` screen registered + navigation row. |
@@ -145,37 +145,6 @@ Fill-triangle interior tessellation (currently only edges are
 tessellated) is the obvious next refinement — visible only at very
 large tiles. Not worth a follow-up unless someone reports the
 straight-chord interior look as a problem.
-
-## Known math compromises
-
-Three places where the shipping code trades some correctness for
-simplicity. None affects typical use visibly; recording so future
-maintainers know what was waived rather than missed.
-
-1. **Auto-fit r_max is the bbox corner, not the actual vertex r_max.**
-   `rmax = √(max(|geomMinX|, |geomMaxX|)² + max(|geomMinY|, |geomMaxY|)²)`
-   over-estimates by up to ~√2 for a centered tiling whose actual
-   farthest vertex is on an axis. Net effect: baseScale is up to ~30%
-   smaller than ideal, so the projected tiling under-fills the screen
-   by that fraction. Fix would be a loop over actual tile vertices
-   during buildGeometry; saved as a fast-path optimisation.
-
-2. **Auto-fit ignores the τ_b boost.** baseScale is computed assuming
-   b = 0. With a non-zero boost, projected content shifts in disk
-   space and can push past the screen edge. The user can compensate
-   with zoom. The "right" fix is to compute the boosted bbox extent
-   per-frame, but the boost is graph-animated so this would re-fit
-   continuously — likely a worse UX than the slight overflow.
-
-3. **`projTangentRadial` in `border.vert` omits the τ_b rotation.**
-   τ_b is conformal so it rotates the disk-space tangent by
-   `arg(dτ_b/dz) = −2 arg(1 + b̄z)`. We use the unrotated radial-map
-   tangent and take its perpendicular as the disk normal — the border
-   normal is therefore slightly misaligned (rotation magnitude bounded
-   by `|2 arg(1 + b̄z)|` which is small for moderate boost). Visually
-   the border still hugs the tile edge correctly; only the
-   perpendicular extrusion direction is off by a few degrees at high
-   |b|. Fix would add 8 fmas to the per-vertex cost.
 
 ## Out of scope (still)
 

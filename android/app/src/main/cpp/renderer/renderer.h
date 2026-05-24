@@ -194,9 +194,14 @@ private:
     VkDeviceMemory borderIdxMem_ = VK_NULL_HANDLE;
     uint32_t borderIndexCount_ = 0;
 
-    // Untransformed geometry extent (model space).
+    // Untransformed geometry extent (model space). `geomRmax_` is the
+    // largest |vertex| over the actual emitted tile vertices, not the
+    // bbox corner — the hyperbolic auto-fit needs the true distance
+    // from origin to the farthest visible vertex, which can be much
+    // less than √(maxX² + maxY²) for a centered tiling.
     float geomMinX_ = -1.0f, geomMinY_ = -1.0f;
     float geomMaxX_ =  1.0f, geomMaxY_ =  1.0f;
+    float geomRmax_ =  1.0f;
 
     ANativeWindow* window_ = nullptr;
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;

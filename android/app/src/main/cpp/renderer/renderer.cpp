@@ -580,17 +580,34 @@ void Renderer::drawFrame() {
     // Hyperbolic projection mode: auto-fit the *projected* tiling to the
     // screen so the slider controls compression, not visibility. The
     // shader projects the world point at distance r_max to disk radius
-    // tanh(r_max · hypScale / 2); baseScale = 1/projR maps that to clip
-    // ±1. Low hypScale → projR small → baseScale large → tiles fill the
-    // screen densely with the disk boundary off-screen (effectively a
-    // radial-squeeze view of the Euclidean tiling). High hypScale → projR
-    // → 1 → baseScale → 1 → disk boundary at the screen edge and far
-    // tiles piled against it (the Circle Limit feel). The earlier
-    // baseScale=1 fix relied on `tanh ∈ (-1,+1)` keeping content inside
-    // the disk, but at low scale tanh maps everything close to 0 — so
-    // the geometry was technically visible at unit-disk fit, just
-    // collapsed to a dot near the origin. Auto-fit removes that
-    // dead zone entirely.
+    // tanh(r_max · hypScale / 2); applying the τ_b boost can push that
+    // further out — the maximum |τ_b(z)| over |z| ≤ projR is
+    // (projR + |b|) / (1 + projR·|b|) (Möbius-addition formula, attained
+    // when z is parallel to b). baseScale = 1/postBoost maps that to
+    // clip ±1, so the projected tiling stays exactly on-screen
+    // regardless of how the boost slider or graph drives b. r_max is
+    // the true farthest |vertex| over the actual emitted geometry
+    // (geomRmax_, set in buildGeometry), not the bbox corner — the
+    // latter over-estimates by up to √2 for a centered tiling.
+    // Hyperbolic push-constant values, computed once and shared between
+    // the view-fit step below and the PushBlock at the end of the frame.
+    // Boost b is clamped to |b| ≤ 0.92 to keep the τ_b denominator
+    // bounded; scale ≥ 1e-3 so a runaway graph can't collapse the world
+    // via tanh(0).
+    const float hypScaleEff = std::max(fxHypScale_, 1e-3f);
+    float hypBoostXEff = fxHypBoostX_;
+    float hypBoostYEff = fxHypBoostY_;
+    {
+        const float bm = std::sqrt(hypBoostXEff * hypBoostXEff +
+                                   hypBoostYEff * hypBoostYEff);
+        constexpr float bmClamp = 0.92f;
+        if (bm > bmClamp) {
+            const float bsc = bmClamp / bm;
+            hypBoostXEff *= bsc;
+            hypBoostYEff *= bsc;
+        }
+    }
+
     const float surfW = (float)swapchainExtent_.width;
     const float surfH = (float)swapchainExtent_.height;
     const float screenW = (screenW_ > 0) ? (float)screenW_ : surfW;
@@ -598,11 +615,11 @@ void Renderer::drawFrame() {
     const float aspect = screenW / screenH;
     float baseScale;
     if (settings_.projection == Projection::PoincareDisk) {
-        const float xExtent = std::max(std::fabs(geomMinX_), std::fabs(geomMaxX_));
-        const float yExtent = std::max(std::fabs(geomMinY_), std::fabs(geomMaxY_));
-        const float rmax = std::sqrt(xExtent * xExtent + yExtent * yExtent);
-        const float projR = std::tanh(rmax * std::max(fxHypScale_, 1e-3f) * 0.5f);
-        baseScale = 1.0f / std::max(projR, 1e-3f);
+        const float projR = std::tanh(geomRmax_ * hypScaleEff * 0.5f);
+        const float bMag  = std::sqrt(hypBoostXEff * hypBoostXEff +
+                                      hypBoostYEff * hypBoostYEff);
+        const float postR = (projR + bMag) / (1.0f + projR * bMag);
+        baseScale = 1.0f / std::max(postR, 1e-3f);
     } else {
         const float gw = std::max(geomMaxX_ - geomMinX_, 1e-3f);
         const float gh = std::max(geomMaxY_ - geomMinY_, 1e-3f);
@@ -624,24 +641,13 @@ void Renderer::drawFrame() {
     // Hyperbolic mode: the shader pre-projects each world point through
     // E² → B² (radial hyperbolic-radius map) and τ_b (the B² boost)
     // before this affine view matrix takes the result to clip space.
-    // The boost vector b is clamped to |b| <= 0.92 to keep the τ_b
-    // denominator away from zero near the disk boundary. The scale is
-    // clamped >= 1e-3 so a runaway graph can't collapse the world to
-    // the origin via tanh(0).
     PushBlock pc{};
     pc.view0x =  cosR * sX; pc.view0y = -sinR * sY; pc.view0z = tX;
     pc.view1x =  sinR * sX; pc.view1y =  cosR * sY; pc.view1z = tY;
-    {
-        const float bx = fxHypBoostX_;
-        const float by = fxHypBoostY_;
-        const float bm = std::sqrt(bx * bx + by * by);
-        const float bmClamp = 0.92f;
-        const float bsc = (bm > bmClamp) ? (bmClamp / bm) : 1.0f;
-        pc.hypBoostX = bx * bsc;
-        pc.hypBoostY = by * bsc;
-        pc.hypScale  = std::max(fxHypScale_, 1e-3f);
-        pc.projection = (settings_.projection == Projection::PoincareDisk) ? 1.0f : 0.0f;
-    }
+    pc.hypBoostX  = hypBoostXEff;
+    pc.hypBoostY  = hypBoostYEff;
+    pc.hypScale   = hypScaleEff;
+    pc.projection = (settings_.projection == Projection::PoincareDisk) ? 1.0f : 0.0f;
 
     vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             pipelineLayout_, 0, 1, &descSet_, 0, nullptr);

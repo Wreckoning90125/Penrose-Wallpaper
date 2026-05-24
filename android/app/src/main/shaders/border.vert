@@ -36,11 +36,29 @@ vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float symF) {
     return grad / float(sym);
 }
 
-// Hyperbolic-radius map E² → B², then τ_b boost in B². Identical to the
-// inline block in fill.vert; pulled out as a function here because the
-// disk-mode border path calls it twice per vertex (the base point and a
-// small step along the edge tangent) so the resulting tangent in disk
-// space can drive the border-quad extrusion.
+// Analytical disk-space tangent of the radial map z = p · tanh(|p|·s/2)/|p|
+// applied to world tangent `tangW` at world point `p`. Decomposes tangW
+// into the radial and tangential components in polar basis at p; the
+// radial component scales by f'(r) = (s/2)·sech²(r·s/2), the tangential
+// by f(r)/r = tanh(r·s/2)/r. Replaces a finite-difference step that
+// loses all precision when the jacobian shrinks below ~1e-7 (i.e. just
+// past r·s/2 ≈ 4, which a default-zoom gen-6 patch hits routinely).
+// Does NOT include the τ_b rotation; for the normal direction the
+// missing factor is a uniform conformal rotation that is small for the
+// |b|≤0.92 boost range and acceptable for border alignment.
+vec2 projTangentRadial(vec2 p, vec2 tangW, float s) {
+    float r = length(p);
+    if (r < 1e-6) return tangW * (s * 0.5);
+    vec2 er = p / r;
+    float vr = dot(tangW, er);
+    vec2 vt = tangW - vr * er;
+    float rs2 = r * s * 0.5;
+    float ch = cosh(rs2);
+    float fpR = (s * 0.5) / (ch * ch);
+    float ftOverR = tanh(rs2) / r;
+    return fpR * vr * er + ftOverR * vt;
+}
+
 vec2 projectHyp(vec2 world) {
     float r = length(world);
     vec2 dir = (r > 1e-6) ? (world / r) : vec2(0.0);
@@ -74,18 +92,18 @@ void main() {
         // Jacobian is ~sech²(r·s/2): tiny far from the origin (~5e-4
         // for a typical r=5, s=1.5), so world-space extrusion produces
         // sub-pixel borders exactly where the arc curvature matters
-        // most. Project the base point, then sample a small step along
-        // the edge tangent (perpendicular to inNormal in world) to get
-        // the projected tangent. The disk normal is the rotate-90 of
-        // that, and the half-width converts world → disk via the
-        // central-projection scale s/2 (the derivative of tanh(r·s/2)
-        // at r=0). Net effect: borders are visibly constant-thickness
-        // across the entire disk, and edge polyline subdivision shows
-        // up as a true arc-approximating ribbon.
+        // most. Project the base point, compute the projected tangent
+        // analytically (finite-difference would underflow against the
+        // disk-space position once r·s/2 ≳ 4), perpendicular = disk
+        // normal, and extrude in disk space at width = world halfwidth
+        // × hypScale/2 (the central scale-factor s/2 that converts
+        // world units to disk units near the origin). Result: borders
+        // are visibly constant-thickness across the entire disk, so
+        // edge polyline subdivision reads as a true arc-approximating
+        // ribbon instead of vanishing.
         vec2 z      = projectHyp(base);
         vec2 tangW  = vec2(inNormal.y, -inNormal.x);
-        vec2 zStep  = projectHyp(base + tangW * 1e-3);
-        vec2 tangD  = zStep - z;
+        vec2 tangD  = projTangentRadial(base, tangW, pc.hyp.z);
         float tLen  = length(tangD);
         vec2 nDisk  = (tLen > 1e-9) ? vec2(-tangD.y, tangD.x) / tLen : inNormal;
         float halfWidth = ubo.borderGeom.x * pc.hyp.z * 0.5;

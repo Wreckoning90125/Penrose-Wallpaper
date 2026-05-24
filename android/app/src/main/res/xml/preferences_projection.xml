@@ -38,9 +38,9 @@
             app:showSeekBarValue="true" />
         <SeekBarPreference
             android:key="hyp_edge_subdiv"
-            android:title="Edge polyline subdivision"
-            android:summary="Each tile edge is split into this many sub-segments before projection. 1 = straight chord (cheapest); 16 reads as a true geodesic arc at typical zoom. Triggers a geometry rebuild."
-            android:min="1" android:max="32" android:defaultValue="1"
+            android:title="Tile subdivision (arc approximation)"
+            android:summary="Splits each tile edge into N sub-segments AND each fill triangle into N² child triangles before projection. 1 = straight chord (cheapest); 8 reads as a true geodesic arc at typical zoom. Both numbers come from the same slider so the fill and border arcs stay coherent. Triggers a geometry rebuild."
+            android:min="1" android:max="8" android:defaultValue="1"
             app:showSeekBarValue="true" />
     </PreferenceCategory>
 </PreferenceScreen>

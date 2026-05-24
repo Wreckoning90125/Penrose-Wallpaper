@@ -155,9 +155,10 @@ bool Renderer::buildGeometry() {
     // centroid and material are all linear-interpolation-safe, the
     // fragment shader's bevel still falls only on parent edges (the
     // min(bary) is zero only along original edges, never along
-    // interior subdivision cuts). Capped at 8: each parent's
-    // child-tri count grows as N², so 32² × ~1k tiles would push
-    // vertex memory above 100 MB; 8² × 1k stays under 4 M verts.
+    // interior subdivision cuts). Same slider drives border-edge and
+    // fill subdivision (matching granularity along parent edges); the
+    // XML slider caps at 8 so child-tri count stays bounded (8²×~1k
+    // tiles ≈ 64K sub-tris; 32² would have been ≈ 1M).
     const int fillSub = (settings_.projection == Projection::PoincareDisk)
                         ? std::clamp(settings_.hypEdgeSubdiv, 1, 8) : 1;
 
@@ -333,7 +334,7 @@ bool Renderer::buildGeometry() {
         // endpoints shared with the adjacent tile's matching
         // sub-segment, so the border still draws once per shared edge.
         const int sub = (settings_.projection == Projection::PoincareDisk)
-                        ? std::clamp(settings_.hypEdgeSubdiv, 1, 32) : 1;
+                        ? std::clamp(settings_.hypEdgeSubdiv, 1, 8) : 1;
         if (sub > 1) {
             std::vector<Edge> tess;
             tess.reserve(edges.size() * sub);

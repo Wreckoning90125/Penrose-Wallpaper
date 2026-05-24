@@ -103,7 +103,8 @@ window. EPINET edge tables run only up to sg230 because they target periodic
 ## Renderer implications
 
 - A hyperbolic mode is a new **projection** (Poincaré disk / Beltrami–Klein),
-  not a new `Family` — the generators are Euclidean.
+  not a new `Family` — the generators are Euclidean. Background, design
+  questions and the recommended answers are in `../hyperbolic/`.
 - The `Binary` family is the closest H² link; recording its horocycle origin
   in `pentagonal-binary.md` is the cheap, exact win and is already noted there.
 - 3-D sets (Penrose rhombohedra, Schmitt–Conway–Danzer, Danzer tetrahedra; see
@@ -112,4 +113,5 @@ window. EPINET edge tables run only up to sg230 because they target periodic
 ## References
 
 See `bibliography.md` (this file's sources are grouped under
-*hyperbolic-and-tooling*).
+*hyperbolic-and-tooling*; the deeper hyperbolic-geometry sources sit
+under *hyperbolic geometry*).

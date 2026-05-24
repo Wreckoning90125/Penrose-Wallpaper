@@ -17,7 +17,7 @@ Hat / Spectre einstein family — see *Obvious next step* below.
 | Square-triangle / Shield / Socolar 12-fold | extend `Dodecagonal` | low–medium | `dodecagonal.md`, `catalogue.md`. Square+triangle is largely a display split of the existing dodecagonal rhombs; Shield/Socolar are MLD. |
 | Socolar–Taylor monotile | new `Family` | medium | `catalogue.md`. Hierarchical; the tile is *not connected*, so the `Tile` model would need a disconnected-tile representation. |
 | Harriss 7-fold rhomb substitution | new `Family` | high | `heptagonal.md`. Blocked on the rhomb-packing closure solver below. |
-| Hyperbolic projection mode (Poincaré disk) | new projection, not a `Family` | high | `hyperbolic-and-tooling.md`. A distinct geometry path; generators stay Euclidean. |
+| Hyperbolic projection mode (Poincaré disk) | new projection, not a `Family` | high | Background in `../hyperbolic/` (models, isometries, discrete groups, projection design); boundary against the Euclidean engine in `hyperbolic-and-tooling.md`. A distinct geometry path; generators stay Euclidean. |
 | Endless home-screen pan | rework of the `Generative` pan mode | medium–high | Today's `Generative` mode grows the patch — each drag triggers a deflation pass, the view stays centred. True endless pan instead *translates* the view across an unbounded tiling: generate tiles covering the visible window plus a margin as it moves, drop tiles that leave. Decouples view position from generation depth; the home-screen page offset feeds the same translation. |
 
 ## Docs

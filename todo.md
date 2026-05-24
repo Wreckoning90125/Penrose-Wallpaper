@@ -52,8 +52,9 @@ across files.
   closure solver below. Detail: `docs/tilings/heptagonal.md`.
 
 - **Hyperbolic projection mode (Poincaré disk).** Distinct geometry
-  path; generators stay Euclidean. Detail:
-  `docs/tilings/hyperbolic-and-tooling.md`.
+  path; generators stay Euclidean. Background, design questions and
+  recommended answers in `docs/hyperbolic/`; boundary against the
+  Euclidean engine in `docs/tilings/hyperbolic-and-tooling.md`.
 
 - **Endless home-screen pan.** Rework `Generative` from "grow the
   patch under view" to "translate the view across an unbounded

@@ -241,3 +241,24 @@ holds the Tilings Encyclopedia, cited across several family docs.
 - Taimina, Daina (2009). *Crocheting Adventures with Hyperbolic Planes.* A K Peters. ISBN 978-1-56881-452-0.
 
 Related art and tooling referenced inline (no formal citation): M. C. Escher, *Regular Division of the Plane* and *Circle Limit* I–IV; Margaret & Christine Wertheim, *Crochet Coral Reef*; elfnor procedural hyperbolic-coral generators (Blender/Sverchok); spglib, moyo, spgrep, pyxtal, aflow (periodic crystallography); de Wolff–Janner–Janssen superspace / (3+d)-D groups.
+
+---
+
+## Hyperbolic geometry
+
+Sources for `../hyperbolic/` — the consolidated background for the planned
+Poincaré-disk projection mode. Two principal sources, with the in-paper
+cross-references they cite.
+
+- Campen, M.; Capouellez, R.; Shen, H.; Zhu, L.; Panozzo, D.; Zorin, D. (2021). "Efficient and Robust Discrete Conformal Equivalence with Boundary." *ACM Trans. Graph.* **40**(6), Article 1 (SIGGRAPH Asia 2021). Reference implementation: `mcampen/ConformalIdealDelaunay` (GitHub). — Newton's method with line search on the convex Springborn energy, using Ptolemy length flips to maintain intrinsic Delaunay; double-cover boundary handling; Beltrami–Klein two-triangle charts for the continuous map. Summarised in `../hyperbolic/discrete-conformal.md`.
+- Ratcliffe, John G. *Foundations of Hyperbolic Manifolds.* Graduate Texts in Mathematics 149, Springer. 2nd ed. ISBN 978-0-387-33197-3. — The textbook reference. Chapters used: §3 (hyperboloid model, Lorentzian n-space), §4 (Möbius transformations, Poincaré extension, conformal ball model, upper half-space, classification elliptic/parabolic/hyperbolic), §5 (isometry groups, discrete and discontinuous actions, elementary subgroups, discrete Euclidean groups), §6.1 (projective disk / Beltrami–Klein).
+- Fisher, M.; Springborn, B.; Schröder, P.; Bobenko, A. I. (2007). "An algorithm for the construction of intrinsic Delaunay triangulations with applications to digital geometry processing." *Computing* **81**(2-3):199–213. — Explicit polygon-overlay structure used by `OverlayMesh.cc` in the Campen et al. implementation.
+- Gillespie, M.; Springborn, B.; Crane, K. (2021). "Discrete Conformal Equivalence of Polyhedral Surfaces." *ACM Trans. Graph.* **40**(4). — Concurrent paper using the alternative (degeneration-flip) approach; baseline in the Campen et al. §7.2 comparison.
+- Gu, X.; Luo, F.; Sun, J.; Wu, T. (2018b). "A discrete uniformization theorem for polyhedral surfaces." *J. Differential Geometry* **109**(2):223–256. — Existence and uniqueness of the conformally-equivalent metric matching prescribed cone angles, in the cusped-hyperbolic-metric setting.
+- Sharp, N.; Crane, K. (2020). "A Laplacian for nonmanifold triangle meshes." *Computer Graphics Forum* **39**(5):69–80. — The "tufted double cover" trick the Campen et al. method uses for boundary surfaces.
+- Springborn, B. (2020). "Ideal Hyperbolic Polyhedra and Discrete Uniformization." *Discrete & Computational Geometry* **64**(1):63–108. — The hyperbolic-polyhedra interpretation making the Penner / Ptolemy-flip approach exact.
+- Springborn, B.; Schröder, P.; Pinkall, U. (2008). "Conformal equivalence of triangle meshes." *ACM Trans. Graph.* **27**(3). — The per-vertex log-scale-factor definition of discrete conformal equivalence (Eq. (1) of Campen et al.) and the convex energy.
+- Weeks, J. R. (1993). "Convex hulls and isometries of cusped hyperbolic 3-manifolds." *Topology and its Applications* **52**(2):127–149. — The eager-flip Delaunay algorithm used to maintain intrinsic Delaunay throughout Newton's iteration.
+- Zorin, D. (2021). "Convergence Analysis of the Algorithm in 'Efficient and Robust Discrete Conformal Equivalence with Boundary'." arXiv:2109.03436 [math.NA]. — Convergence proof for the energy-free Newton variant.
+
+Standard further references for Fuchsian and Kleinian groups (not used directly above): Beardon, *The Geometry of Discrete Groups* (1983, Springer); Maskit, *Kleinian Groups* (1988, Springer); Kapovich, *Hyperbolic Manifolds and Discrete Groups* (2001).

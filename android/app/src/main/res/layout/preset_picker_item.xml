@@ -1,33 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  One cell in the Material-preset picker grid. The baked thumbnail
-  (tools/bake_preset_thumbnails.py — transparent background) is the
-  primary touch target, with the preset name underneath; ?attr/
-  selectableItemBackground gives a Material ripple on press so the cell
-  responds to touch like an interactive tile rather than a static icon.
-  Sized so a 2-column grid fills a typical dialog comfortably.
+  One cell in the Material-preset picker grid. The cell IS the tile
+  thumbnail — no label, no rectangular container, no chrome. The cell
+  laid out by the grid is just the baked thumbnail (transparent
+  background, tile-shaped fill; see tools/bake_preset_thumbnails.py),
+  so the menu reads as a panel of tile-shaped keys.
+
+  The Material ripple is set programmatically in PresetPickerAdapter
+  with a RippleDrawable whose mask layer is the same thumbnail bitmap,
+  so the ripple only paints where the tile alpha is non-zero — the
+  "hole" of the keyboard key is tile-shaped, not rectangular.
+
+  contentDescription is set per-cell in the adapter for screen readers
+  (the preset name); no on-screen label is rendered.
 -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ImageView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/preset_thumbnail"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:gravity="center"
-    android:background="?attr/selectableItemBackground"
+    android:adjustViewBounds="true"
+    android:scaleType="fitCenter"
     android:clickable="true"
     android:focusable="true"
-    android:padding="12dp">
-
-    <ImageView
-        android:id="@+id/preset_thumbnail"
-        android:layout_width="128dp"
-        android:layout_height="128dp"
-        android:scaleType="fitCenter"
-        android:contentDescription="@null" />
-
-    <TextView
-        android:id="@+id/preset_name"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:textAppearance="?android:attr/textAppearanceMedium" />
-</LinearLayout>
+    android:padding="4dp" />

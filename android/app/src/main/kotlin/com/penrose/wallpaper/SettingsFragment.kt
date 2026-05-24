@@ -5,6 +5,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.res.ColorStateList
+import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -13,10 +15,10 @@ import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.GridView
 import android.widget.ImageView
-import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
+import androidx.core.content.ContextCompat
 import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
@@ -241,29 +243,52 @@ class SettingsFragment : PreferenceFragmentCompat(),
     }
 
     /**
-     * GridView cell adapter: each cell is the baked transparent-background
-     * thumbnail above the preset name, with selectableItemBackground on
-     * the cell root so a tap shows the Material ripple over the tile.
-     * The cell is its own click target (clickable="true" in
-     * preset_picker_item.xml), so we wire setOnClickListener here on
-     * every getView call rather than relying on GridView's item-click
-     * dispatch — see bindMaterialPresetRow for why.
+     * GridView cell adapter: each cell is a single ImageView holding the
+     * baked tile thumbnail (transparent background, tile-shaped fill).
+     * No on-screen label, no rectangular container — the cell IS the
+     * tile.
+     *
+     * The Material ripple is set as a RippleDrawable foreground with the
+     * same tile bitmap as its mask layer, so the ripple paints only
+     * where the tile alpha is non-zero. Result: the cell behaves like a
+     * keyboard key whose "hole" is the tile shape itself, not the
+     * rectangular bounds of the View. Foreground (not background) so
+     * the ripple is composited on top of the tile content when pressed.
+     *
+     * setOnClickListener is wired here on every getView call rather
+     * than via GridView.setOnItemClickListener — a clickable child
+     * (the ImageView itself, since android:clickable="true") consumes
+     * the touch event before AdapterView's item-click dispatch sees
+     * it. See bindMaterialPresetRow for the long version.
+     *
+     * contentDescription carries the preset name for screen readers
+     * since there is no on-screen label.
      */
     private class PresetPickerAdapter(
-        ctx: Context,
+        private val ctx: Context,
         private val presets: List<MaterialPreset>,
         private val onPickClick: (Int) -> Unit,
     ) : ArrayAdapter<MaterialPreset>(ctx, R.layout.preset_picker_item, presets) {
         private val inflater = LayoutInflater.from(ctx)
+        private val rippleColor: ColorStateList = ColorStateList.valueOf(
+            ContextCompat.getColor(ctx, android.R.color.darker_gray)
+        )
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val view = convertView
-                ?: inflater.inflate(R.layout.preset_picker_item, parent, false)
+            val image = (convertView as? ImageView)
+                ?: inflater.inflate(R.layout.preset_picker_item, parent, false) as ImageView
             val preset = presets[position]
-            view.findViewById<ImageView>(R.id.preset_thumbnail)
-                .setImageResource(preset.thumbnailRes)
-            view.findViewById<TextView>(R.id.preset_name).text = preset.name
-            view.setOnClickListener { onPickClick(position) }
-            return view
+            image.setImageResource(preset.thumbnailRes)
+            image.contentDescription = preset.name
+            // Tile-shaped ripple: foreground RippleDrawable with the
+            // same thumbnail bitmap as its mask, so the ripple is
+            // alpha-clipped to the tile shape. A fresh drawable copy is
+            // mutated per cell so the per-preset mask doesn't bleed
+            // across recycled views.
+            val maskDrawable = ContextCompat.getDrawable(ctx, preset.thumbnailRes)
+                ?.constantState?.newDrawable()?.mutate()
+            image.foreground = RippleDrawable(rippleColor, null, maskDrawable)
+            image.setOnClickListener { onPickClick(position) }
+            return image
         }
     }
 

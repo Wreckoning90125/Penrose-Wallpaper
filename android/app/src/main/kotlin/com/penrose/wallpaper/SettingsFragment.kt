@@ -195,9 +195,21 @@ class SettingsFragment : PreferenceFragmentCompat(),
      * The tile itself is the selector — tap a tile to apply that preset.
      * Material's selectableItemBackground gives a ripple on touch so
      * each tile responds like an interactive button. Picking a preset
-     * is a one-shot apply: its values are written into SharedPreferences
-     * and the Material screen re-inflates so every slider re-binds to
-     * the new values. There is no stored "active preset" state.
+     * is a one-shot apply: its values are written into SharedPreferences,
+     * the Material screen re-inflates so every slider re-binds to the
+     * new values, and the dialog dismisses. There is no stored "active
+     * preset" state.
+     *
+     * NOTE: the click listener is wired on each cell View *inside* the
+     * adapter (PresetPickerAdapter.onPickClick), NOT on the GridView via
+     * setOnItemClickListener. The cell root carries android:clickable=
+     * "true" + ?attr/selectableItemBackground so the Material ripple
+     * paints on press, but a clickable child view consumes the event
+     * before AdapterView's item-click dispatch ever sees it — wiring
+     * setOnItemClickListener on the GridView is silently dead in this
+     * configuration. Do NOT switch back to setOnItemClickListener
+     * without also stripping clickable/focusable from the cell layout
+     * (which would lose the per-tile ripple).
      */
     private fun bindMaterialPresetRow() {
         findPreference<Preference>("material_preset_pick")?.setOnPreferenceClickListener {
@@ -205,7 +217,6 @@ class SettingsFragment : PreferenceFragmentCompat(),
             val presets = MaterialPresets.all
             val grid = LayoutInflater.from(ctx)
                 .inflate(R.layout.preset_picker_grid, null) as GridView
-            grid.adapter = PresetPickerAdapter(ctx, presets)
 
             val dialog = AlertDialog.Builder(ctx)
                 .setTitle("Material preset")
@@ -213,9 +224,9 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 .setNegativeButton(android.R.string.cancel, null)
                 .show()
 
-            grid.setOnItemClickListener { _, _, which, _ ->
+            grid.adapter = PresetPickerAdapter(ctx, presets) { which ->
                 val prefs = preferenceManager.sharedPreferences
-                    ?: return@setOnItemClickListener
+                    ?: return@PresetPickerAdapter
                 val editor = prefs.edit()
                 for ((key, value) in presets[which].values) {
                     editor.putInt(key, value)
@@ -233,10 +244,15 @@ class SettingsFragment : PreferenceFragmentCompat(),
      * GridView cell adapter: each cell is the baked transparent-background
      * thumbnail above the preset name, with selectableItemBackground on
      * the cell root so a tap shows the Material ripple over the tile.
+     * The cell is its own click target (clickable="true" in
+     * preset_picker_item.xml), so we wire setOnClickListener here on
+     * every getView call rather than relying on GridView's item-click
+     * dispatch — see bindMaterialPresetRow for why.
      */
     private class PresetPickerAdapter(
         ctx: Context,
         private val presets: List<MaterialPreset>,
+        private val onPickClick: (Int) -> Unit,
     ) : ArrayAdapter<MaterialPreset>(ctx, R.layout.preset_picker_item, presets) {
         private val inflater = LayoutInflater.from(ctx)
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
@@ -246,6 +262,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
             view.findViewById<ImageView>(R.id.preset_thumbnail)
                 .setImageResource(preset.thumbnailRes)
             view.findViewById<TextView>(R.id.preset_name).text = preset.name
+            view.setOnClickListener { onPickClick(position) }
             return view
         }
     }

@@ -6,20 +6,30 @@
   background, tile-shaped fill; see tools/bake_preset_thumbnails.py),
   so the menu reads as a panel of tile-shaped keys.
 
-  The Material ripple is set programmatically in PresetPickerAdapter
-  with a RippleDrawable whose mask layer is the same thumbnail bitmap,
-  so the ripple only paints where the tile alpha is non-zero — the
-  "hole" of the keyboard key is tile-shaped, not rectangular.
+  No padding inside the ImageView so the RippleDrawable mask
+  (set programmatically in PresetPickerAdapter to the same tile
+  bitmap) aligns pixel-for-pixel with the visible image content —
+  with padding, the ripple bounds would be larger than the image
+  bounds and the ripple would leak past the tile edge.
 
-  contentDescription is set per-cell in the adapter for screen readers
-  (the preset name); no on-screen label is rendered.
+  Inter-cell spacing comes from preset_picker_grid.xml's
+  horizontalSpacing / verticalSpacing / padding so the gap between
+  tiles is uniform without per-cell padding.
+
+  maxHeight caps the tile size on wide screens — without it, a tablet
+  dialog could stretch each cell to 200dp+ which loses the
+  "keyboard-key" feel.
+
+  contentDescription + tooltipText are set per-cell in the adapter
+  (the preset name) so screen readers and long-press users get the
+  name even though no on-screen label is rendered.
 -->
 <ImageView xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/preset_thumbnail"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:adjustViewBounds="true"
+    android:maxHeight="144dp"
     android:scaleType="fitCenter"
     android:clickable="true"
-    android:focusable="true"
-    android:padding="4dp" />
+    android:focusable="true" />

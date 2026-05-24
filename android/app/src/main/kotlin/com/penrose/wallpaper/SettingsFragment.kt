@@ -9,6 +9,7 @@ import android.content.res.ColorStateList
 import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -18,11 +19,13 @@ import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.widget.TooltipCompat
 import androidx.core.content.ContextCompat
 import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.SeekBarPreference
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.penrose.wallpaper.audio.AudioPlaybackService
 import com.penrose.wallpaper.preset.MaterialPreset
 import com.penrose.wallpaper.preset.MaterialPresets
@@ -191,27 +194,31 @@ class SettingsFragment : PreferenceFragmentCompat(),
     }
 
     /**
-     * The Material-preset row. Opens a 2-column grid of preset tile
-     * thumbnails (see `tools/bake_preset_thumbnails.py` — transparent
-     * background so the dialog reads as clean tiles, not boxed images).
-     * The tile itself is the selector — tap a tile to apply that preset.
-     * Material's selectableItemBackground gives a ripple on touch so
-     * each tile responds like an interactive button. Picking a preset
-     * is a one-shot apply: its values are written into SharedPreferences,
+     * The Material-preset row. Opens a 2-column grid of tile thumbnails
+     * (see `tools/bake_preset_thumbnails.py` — transparent background,
+     * tile-shaped fill). Each cell IS the tile: no label, no
+     * rectangular container, no chrome around it. The tile is a
+     * keyboard-key whose "hole" is the tile shape, and tapping it
+     * applies the preset — a one-shot write to SharedPreferences,
      * the Material screen re-inflates so every slider re-binds to the
-     * new values, and the dialog dismisses. There is no stored "active
-     * preset" state.
+     * new values, and the dialog dismisses. There is no stored
+     * "active preset" state.
+     *
+     * The dialog is built with MaterialAlertDialogBuilder so the
+     * surface, title, button and corners follow Material 3 styling
+     * from the host theme; the cancel button hooks the system's
+     * cancel string.
      *
      * NOTE: the click listener is wired on each cell View *inside* the
-     * adapter (PresetPickerAdapter.onPickClick), NOT on the GridView via
-     * setOnItemClickListener. The cell root carries android:clickable=
-     * "true" + ?attr/selectableItemBackground so the Material ripple
-     * paints on press, but a clickable child view consumes the event
-     * before AdapterView's item-click dispatch ever sees it — wiring
+     * adapter (PresetPickerAdapter.onPickClick), NOT on the GridView
+     * via setOnItemClickListener. The cell ImageView carries
+     * android:clickable="true" so the foreground RippleDrawable can
+     * fire on press, but a clickable child consumes the touch event
+     * before AdapterView's item-click dispatch sees it — wiring
      * setOnItemClickListener on the GridView is silently dead in this
      * configuration. Do NOT switch back to setOnItemClickListener
      * without also stripping clickable/focusable from the cell layout
-     * (which would lose the per-tile ripple).
+     * (which would lose the tile-shaped ripple).
      */
     private fun bindMaterialPresetRow() {
         findPreference<Preference>("material_preset_pick")?.setOnPreferenceClickListener {
@@ -220,7 +227,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
             val grid = LayoutInflater.from(ctx)
                 .inflate(R.layout.preset_picker_grid, null) as GridView
 
-            val dialog = AlertDialog.Builder(ctx)
+            val dialog = MaterialAlertDialogBuilder(ctx)
                 .setTitle("Material preset")
                 .setView(grid)
                 .setNegativeButton(android.R.string.cancel, null)
@@ -270,15 +277,30 @@ class SettingsFragment : PreferenceFragmentCompat(),
         private val onPickClick: (Int) -> Unit,
     ) : ArrayAdapter<MaterialPreset>(ctx, R.layout.preset_picker_item, presets) {
         private val inflater = LayoutInflater.from(ctx)
-        private val rippleColor: ColorStateList = ColorStateList.valueOf(
-            ContextCompat.getColor(ctx, android.R.color.darker_gray)
-        )
+
+        // Resolve android:attr/colorControlHighlight from the host
+        // theme so the ripple matches the rest of the Material 3
+        // chrome (dark theme → light pulse, light theme → dark pulse)
+        // instead of a hard-coded grey. Framework attribute since
+        // API 21, populated by the Material3 theme above.
+        private val rippleColor: ColorStateList = run {
+            val tv = TypedValue()
+            ctx.theme.resolveAttribute(android.R.attr.colorControlHighlight, tv, true)
+            ColorStateList.valueOf(
+                if (tv.resourceId != 0) ContextCompat.getColor(ctx, tv.resourceId) else tv.data
+            )
+        }
+
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
             val image = (convertView as? ImageView)
                 ?: inflater.inflate(R.layout.preset_picker_item, parent, false) as ImageView
             val preset = presets[position]
             image.setImageResource(preset.thumbnailRes)
             image.contentDescription = preset.name
+            // Long-press tooltip carries the preset name for users who
+            // want to disambiguate before tapping; the on-tap Toast
+            // still names the applied preset for everyone else.
+            TooltipCompat.setTooltipText(image, preset.name)
             // Tile-shaped ripple: foreground RippleDrawable with the
             // same thumbnail bitmap as its mask, so the ripple is
             // alpha-clipped to the tile shape. A fresh drawable copy is

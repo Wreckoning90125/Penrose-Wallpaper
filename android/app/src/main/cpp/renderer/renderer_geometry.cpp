@@ -148,6 +148,57 @@ bool Renderer::buildGeometry() {
                                     mat4[0], mat4[1], mat4[2], mat4[3] });
     };
 
+    // Per-tile subdivision count for fill triangles in hyperbolic mode.
+    // Each parent tri is split into N² child tris by a barycentric
+    // (i,j,k) grid, with every child-vertex attribute computed by
+    // linear interpolation from parent corners. Because bary, bulge,
+    // centroid and material are all linear-interpolation-safe, the
+    // fragment shader's bevel still falls only on parent edges (the
+    // min(bary) is zero only along original edges, never along
+    // interior subdivision cuts). Capped at 8: each parent's
+    // child-tri count grows as N², so 32² × ~1k tiles would push
+    // vertex memory above 100 MB; 8² × 1k stays under 4 M verts.
+    const int fillSub = (settings_.projection == Projection::PoincareDisk)
+                        ? std::clamp(settings_.hypEdgeSubdiv, 1, 8) : 1;
+
+    auto emitFillTri = [&](float ax, float ay, float bx, float by,
+                           float cx_v, float cy_v,
+                           uint32_t paletteIdx, float ctrX, float ctrY,
+                           float bgx, float bgy, const Bary3& bary, const float* mat) {
+        if (fillSub <= 1) {
+            pushFill(ax,   ay,   paletteIdx, ctrX, ctrY, bgx, bgy, bary.v[0], mat);
+            pushFill(bx,   by,   paletteIdx, ctrX, ctrY, bgx, bgy, bary.v[1], mat);
+            pushFill(cx_v, cy_v, paletteIdx, ctrX, ctrY, bgx, bgy, bary.v[2], mat);
+            return;
+        }
+        const float invN = 1.0f / static_cast<float>(fillSub);
+        auto pushGrid = [&](int i, int j) {
+            // Child vertex at barycentric (i, j, k) on parent (i+j+k=fillSub).
+            const int k = fillSub - i - j;
+            const float fa = i * invN, fb = j * invN, fc = k * invN;
+            const float vx = fa * ax + fb * bx + fc * cx_v;
+            const float vy = fa * ay + fb * by + fc * cy_v;
+            float vb[3];
+            for (int c = 0; c < 3; ++c)
+                vb[c] = fa * bary.v[0][c] + fb * bary.v[1][c] + fc * bary.v[2][c];
+            pushFill(vx, vy, paletteIdx, ctrX, ctrY, bgx, bgy, vb, mat);
+        };
+        for (int i = 0; i < fillSub; ++i) {
+            for (int j = 0; j < fillSub - i; ++j) {
+                // Upright child tri: (i,j) (i+1,j) (i,j+1)
+                pushGrid(i,     j);
+                pushGrid(i + 1, j);
+                pushGrid(i,     j + 1);
+                // Inverted child tri (skip the rightmost slot per row).
+                if (j < fillSub - i - 1) {
+                    pushGrid(i + 1, j);
+                    pushGrid(i + 1, j + 1);
+                    pushGrid(i,     j + 1);
+                }
+            }
+        }
+    };
+
     float minX =  1e9f, minY =  1e9f;
     float maxX = -1e9f, maxY = -1e9f;
 
@@ -194,8 +245,9 @@ bool Renderer::buildGeometry() {
             float bgx, bgy;
             bulgeDir(t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2],
                      depths[0], depths[1], depths[2], bgx, bgy);
-            for (int v = 0; v < 3; ++v) {
-                pushFill(t.x[v], t.y[v], paletteIdx, cx, cy, bgx, bgy, bary.v[v], mat);
+            emitFillTri(t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2],
+                        paletteIdx, cx, cy, bgx, bgy, bary, mat);
+            for (int v = 0; v < vc; ++v) {
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
                 minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
             }
@@ -212,9 +264,8 @@ bool Renderer::buildGeometry() {
                 float bgx, bgy;
                 bulgeDir(cx, cy, t.x[v], t.y[v], t.x[w], t.y[w],
                          cd, 0.0f, 0.0f, bgx, bgy);
-                pushFill(cx,     cy,     paletteIdx, cx, cy, bgx, bgy, bary.v[0], mat);
-                pushFill(t.x[v], t.y[v], paletteIdx, cx, cy, bgx, bgy, bary.v[1], mat);
-                pushFill(t.x[w], t.y[w], paletteIdx, cx, cy, bgx, bgy, bary.v[2], mat);
+                emitFillTri(cx, cy, t.x[v], t.y[v], t.x[w], t.y[w],
+                            paletteIdx, cx, cy, bgx, bgy, bary, mat);
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
                 minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
             }
@@ -238,9 +289,8 @@ bool Renderer::buildGeometry() {
                 float bgx, bgy;
                 bulgeDir(t.x[0], t.y[0], t.x[v], t.y[v], t.x[v + 1], t.y[v + 1],
                          depth[0], depth[v], depth[v + 1], bgx, bgy);
-                pushFill(t.x[0],     t.y[0],     paletteIdx, cx, cy, bgx, bgy, bary.v[0], mat);
-                pushFill(t.x[v],     t.y[v],     paletteIdx, cx, cy, bgx, bgy, bary.v[1], mat);
-                pushFill(t.x[v + 1], t.y[v + 1], paletteIdx, cx, cy, bgx, bgy, bary.v[2], mat);
+                emitFillTri(t.x[0], t.y[0], t.x[v], t.y[v], t.x[v + 1], t.y[v + 1],
+                            paletteIdx, cx, cy, bgx, bgy, bary, mat);
             }
             for (int v = 0; v < vc; ++v) {
                 minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);

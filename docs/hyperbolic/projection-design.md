@@ -47,8 +47,14 @@ untouched and changes only the world-to-clip path:
    equal sub-segments in E² *before* the dedup map and the GPU upload;
    each sub-segment is projected per-vertex by the shader and connected
    by a straight clip-space segment, so a polyline approximates the
-   arc. Default 1 (no tessellation, cheap chord); 16 reads as a true
-   arc at typical zoom.
+   arc. **Fill triangles are tessellated by the same setting**
+   (capped at 8 so each parent only blows up to 64 children instead of
+   1024), via a barycentric (i,j,k) grid with linear-interpolation of
+   bary/bulge/centroid/material into each child vertex. The bevel
+   `min(bary)` then still falls only on original parent edges
+   (interior subdivision cuts never have a zero barycentric).
+   Default 1 (no tessellation); 8 reads as a true arc-and-fill
+   approximation at typical zoom.
 4. **The result** is a *picture* of a Euclidean tiling under a
    hyperbolic-styled projection, not the orbit of a Fuchsian group. No
    Euclidean substitution tiling is the orbit of any discrete
@@ -111,13 +117,14 @@ inverse-projection-per-fragment cost.
 
 | File | What it does in disk mode |
 |---|---|
-| `cpp/settings.h` | `Projection` enum + 4 new fields (`projection`, `hypScale`, `hypBoostX/Y`, `hypEdgeSubdiv`); `geometryChanged` triggers on `hypEdgeSubdiv` (rebuild) but not on `projection` (shader-side, no rebuild). |
+| `cpp/settings.h` | `Projection` enum + 4 new fields (`projection`, `hypScale`, `hypBoostX/Y`, `hypEdgeSubdiv`); `geometryChanged` triggers on `hypEdgeSubdiv` AND `projection` — both gate the tessellation path so toggling either has to rebuild for the polyline split to apply or strip. |
 | `cpp/jni_bridge.cpp` | `kIntCount=13`, `kFloatCount=87`. Decodes the new ints/floats. |
 | `cpp/renderer/render_state.h` | `PushBlock` extended to 48 bytes — `hypBoostX/Y`, `hypScale`, `projection`. |
-| `cpp/renderer/renderer.cpp` | Populates the new push-constant slots from `fx*` graph results; clamps `\|b\|` to 0.92 and `hypScale` ≥ 1e-3 against runaway graph modulation. |
-| `cpp/renderer/renderer_geometry.cpp` | When `projection==PoincareDisk` and `hypEdgeSubdiv>1`, splits each border edge into N sub-segments before the dedup map. |
+| `cpp/renderer/renderer.cpp` | Populates the new push-constant slots from `fx*` graph results; clamps `\|b\|` to 0.92 and `hypScale` ≥ 1e-3 against runaway graph modulation. In disk mode the view matrix auto-fits the projected geometry (baseScale = 1 / tanh(r_max · hypScale / 2)) instead of using the Euclidean bbox sizing. |
+| `cpp/renderer/renderer_geometry.cpp` | When `projection==PoincareDisk` and `hypEdgeSubdiv>1`, splits each border edge into N sub-segments before the dedup map, *and* tessellates each fill triangle into N² child triangles (N capped at 8) via barycentric grid + linear attribute interpolation. |
+| `shaders/fill.vert` | `hyp` push-constant vec4; projection block (radial map + τ_b) gated on `pc.hyp.w > 0.5`. |
+| `shaders/border.vert` | Same projection block as `fill.vert`, factored as `projectHyp(vec2)`. In disk mode, extrudes the border quad in disk space (project base + finite-difference tangent, perpendicular = disk normal, width = world halfwidth × hypScale/2) so borders stay visibly thick across the entire disk instead of going sub-pixel near the boundary where the Jacobian collapses. |
 | `cpp/graph/graph.{h,cpp}` | Three new `Target` node kinds: `OutHypBoostX`, `OutHypBoostY`, `OutHypScale`. Clamp ranges defined in the graph's `evaluate()` lo/hi tables. |
-| `shaders/fill.vert`, `shaders/border.vert` | `hyp` push-constant vec4; projection block gated on `pc.hyp.w > 0.5`. |
 | `kotlin/Settings.kt` | Five new fields with conversion (boost 0..100 → -0.9..+0.9, scale 0..100 → 0..3.0, etc.) and SharedPreferences keys. |
 | `kotlin/SettingsFragment.kt` | New `Projection` screen registered + navigation row. |
 | `res/xml/preferences.xml`, `res/xml/preferences_projection.xml`, `res/values/arrays.xml` | Projection navigation entry, the screen itself, and the `projection_entries`/`projection_values` arrays. |

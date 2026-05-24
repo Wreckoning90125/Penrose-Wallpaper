@@ -163,14 +163,16 @@ struct Settings {
 
 // Returns true if any setting that affects geometry (tile generation) changed.
 // Used by the renderer to decide whether to rebuild vertex buffers or just
-// re-record draw commands. Edge subdivision is geometry-affecting because
-// it changes the vertex/index count emitted per edge — the projection
-// flag itself is shader-side and does NOT trigger a rebuild.
+// re-record draw commands. Edge subdivision and projection mode both
+// gate the tessellation path in renderer_geometry.cpp — `sub` is only
+// > 1 when projection is PoincareDisk, so toggling either has to
+// rebuild to actually apply (or strip) the polyline split.
 inline bool geometryChanged(const Settings& a, const Settings& b) {
     return a.family != b.family
         || a.seedIdx != b.seedIdx
         || a.generation != b.generation
-        || a.hypEdgeSubdiv != b.hypEdgeSubdiv;
+        || a.hypEdgeSubdiv != b.hypEdgeSubdiv
+        || a.projection != b.projection;
 }
 
 // Returns true if anything that affects per-tile classification changed.

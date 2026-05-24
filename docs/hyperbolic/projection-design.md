@@ -24,21 +24,21 @@ untouched and changes only the world-to-clip path:
        clip = view · w                            // affine map disk → clip
 
    The radial homeomorphism `x ↦ x̂ · tanh(|x|·s/2)` is bijective
-   ℝ² → B² and conformal at the origin. `hypScale` controls the *tile
-   spread* inside the disk: the derivative at r=0 is `s/2`, so larger
-   `s` expands content near the centre and saturates far content
-   against the disk boundary (the *Circle Limit* feel); smaller `s`
-   compresses *everything* toward the disk centre — at `s = 0` the
-   whole tiling collapses to a single point. Default 1.5 (slider 50)
-   gives a moderate spread.
-   The view-matrix `baseScale` is forced to 1.0 in disk mode (rather
-   than the Euclidean `min(2/gw, 2/gh)·0.95`) because the shader's
-   output is strictly inside the unit disk — `tanh ∈ (-1, +1)` and
-   `τ_b` preserves B². No margin: the disk boundary is at infinite
-   hyperbolic distance, so content thins to zero density approaching
-   it; there's no sharp edge to clip. Without this override, raising
-   `hypScale` pushes the projected disk past the screen edges (the
-   Euclidean `baseScale` sizes against the pre-projection world).
+   ℝ² → B² and conformal at the origin. `hypScale` controls the
+   *compression toward the boundary*: the derivative at r=0 is `s/2`,
+   so larger `s` saturates far content against `|z|=1` (the *Circle
+   Limit* feel); smaller `s` keeps the projection close to a uniform
+   radial squeeze.
+   The view matrix **auto-fits the projected tiling to the screen**
+   in disk mode — `baseScale = 1 / tanh(r_max · s / 2)`, where r_max
+   is the farthest world-bbox corner. At low `s` the projected
+   tiling is small in disk coordinates, so `baseScale` is large and
+   the visible content fills the screen with the disk boundary
+   off-screen; at high `s` the projected radius approaches 1 and
+   `baseScale → 1`, so the disk boundary lands at the screen edge
+   with far tiles piled against it. Decoupling fit from compression
+   removes the "tile collapse to invisible dot" failure mode the
+   slider used to have at low values.
 3. **Tile sides** are straight in E² and, under a non-affine map E² → B²,
    map to curves; rendered as a straight clip-space segment from
    projected endpoint to projected endpoint, the tile edge cuts inside

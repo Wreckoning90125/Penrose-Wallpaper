@@ -577,14 +577,20 @@ void Renderer::drawFrame() {
     // surface-to-screen ratio so the visible region (the middle slice of
     // an oversized side-scroll surface) carries the full tiling.
     //
-    // In hyperbolic projection mode the shader's output is strictly
-    // inside the unit disk — `tanh` is in (-1, +1) and τ_b preserves
-    // B² — so baseScale = 1 maps the unit disk to clip space [-1, +1]
-    // exactly. No margin: the disk boundary is at infinite hyperbolic
-    // distance, so content thins to zero density approaching it; there
-    // is no sharp edge to clip. Using the Euclidean geomBounds here
-    // would size against the pre-projection world, so raising
-    // `hypScale` would push the projected disk past the screen edges.
+    // Hyperbolic projection mode: auto-fit the *projected* tiling to the
+    // screen so the slider controls compression, not visibility. The
+    // shader projects the world point at distance r_max to disk radius
+    // tanh(r_max · hypScale / 2); baseScale = 1/projR maps that to clip
+    // ±1. Low hypScale → projR small → baseScale large → tiles fill the
+    // screen densely with the disk boundary off-screen (effectively a
+    // radial-squeeze view of the Euclidean tiling). High hypScale → projR
+    // → 1 → baseScale → 1 → disk boundary at the screen edge and far
+    // tiles piled against it (the Circle Limit feel). The earlier
+    // baseScale=1 fix relied on `tanh ∈ (-1,+1)` keeping content inside
+    // the disk, but at low scale tanh maps everything close to 0 — so
+    // the geometry was technically visible at unit-disk fit, just
+    // collapsed to a dot near the origin. Auto-fit removes that
+    // dead zone entirely.
     const float surfW = (float)swapchainExtent_.width;
     const float surfH = (float)swapchainExtent_.height;
     const float screenW = (screenW_ > 0) ? (float)screenW_ : surfW;
@@ -592,7 +598,11 @@ void Renderer::drawFrame() {
     const float aspect = screenW / screenH;
     float baseScale;
     if (settings_.projection == Projection::PoincareDisk) {
-        baseScale = 1.0f;
+        const float xExtent = std::max(std::fabs(geomMinX_), std::fabs(geomMaxX_));
+        const float yExtent = std::max(std::fabs(geomMinY_), std::fabs(geomMaxY_));
+        const float rmax = std::sqrt(xExtent * xExtent + yExtent * yExtent);
+        const float projR = std::tanh(rmax * std::max(fxHypScale_, 1e-3f) * 0.5f);
+        baseScale = 1.0f / std::max(projR, 1e-3f);
     } else {
         const float gw = std::max(geomMaxX_ - geomMinX_, 1e-3f);
         const float gh = std::max(geomMaxY_ - geomMinY_, 1e-3f);

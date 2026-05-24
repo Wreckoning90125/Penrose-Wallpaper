@@ -20,9 +20,9 @@
     <PreferenceCategory android:title="Poincaré disk">
         <SeekBarPreference
             android:key="hyp_scale"
-            android:title="World-to-disk scale"
-            android:summary="Tile spread inside the disk. Low → the whole tiling collapses toward the centre (at 0 it is a single point). High → near-centre tiles expand and far tiles compress against the disk boundary — the Circle Limit feel. 50 = moderate."
-            android:min="5" android:max="100" android:defaultValue="50"
+            android:title="Boundary compression"
+            android:summary="How strongly the projection piles up tiles against the disk boundary. Low → an even radial squeeze, tiles fill the screen, disk boundary off-screen. High → far tiles compress against the boundary and the disk edge becomes visible — the Circle Limit feel. The view auto-fits the projected tiling to the screen, so the slider only controls compression, never visibility."
+            android:min="0" android:max="100" android:defaultValue="50"
             app:showSeekBarValue="true" />
         <SeekBarPreference
             android:key="hyp_boost_x"

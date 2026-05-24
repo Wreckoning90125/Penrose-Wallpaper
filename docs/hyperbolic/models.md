@@ -192,6 +192,48 @@ circular arcs joining the three boundary points, each orthogonal to the
 boundary circle. All ideal triangles are congruent in Hⁿ — there is a
 hyperbolic isometry taking any three ideal points to any other three.
 
+## Hyperbolic trigonometry
+
+For computing the dimensions of a {p, q} fundamental triangle (and
+therefore where to place its vertices in B² to seed a reflection
+group), the standard formulas are (Ratcliffe §3.5):
+
+**Law of cosines I (sides → angle):** for a hyperbolic triangle with
+sides a, b, c and opposite angles α, β, γ,
+
+    cos γ = (cosh a · cosh b − cosh c) / (sinh a · sinh b).
+
+**Law of cosines II (angles → side):** the *dual* identity, only valid
+in hyperbolic geometry, lets you solve for sides from angles alone:
+
+    cosh c = (cos γ + cos α · cos β) / (sin α · sin β).
+
+**Law of sines:** `sinh a / sin α = sinh b / sin β = sinh c / sin γ`.
+
+**Area = angle defect:** `Area(T) = π − (α + β + γ)`. So the smallest
+hyperbolic triangle T(2, 3, 7) has area `π − (π/2 + π/3 + π/7) = π/42`.
+
+**Right triangle with hypotenuse c, legs a, b, opposite angles α, β:**
+
+    cosh c = cosh a · cosh b              (hyperbolic Pythagoras)
+    cos α  = cosh a · sin β               (Bolyai's relation)
+    tan α  = tanh b / sinh a              (legs ↔ opposite angle)
+
+**{p, q} fundamental triangle** T(2, p, q) has angles π/2, π/p, π/q.
+Apply law of cosines II to get its side lengths:
+
+    cosh(side opposite π/p) = (cos(π/p) + cos(π/2) cos(π/q)) / (sin(π/2) sin(π/q))
+                            = cos(π/p) / sin(π/q)
+    cosh(side opposite π/q) = cos(π/q) / sin(π/p)
+    cosh(hypotenuse, opp π/2) = cot(π/p) cot(π/q)
+
+(The third formula requires `cot(π/p) cot(π/q) > 1`, i.e.
+`1/p + 1/q < 1/2`, which is exactly the hyperbolic regime.) For (2, 7,
+3), cot(π/7) cot(π/3) = 2.0765 × 0.5774 = 1.1993 ⇒ hypotenuse ≈
+0.6068. Convert to Euclidean disk-radius via `tanh(d/2)` (Ratcliffe
+Exercise 4.5.1: in B² the Euclidean distance from origin to a point at
+hyperbolic distance d is `tanh(d/2)`).
+
 ## Converting between models in 2D
 
 Using B² (Poincaré disk in ℂ, |z| < 1), U² (upper half-plane in ℂ,

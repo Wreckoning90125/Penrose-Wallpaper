@@ -146,6 +146,37 @@ tessellated) is the obvious next refinement — visible only at very
 large tiles. Not worth a follow-up unless someone reports the
 straight-chord interior look as a problem.
 
+## Known math compromises
+
+Three places where the shipping code trades some correctness for
+simplicity. None affects typical use visibly; recording so future
+maintainers know what was waived rather than missed.
+
+1. **Auto-fit r_max is the bbox corner, not the actual vertex r_max.**
+   `rmax = √(max(|geomMinX|, |geomMaxX|)² + max(|geomMinY|, |geomMaxY|)²)`
+   over-estimates by up to ~√2 for a centered tiling whose actual
+   farthest vertex is on an axis. Net effect: baseScale is up to ~30%
+   smaller than ideal, so the projected tiling under-fills the screen
+   by that fraction. Fix would be a loop over actual tile vertices
+   during buildGeometry; saved as a fast-path optimisation.
+
+2. **Auto-fit ignores the τ_b boost.** baseScale is computed assuming
+   b = 0. With a non-zero boost, projected content shifts in disk
+   space and can push past the screen edge. The user can compensate
+   with zoom. The "right" fix is to compute the boosted bbox extent
+   per-frame, but the boost is graph-animated so this would re-fit
+   continuously — likely a worse UX than the slight overflow.
+
+3. **`projTangentRadial` in `border.vert` omits the τ_b rotation.**
+   τ_b is conformal so it rotates the disk-space tangent by
+   `arg(dτ_b/dz) = −2 arg(1 + b̄z)`. We use the unrotated radial-map
+   tangent and take its perpendicular as the disk normal — the border
+   normal is therefore slightly misaligned (rotation magnitude bounded
+   by `|2 arg(1 + b̄z)|` which is small for moderate boost). Visually
+   the border still hugs the tile edge correctly; only the
+   perpendicular extrusion direction is off by a few degrees at high
+   |b|. Fix would add 8 fmas to the per-vertex cost.
+
 ## Out of scope (still)
 
 - **Actual {p, q} hyperbolic tilings.** Needs a Fuchsian /

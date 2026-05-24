@@ -22,7 +22,7 @@ inline Renderer* asRenderer(jlong ptr) { return reinterpret_cast<Renderer*>(ptr)
 // passes us. Layout (ints / floats):
 //   ints:   [family, seedIdx, generation, preset, colorCount, colorMode,
 //            borderOn, bgMode, rippleMode, panMode, rippleKind,
-//            projection, hypEdgeSubdiv]
+//            projection, hypBorderSubdiv, hypFillSubdiv]
 //   floats: [borderWidth, borderL, borderC, borderH, borderAlpha,
 //            bgL, bgC, bgH, rippleAmount,
 //            zoom, rotation, panX, panY,
@@ -35,7 +35,7 @@ inline Renderer* asRenderer(jlong ptr) { return reinterpret_cast<Renderer*>(ptr)
 //            matRoughMod, matMetalMod,
 //            hypScale, hypBoostX, hypBoostY,
 //            custom_0_L, custom_0_C, custom_0_H, ..., custom_15_L, custom_15_C, custom_15_H]
-constexpr int kIntCount   = 13;
+constexpr int kIntCount   = 14;
 constexpr int kFloatCount = 16 + 8 + 5 + 5 + 2 + 3 + 3 * kMaxColors;
 
 Settings decodeSettings(const jint* ints, const jfloat* floats) {
@@ -60,8 +60,10 @@ Settings decodeSettings(const jint* ints, const jfloat* floats) {
     s.rippleKind = rk;
     int pj = ints[11]; if (pj < 0 || pj > 1) pj = 0;
     s.projection = static_cast<Projection>(pj);
-    int sub = ints[12]; if (sub < 1) sub = 1; if (sub > 32) sub = 32;
-    s.hypEdgeSubdiv = sub;
+    int bsub = ints[12]; if (bsub < 1) bsub = 1; if (bsub > 32) bsub = 32;
+    s.hypBorderSubdiv = bsub;
+    int fsub = ints[13]; if (fsub < 1) fsub = 1; if (fsub > 8)  fsub = 8;
+    s.hypFillSubdiv = fsub;
 
     s.borderWidth = floats[0];
     s.borderColor = { floats[1], floats[2], floats[3] };

@@ -84,15 +84,19 @@ struct Settings {
     // and `hypBoostY` give the hyperbolic translation τ_b (a point of
     // B², |b|<1) applied AFTER the radial map; the graph's
     // OutHypBoost{X,Y} targets can drive these so audio / time / page
-    // scroll feed an animating boost. `hypEdgeSubdiv` is the number of
-    // edge sub-segments per tile edge (1 = no tessellation, the v1
-    // shipping choice; larger values progressively approximate the
-    // true geodesic arc by polyline).
+    // scroll feed an animating boost. `hypBorderSubdiv` and
+    // `hypFillSubdiv` are two independent slider knobs because the
+    // costs are different shapes: borders split linearly (N sub-edges
+    // per parent edge), fills split quadratically (N² child triangles
+    // per parent). One slider for both forced one of them to the
+    // wrong cap — either dead zone for one or memory blowup from the
+    // other. Defaults 1 (no tessellation).
     Projection projection = Projection::Euclidean;
-    float  hypScale       = 1.5f;
-    float  hypBoostX      = 0.0f;
-    float  hypBoostY      = 0.0f;
-    int    hypEdgeSubdiv  = 1;
+    float  hypScale         = 1.5f;
+    float  hypBoostX        = 0.0f;
+    float  hypBoostY        = 0.0f;
+    int    hypBorderSubdiv  = 1;
+    int    hypFillSubdiv    = 1;
 
     // Tile look: master brightness multiplier and per-tile depth/parallax
     // gradient amplitude. Depth follows the tile's geometric apex — fat
@@ -163,15 +167,15 @@ struct Settings {
 
 // Returns true if any setting that affects geometry (tile generation) changed.
 // Used by the renderer to decide whether to rebuild vertex buffers or just
-// re-record draw commands. Edge subdivision and projection mode both
-// gate the tessellation path in renderer_geometry.cpp — `sub` is only
-// > 1 when projection is PoincareDisk, so toggling either has to
-// rebuild to actually apply (or strip) the polyline split.
+// re-record draw commands. Both subdivision counts and the projection mode
+// gate the tessellation paths in renderer_geometry.cpp — toggling any of
+// them has to rebuild to actually apply (or strip) the polyline split.
 inline bool geometryChanged(const Settings& a, const Settings& b) {
     return a.family != b.family
         || a.seedIdx != b.seedIdx
         || a.generation != b.generation
-        || a.hypEdgeSubdiv != b.hypEdgeSubdiv
+        || a.hypBorderSubdiv != b.hypBorderSubdiv
+        || a.hypFillSubdiv   != b.hypFillSubdiv
         || a.projection != b.projection;
 }
 

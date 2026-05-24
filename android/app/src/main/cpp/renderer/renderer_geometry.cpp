@@ -155,12 +155,11 @@ bool Renderer::buildGeometry() {
     // centroid and material are all linear-interpolation-safe, the
     // fragment shader's bevel still falls only on parent edges (the
     // min(bary) is zero only along original edges, never along
-    // interior subdivision cuts). Same slider drives border-edge and
-    // fill subdivision (matching granularity along parent edges); the
-    // XML slider caps at 8 so child-tri count stays bounded (8²×~1k
-    // tiles ≈ 64K sub-tris; 32² would have been ≈ 1M).
+    // interior subdivision cuts). Driven by Settings.hypFillSubdiv,
+    // separate from the border subdivision because the costs are
+    // different shapes (N² vs N) — JNI already clamped to [1, 8].
     const int fillSub = (settings_.projection == Projection::PoincareDisk)
-                        ? std::clamp(settings_.hypEdgeSubdiv, 1, 8) : 1;
+                        ? settings_.hypFillSubdiv : 1;
 
     auto emitFillTri = [&](float ax, float ay, float bx, float by,
                            float cx_v, float cy_v,
@@ -328,13 +327,13 @@ bool Renderer::buildGeometry() {
         // In Poincaré-disk projection, straight world-space edges map to
         // straight clip-space chords (the shader projects per-vertex,
         // clip-space interpolation is linear). Splitting each edge into
-        // hypEdgeSubdiv sub-segments before the dedup map sees them
+        // hypBorderSubdiv sub-segments before the dedup map sees them
         // gives a polyline that approximates the true hyperbolic
         // geodesic arc; the dedup map keeps a sub-segment's two
         // endpoints shared with the adjacent tile's matching
         // sub-segment, so the border still draws once per shared edge.
         const int sub = (settings_.projection == Projection::PoincareDisk)
-                        ? std::clamp(settings_.hypEdgeSubdiv, 1, 8) : 1;
+                        ? settings_.hypBorderSubdiv : 1;
         if (sub > 1) {
             std::vector<Edge> tess;
             tess.reserve(edges.size() * sub);

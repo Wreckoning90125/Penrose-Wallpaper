@@ -42,18 +42,20 @@ untouched and changes only the world-to-clip path:
 3. **Tile sides** are straight in E² and, under a non-affine map E² → B²,
    map to curves; rendered as a straight clip-space segment from
    projected endpoint to projected endpoint, the tile edge cuts inside
-   the true hyperbolic geodesic and the visual character is wrong.
-   The `hypEdgeSubdiv` setting (1–8) splits each border edge into N
-   sub-segments AND each fill triangle into N² child triangles via a
-   barycentric (i,j,k) grid with linear interpolation of
-   bary/bulge/centroid/material into each child vertex. Same slider so
-   the two stay coherent in arc-approximation granularity along parent
-   edges. The bevel `min(bary)` still falls only on original parent
-   edges (interior subdivision cuts never have a zero barycentric).
-   Slider capped at 8 (not 32) because cost grows as N² for fills —
-   8²×~1k tiles ≈ 64K sub-tris; 32² would have crossed 1M.
-   Default 1 (no tessellation); 8 reads as a true arc-and-fill
-   approximation at typical zoom.
+   the true hyperbolic geodesic and the visual character is wrong. Two
+   independent slider knobs split this into a polyline approximation:
+   `hypBorderSubdiv` (1..32, cost linear in N) splits each tile-edge
+   border into N straight sub-segments; `hypFillSubdiv` (1..8, cost
+   N², so capped lower) splits each fill triangle into N² child
+   triangles via a barycentric (i,j,k) grid with linear interpolation
+   of bary/bulge/centroid/material into each child vertex. The bevel
+   `min(bary)` still falls only on original parent edges (interior
+   subdivision cuts never have a zero barycentric). Separate sliders
+   because forcing one cap on both either stops the cheap one short or
+   blows fill memory at high counts — at gen-6 with 1500 tiles,
+   fillSub=32 would mean 1.5M sub-tris ≈ 250 MB of vertex data.
+   Defaults 1 (no tessellation); border=8 + fill=4 reads as a true
+   arc-and-fill approximation at typical zoom.
 4. **The result** is a *picture* of a Euclidean tiling under a
    hyperbolic-styled projection, not the orbit of a Fuchsian group. No
    Euclidean substitution tiling is the orbit of any discrete
@@ -116,11 +118,11 @@ inverse-projection-per-fragment cost.
 
 | File | What it does in disk mode |
 |---|---|
-| `cpp/settings.h` | `Projection` enum + 4 new fields (`projection`, `hypScale`, `hypBoostX/Y`, `hypEdgeSubdiv`); `geometryChanged` triggers on `hypEdgeSubdiv` AND `projection` — both gate the tessellation path so toggling either has to rebuild for the polyline split to apply or strip. |
-| `cpp/jni_bridge.cpp` | `kIntCount=13`, `kFloatCount=87`. Decodes the new ints/floats. |
+| `cpp/settings.h` | `Projection` enum + 5 new fields (`projection`, `hypScale`, `hypBoostX/Y`, `hypBorderSubdiv`, `hypFillSubdiv`); `geometryChanged` triggers on either subdivision count AND on `projection` — all three gate the tessellation path so toggling any of them has to rebuild for the polyline split to apply or strip. |
+| `cpp/jni_bridge.cpp` | `kIntCount=14`, `kFloatCount=87`. Decodes the new ints/floats; clamps `hypBorderSubdiv` to [1,32] and `hypFillSubdiv` to [1,8] defensively. |
 | `cpp/renderer/render_state.h` | `PushBlock` extended to 48 bytes — `hypBoostX/Y`, `hypScale`, `projection`. |
 | `cpp/renderer/renderer.cpp` | Populates the new push-constant slots from `fx*` graph results; clamps `\|b\|` to 0.92 and `hypScale` ≥ 1e-3 against runaway graph modulation. In disk mode the view matrix auto-fits the projected geometry (baseScale = 1 / tanh(r_max · hypScale / 2)) instead of using the Euclidean bbox sizing. |
-| `cpp/renderer/renderer_geometry.cpp` | When `projection==PoincareDisk` and `hypEdgeSubdiv>1`, splits each border edge into N sub-segments before the dedup map, *and* tessellates each fill triangle into N² child triangles (N capped at 8) via barycentric grid + linear attribute interpolation. |
+| `cpp/renderer/renderer_geometry.cpp` | When `projection==PoincareDisk`: if `hypBorderSubdiv>1`, splits each border edge into N sub-segments before the dedup map; if `hypFillSubdiv>1`, tessellates each fill triangle into N² child triangles via barycentric grid + linear attribute interpolation. |
 | `shaders/fill.vert` | `hyp` push-constant vec4; projection block (radial map + τ_b) gated on `pc.hyp.w > 0.5`. |
 | `shaders/border.vert` | Same projection block as `fill.vert`, factored as `projectHyp(vec2)`. In disk mode, computes the disk-space tangent analytically via `projTangentRadial` (polar-basis decomposition: radial component scaled by f'(r)=(s/2)·sech²(r·s/2), tangential by f(r)/r=tanh(r·s/2)/r — finite-difference would underflow against the float position once r·s/2 ≳ 4, which a default-zoom gen-6 patch hits routinely). Perpendicular = disk normal, extrude at width = world halfwidth × hypScale/2 so borders stay visibly thick across the entire disk instead of going sub-pixel near the boundary. |
 | `cpp/graph/graph.{h,cpp}` | Three new `Target` node kinds: `OutHypBoostX`, `OutHypBoostY`, `OutHypScale`. Clamp ranges defined in the graph's `evaluate()` lo/hi tables. |

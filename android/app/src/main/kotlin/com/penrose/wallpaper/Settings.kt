@@ -68,20 +68,23 @@ internal class Settings(
     //              1 = Poincaré disk.
     // `hypScale` controls how aggressively world radius is mapped into
     // the unit disk; `hypBoostX/Y` is the τ_b boost point in B² (clamped
-    // to |b|≤0.92 server-side); `hypEdgeSubdiv` is the per-edge polyline
-    // tessellation count when in disk mode (1 = no tessellation).
+    // to |b|≤0.92 server-side). `hypBorderSubdiv` (1..32) and
+    // `hypFillSubdiv` (1..8) are independent because border cost is
+    // linear in N and fill cost is N² — sharing one slider forces the
+    // wrong cap on one of them. 1 = no tessellation.
     val projection: Int,
     val hypScale: Float,
     val hypBoostX: Float,
     val hypBoostY: Float,
-    val hypEdgeSubdiv: Int,
+    val hypBorderSubdiv: Int,
+    val hypFillSubdiv: Int,
     val customOklch: FloatArray,
 ) {
     fun toNative(): Pair<IntArray, FloatArray> {
         val ints = intArrayOf(
             family, seedIdx, generation, preset, colorCount, colorMode,
             if (borderOn) 1 else 0, bgMode, rippleMode, panMode, rippleKind,
-            projection, hypEdgeSubdiv,
+            projection, hypBorderSubdiv, hypFillSubdiv,
         )
         val baseFloats = floatArrayOf(
             borderWidth, borderL, borderC, borderH, borderAlpha,
@@ -170,12 +173,14 @@ internal class Settings(
         // Hyperbolic projection. PROJECTION is a ListPreference ("0"=E²,
         // "1"=Poincaré disk); HYP_SCALE / HYP_BOOST_{X,Y} are 0..100
         // SeekBars (load() converts to floats, BOOST_{X,Y} re-centred to
-        // [-1, +1]); HYP_EDGE_SUBDIV is a 1..32 SeekBar.
-        const val KEY_PROJECTION       = "projection"
-        const val KEY_HYP_SCALE        = "hyp_scale"
-        const val KEY_HYP_BOOST_X      = "hyp_boost_x"
-        const val KEY_HYP_BOOST_Y      = "hyp_boost_y"
-        const val KEY_HYP_EDGE_SUBDIV  = "hyp_edge_subdiv"
+        // [-1, +1]); HYP_BORDER_SUBDIV (1..32) and HYP_FILL_SUBDIV (1..8)
+        // are independent seekbars because their costs are linear vs N².
+        const val KEY_PROJECTION         = "projection"
+        const val KEY_HYP_SCALE          = "hyp_scale"
+        const val KEY_HYP_BOOST_X        = "hyp_boost_x"
+        const val KEY_HYP_BOOST_Y        = "hyp_boost_y"
+        const val KEY_HYP_BORDER_SUBDIV  = "hyp_border_subdiv"
+        const val KEY_HYP_FILL_SUBDIV    = "hyp_fill_subdiv"
 
         // Bumped by PresetStore.applyToPrefs whenever a preset writes a
         // fresh modulation_graph.json, and by the node editor when it
@@ -299,9 +304,10 @@ internal class Settings(
                 // unit world radius to tanh(0.75) ≈ 0.64 — well within
                 // the disk and visually a moderate squeeze.
                 hypScale      = safeInt(prefs, KEY_HYP_SCALE, 50) / 100f * 3.0f,
-                hypBoostX     = (safeInt(prefs, KEY_HYP_BOOST_X, 50) - 50) / 50f * 0.9f,
-                hypBoostY     = (safeInt(prefs, KEY_HYP_BOOST_Y, 50) - 50) / 50f * 0.9f,
-                hypEdgeSubdiv = safeInt(prefs, KEY_HYP_EDGE_SUBDIV, 1).coerceIn(1, 32),
+                hypBoostX       = (safeInt(prefs, KEY_HYP_BOOST_X, 50) - 50) / 50f * 0.9f,
+                hypBoostY       = (safeInt(prefs, KEY_HYP_BOOST_Y, 50) - 50) / 50f * 0.9f,
+                hypBorderSubdiv = safeInt(prefs, KEY_HYP_BORDER_SUBDIV, 1).coerceIn(1, 32),
+                hypFillSubdiv   = safeInt(prefs, KEY_HYP_FILL_SUBDIV, 1).coerceIn(1, 8),
                 customOklch  = custom,
             )
         }

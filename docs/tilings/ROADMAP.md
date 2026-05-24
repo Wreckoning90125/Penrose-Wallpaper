@@ -5,8 +5,8 @@ a planning list. Effort is relative (low = one row + one generator, as the
 Danzer family was; high = new subsystem).
 
 Two tracks run in parallel: **tiling choice** (this file) and **surface
-sophistication** (`docs/render/physical-material-rendering.md`, the phased
-physical-material build). The tiling track's committed next item is the
+sophistication** (`docs/render/physical-material.md`, the BRDF + lighting +
+preset architecture). The tiling track's committed next item is the
 Hat / Spectre einstein family — see *Obvious next step* below.
 
 ## Renderer — new families and modes

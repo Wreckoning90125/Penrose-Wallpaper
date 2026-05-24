@@ -4,10 +4,11 @@ Forward-looking work, ranked. Items that change subsystem architecture
 link to the detailed roadmap doc that owns them; items that don't are
 described inline.
 
-Completed work is tracked in the per-doc Status sections it belongs to
-(`docs/render/physical-material-rendering.md` §0 for surface phases,
-`docs/tilings/ROADMAP.md` for tiling families); this file is the single
-forward-looking list — no duplication of "done" across files.
+Completed work is tracked in git history and the per-doc reference
+sections it belongs to (`docs/render/physical-material.md` for the
+surface architecture, `docs/tilings/ROADMAP.md` for tiling families);
+this file is the single forward-looking list — no duplication of "done"
+across files.
 
 ## Surface / render
 
@@ -18,15 +19,15 @@ forward-looking list — no duplication of "done" across files.
   `R16G16B16A16_SFLOAT` offscreen attachment; dual-Kawase bloom
   (luminance-thresholded downsample chain ~5 mips, upsample-combine);
   composite/tonemap fullscreen pass; offscreen images + sampler +
-  pipelines + descriptor sets. Detail:
-  `docs/render/physical-material-rendering.md` §5 Phase E.
+  pipelines + descriptor sets. Background:
+  `docs/render/physical-material.md` "Lighting rig".
 
 - **Phase F — border merge.** Draw the border inside `fill.frag` as a
-  `smoothstep` on Phase A's `edgeDist`; drop `border.vert`,
+  `smoothstep` on the Phase A `edgeDist`; drop `border.vert`,
   `border.frag`, `BorderVertex`, and the border pipeline. One pipeline
   draws fill + border, the shared-uniforms factor naturally shrinks to
-  the two fill stages. Detail:
-  `docs/render/physical-material-rendering.md` §5 Phase F.
+  the two fill stages. Background:
+  `docs/render/physical-material.md` "Files and ownership".
 
 ## Tilings
 

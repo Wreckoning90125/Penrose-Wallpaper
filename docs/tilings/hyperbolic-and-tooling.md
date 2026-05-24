@@ -1,19 +1,20 @@
 # Hyperbolic tilings, related art, and external tooling
 
-Context for the boundary of this repo's tiling engine. The renderer tiles only
-the **Euclidean plane (E²)**. Three adjacent areas recur in questions —
-hyperbolic (H²) tilings, the decorative-art lineage, and crystallographic
-software. None is implemented; this file records the overlap so the boundary,
-and what is worth importing, is explicit. It is not a symmetry-family doc and
-does not follow the system template.
+Context for the boundary of this repo's tiling engine. Every `Family`
+generates tiles in E²; the **Poincaré-disk projection mode** (Settings →
+Projection; full design in `../hyperbolic/projection-design.md`) maps
+those E² coordinates into B² in the shader. This file records the
+neighbouring topics — hyperbolic (H²) tilings proper, the decorative-art
+lineage, and crystallographic software — that recur in questions but
+sit outside the generators / projection that ship today.
 
 ## The Euclidean boundary
 
-Every renderer `Family` is a tiling of E² — substitution (P3, P2, P1, Chair,
-Pinwheel, Tübingen, Danzer) or de Bruijn dualization (Dodecagonal,
-Ammann–Beenker, Heptagonal, Binary). Hyperbolic and higher-dimensional tilings
-are out of scope for the geometry engine; a hyperbolic mode would be a new
-*projection*, not a new family.
+Every renderer `Family` is a tiling of E² — substitution (P3, P2, P1,
+Chair, Pinwheel, Tübingen, Danzer) or de Bruijn dualization (Dodecagonal,
+Ammann–Beenker, Heptagonal, Binary). The hyperbolic mode is a *projection*
+of those Euclidean generators, not a new family — the generators stay
+the same; the display path changes.
 
 ## Hyperbolic tilings (H²)
 
@@ -48,15 +49,15 @@ binary tiling keeps the substitution combinatorics of that H² construction.
 | Work | Geometry | Relation here |
 |------|----------|---------------|
 | Escher, *Regular Division of the Plane* | E², isohedral periodic (17 wallpaper groups) | recoloured isohedral tilings — see `periodic-reference.md` |
-| Escher, *Circle Limit* I–IV | H², regular {p,q} (via Coxeter) | hyperbolic, out of engine scope |
+| Escher, *Circle Limit* I–IV | H², regular {p,q} (via Coxeter) | the projection mode reproduces the *Circle Limit* aesthetic on Euclidean tilings; genuine {p,q} would need a Fuchsian generator (`../hyperbolic/discrete-groups.md`) |
 | Hyperbolic crochet coral (Taimina; Wertheim, *Crochet Coral Reef*) | H² surfaces | constant-negative-curvature surfaces; a {p,q}, 1/p+1/q<1/2, is their discrete skeleton |
 | elfnor procedural hyperbolic-coral generators (Blender / Sverchok) | H² surfaces | parametric form of the same surfaces |
 
 None of this is aperiodic-substitution. The shared layer is **decoration**:
 Escher's method is recolouring an isohedral tiling, which is exactly what this
 renderer adds on top of a substitution tiling (`ColorMode::Type/Orient/Ring`,
-palettes). Hyperbolic coral overlaps only in tiling combinatorics; rendering it
-needs a Poincaré-disk or Beltrami–Klein projection — a separate geometry mode.
+palettes). The Poincaré-disk projection mode handles the H² display side
+for any of these (`../hyperbolic/projection-design.md`).
 
 ## EPINET — the hyperbolic ↔ crystallographic-net bridge
 
@@ -71,7 +72,7 @@ projected into E³.
   topology. That is the kind of figure-free formalism the substitution work
   wants (cf. the closure algebra in `tools/README.md`).
 - The edge tables themselves describe H²-to-E³ nets, not E² substitution
-  tilings — useful only if a 3-periodic-net or hyperbolic mode is added.
+  tilings — orthogonal to anything our families produce.
 
 ## Crystallographic and aperiodic-order tooling
 
@@ -91,24 +92,20 @@ a projection from a higher-dimensional periodic lattice through an acceptance
 window. EPINET edge tables run only up to sg230 because they target periodic
 3-D nets — the same periodic boundary.
 
-## What is worth bringing
-
-| Candidate | Value | When |
-|-----------|-------|------|
-| Delaney–Dress / orbifold-symbol tooling | rigorously classify the vertex configurations the families produce | anytime; figure-free, low cost |
-| Per-family superspace / cut-and-project record (higher-D lattice + acceptance window) | makes the dualization families exact on paper, not just in code | documentation pass |
-| EPINET edge tables | only with a hyperbolic-projection or 3-periodic-net mode | deferred; large scope |
-| spglib / moyo / pyxtal / aflow | contrast baseline for `periodic-reference.md` only | optional; cannot certify any aperiodic tiling |
-
 ## Renderer implications
 
-- A hyperbolic mode is a new **projection** (Poincaré disk / Beltrami–Klein),
-  not a new `Family` — the generators are Euclidean. Background, design
-  questions and the recommended answers are in `../hyperbolic/`.
-- The `Binary` family is the closest H² link; recording its horocycle origin
-  in `pentagonal-binary.md` is the cheap, exact win and is already noted there.
-- 3-D sets (Penrose rhombohedra, Schmitt–Conway–Danzer, Danzer tetrahedra; see
-  `catalogue.md`) would need a volumetric renderer — out of scope.
+- The hyperbolic mode is a **projection** (`../hyperbolic/projection-design.md`),
+  not a new `Family` — the generators stay Euclidean and the shader does the
+  E² → B² map plus the τ_b boost. The full reference stack for the model
+  geometry, isometries, and discrete-group theory is `../hyperbolic/`.
+- The `Binary` family is the deepest H² link in the existing generators:
+  the Godrèche–Lançon construction descends from the horocyclic binary
+  tiling of H². `pentagonal-binary.md` records that origin; in the
+  projection mode, the Binary tiles are the closest to genuinely
+  hyperbolic content of any family.
+- 3-D sets (Penrose rhombohedra, Schmitt–Conway–Danzer, Danzer tetrahedra;
+  see `catalogue.md`) belong to a volumetric renderer, a separate engine
+  from the 2-D fill-and-border stack here.
 
 ## References
 

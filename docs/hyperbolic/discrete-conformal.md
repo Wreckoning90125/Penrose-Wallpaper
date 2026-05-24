@@ -83,28 +83,6 @@ unit circle; a flip is then the projective change of chart. This is the
 piece that lets the discrete-metric output be turned into a per-pixel
 texture coordinate.
 
-## Where this would matter for a Penrose-Wallpaper hyperbolic mode
-
-It does not, directly. The Poincaré-disk projection of a Euclidean
-tiling (see `projection-design.md`) needs none of this machinery — the
-tile vertices are already in E², and the projection is a single closed-form
-map B² → B² with no remeshing.
-
-It would matter if the project ever did one of these things:
-
-- **Authoring a tiling by prescribing per-vertex angles.** E.g. "I want a
-  pentagonal tiling whose interior angle defects sum to a particular
-  budget" — the discrete uniformization theorem would compute it.
-- **Conformally rendering an E² tiling on a curved surface in 3D** (e.g.
-  a torus mesh decorated with a Penrose tiling). Conformal-flattening the
-  surface yields a target metric whose tiles look undistorted.
-- **Hyperbolic substitution tilings with non-rigid prototiles.** A tile
-  shape that is "the same up to conformal equivalence" across different
-  positions — the discrete-uniformization framework is the right
-  formalism.
-
-None of these are on `todo.md` today.
-
 ## ConformalIdealDelaunay reference code map
 
 GitHub: `mcampen/ConformalIdealDelaunay`. Layout of the C++ implementation:

@@ -214,22 +214,18 @@ To render a {p, q} tiling on the Poincaré disk, the operational steps are:
 This is the bog-standard *Circle Limit* approach and is what packages like
 HyperRogue, KaleidoTile and Coxeter's own software do.
 
-## What this repo doesn't (and won't, here) do
+## What this maps to in the renderer
 
-This repo's `Family` generators are Euclidean substitution / de-Bruijn
-constructions — there is no genuine hyperbolic generator. Two things this
-opens, two things it closes:
-
-- **Opens:** the Euclidean coordinates of an E² tiling can be passed
-  through *any* map ℝ² → B², and the renderer's existing geometry stays
-  valid. A radial conformal Beltrami–Klein-style map (`x ↦ x / (1 + √(1 −
-  |x|²))` after radial squashing) gives a *visually* hyperbolic image of
-  the Euclidean tiling, even though the tiling is not actually one of a
-  Fuchsian group. See `projection-design.md` for the practical version.
-- **Closes:** an actual {p, q} hyperbolic tiling needs a hyperbolic
-  substitution / Coxeter-reflection generator, not the existing
-  `generateMultigrid` or `generateSubstitution`. That is a new
-  `Generator` subsystem, not a projection.
+The repo's `Family` generators are Euclidean substitution / de-Bruijn
+constructions; the projected vertices of any of them can be passed
+through a radial homeomorphism ℝ² → B² and a τ_b boost to render in
+the Poincaré disk — exactly what `projection-design.md` describes and
+the shipping projection mode does. A {p, q} hyperbolic tiling is a
+different beast: the orbit of a triangle reflection group T(2, p, q)
+acting on H², built generator-side by a Coxeter / side-pairing
+construction (Dirichlet domain + side-pairing → group presentation,
+sections above). That generator path is its own `Family` subsystem,
+distinct from the projection.
 
 ## References
 

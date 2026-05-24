@@ -130,30 +130,12 @@ inverse-projection-per-fragment cost.
 | `kotlin/SettingsFragment.kt` | New `Projection` screen registered + navigation row. |
 | `res/xml/preferences.xml`, `res/xml/preferences_projection.xml`, `res/values/arrays.xml` | Projection navigation entry, the screen itself, and the `projection_entries`/`projection_values` arrays. |
 
-## Culling, future work
+## Culling
 
-The disk's boundary is at infinite hyperbolic distance. The renderer
-inherits the existing screen-space scissor + view-zoom-based culling
-(no projection-specific culling yet). At default zoom and a moderate
-patch size the disk fills the screen with finite-area content; running
-into the boundary requires a very large `generation` plus a small
-`hypScale`, at which point a screen-space-diameter cull would kick in.
-That is the same cull the planned *Endless home-screen pan*
-(`../tilings/ROADMAP.md`) needs, so the two work share.
-
-Fill-triangle interior tessellation (currently only edges are
-tessellated) is the obvious next refinement — visible only at very
-large tiles. Not worth a follow-up unless someone reports the
-straight-chord interior look as a problem.
-
-## Out of scope (still)
-
-- **Actual {p, q} hyperbolic tilings.** Needs a Fuchsian /
-  reflection-group generator (`discrete-groups.md`), not a projection.
-- **Decorating a Riemann surface or 3-manifold with a tiling.** Needs
-  the conformal-equivalence stack (`discrete-conformal.md`).
-- **Spherical projection mode.** Same skeleton (radial map E² → S²),
-  different feel, not on `todo.md`.
+Inherited from the Euclidean path: the swapchain scissor and the
+view-matrix zoom. The auto-fit `baseScale = 1/postR` already keeps
+the projected and boosted tiling inside the unit disk in clip space,
+so finite-area content stays on-screen at any `hypScale` / boost.
 
 ## References
 

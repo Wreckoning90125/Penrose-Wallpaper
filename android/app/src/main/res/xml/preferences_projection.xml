@@ -21,7 +21,7 @@
         <SeekBarPreference
             android:key="hyp_scale"
             android:title="World-to-disk scale"
-            android:summary="How aggressively world radius squeezes into the disk. Low → big tiles near the centre, far tiles compress to the boundary; high → the whole tiling is small and central. 50 = default."
+            android:summary="Tile spread inside the disk. Low → the whole tiling collapses toward the centre (at 0 it is a single point). High → near-centre tiles expand and far tiles compress against the disk boundary — the Circle Limit feel. 50 = moderate."
             android:min="5" android:max="100" android:defaultValue="50"
             app:showSeekBarValue="true" />
         <SeekBarPreference

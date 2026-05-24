@@ -24,9 +24,17 @@ untouched and changes only the world-to-clip path:
        clip = view · w                            // affine map disk → clip
 
    The radial homeomorphism `x ↦ x̂ · tanh(|x|·s/2)` is bijective
-   ℝ² → B² and conformal at the origin; `hypScale` controls how
-   aggressively world radius squeezes into the disk (default 0.6 — a
-   moderate-sized tiling patch occupies most of the disk).
+   ℝ² → B² and conformal at the origin. `hypScale` controls the *tile
+   spread* inside the disk: the derivative at r=0 is `s/2`, so larger
+   `s` expands content near the centre and saturates far content
+   against the disk boundary (the *Circle Limit* feel); smaller `s`
+   compresses *everything* toward the disk centre — at `s = 0` the
+   whole tiling collapses to a single point. Default 1.5 (slider 50)
+   gives a moderate spread.
+   The view-matrix `baseScale` is forced to 0.95 in disk mode (rather
+   than the Euclidean `min(2/gw, 2/gh)·0.95`) because the shader's
+   output is always in `|z| < 1` — without this, raising `hypScale`
+   would push content past the screen edges.
 3. **Tile sides** are straight in E² and, under a non-affine map E² → B²,
    map to curves; rendered as a straight clip-space segment from
    projected endpoint to projected endpoint, the tile edge cuts inside

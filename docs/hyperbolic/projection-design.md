@@ -31,10 +31,14 @@ untouched and changes only the world-to-clip path:
    compresses *everything* toward the disk centre — at `s = 0` the
    whole tiling collapses to a single point. Default 1.5 (slider 50)
    gives a moderate spread.
-   The view-matrix `baseScale` is forced to 0.95 in disk mode (rather
+   The view-matrix `baseScale` is forced to 1.0 in disk mode (rather
    than the Euclidean `min(2/gw, 2/gh)·0.95`) because the shader's
-   output is always in `|z| < 1` — without this, raising `hypScale`
-   would push content past the screen edges.
+   output is strictly inside the unit disk — `tanh ∈ (-1, +1)` and
+   `τ_b` preserves B². No margin: the disk boundary is at infinite
+   hyperbolic distance, so content thins to zero density approaching
+   it; there's no sharp edge to clip. Without this override, raising
+   `hypScale` pushes the projected disk past the screen edges (the
+   Euclidean `baseScale` sizes against the pre-projection world).
 3. **Tile sides** are straight in E² and, under a non-affine map E² → B²,
    map to curves; rendered as a straight clip-space segment from
    projected endpoint to projected endpoint, the tile edge cuts inside

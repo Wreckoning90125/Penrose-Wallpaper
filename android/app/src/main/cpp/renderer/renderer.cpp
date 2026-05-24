@@ -577,14 +577,14 @@ void Renderer::drawFrame() {
     // surface-to-screen ratio so the visible region (the middle slice of
     // an oversized side-scroll surface) carries the full tiling.
     //
-    // In hyperbolic projection mode the shader has already mapped every
-    // world point into the unit disk |z| < 1, so we ignore the Euclidean
-    // geomBounds and fit the unit disk (diameter 2) to clip space with
-    // a small margin — otherwise `hypScale` near the top of its range
-    // pushes content past the screen edges (the disk is at unit radius
-    // in the projected space but the view-matrix baseScale was computed
-    // from the pre-projection Euclidean bounds, which can be much
-    // larger). Zoom continues to operate on top of either fit.
+    // In hyperbolic projection mode the shader's output is strictly
+    // inside the unit disk — `tanh` is in (-1, +1) and τ_b preserves
+    // B² — so baseScale = 1 maps the unit disk to clip space [-1, +1]
+    // exactly. No margin: the disk boundary is at infinite hyperbolic
+    // distance, so content thins to zero density approaching it; there
+    // is no sharp edge to clip. Using the Euclidean geomBounds here
+    // would size against the pre-projection world, so raising
+    // `hypScale` would push the projected disk past the screen edges.
     const float surfW = (float)swapchainExtent_.width;
     const float surfH = (float)swapchainExtent_.height;
     const float screenW = (screenW_ > 0) ? (float)screenW_ : surfW;
@@ -592,7 +592,7 @@ void Renderer::drawFrame() {
     const float aspect = screenW / screenH;
     float baseScale;
     if (settings_.projection == Projection::PoincareDisk) {
-        baseScale = 0.95f;
+        baseScale = 1.0f;
     } else {
         const float gw = std::max(geomMaxX_ - geomMinX_, 1e-3f);
         const float gh = std::max(geomMaxY_ - geomMinY_, 1e-3f);

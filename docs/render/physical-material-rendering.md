@@ -26,7 +26,7 @@ architecture and drop the slider farm — see §4.
 | C — sheen / clearcoat / iridescence / anisotropy lobes | **done** | `d2e43ea`, `7933d4d` |
 | D — key + fill + ambient lights | **done** | `ea43bf6` |
 | E — HDR offscreen + bloom + AgX tonemap | todo | — |
-| F — parameterized look: settings, modulation, presets, border merge | in progress | UBO migration, 13 sliders + graph targets, light rig, material presets, shared `shaders/uniforms.glsl` factor, baked preset thumbnails — all done; border merge remains (see `todo.md`) |
+| F — parameterized look: settings, modulation, presets, border merge | in progress | UBO migration, 8 surface + 2 variation + 5 lighting + 3 sheen-tint + 2 film sliders, six material presets with baked tile-rhomb thumbnails, page-scroll graph source, shared `shaders/uniforms.glsl` factor — all done; border merge remains (see `todo.md`) |
 
 Phase A landed: `FillVertex` carries a per-triangle edge-distance basis
 (`inBary`); `fill.frag` lifts a bevel chamfer height field from it, derives the
@@ -62,29 +62,37 @@ then border quads. Shaders are GLSL 460, compiled by `glslc` in the NDK build.
 ```c
 struct FillVertex {
   float x, y; uint32_t colorIdx; float cx, cy; float depth;
-  float bx, by, bz;   // edge-distance barycentric basis (Phase A)
+  float bx, by, bz;    // edge-distance barycentric basis (Phase A)
+  float tileType, tileOrientX, tileOrientY, tileRadius;  // per-tile id (Phase B)
 };
 ```
 
-→ `fill.vert` inputs `loc0..loc4`: `vec2 inPos`, `uint inColorIdx`,
-`vec2 inCenter`, `float inDepth`, `vec3 inBary`.
-→ `fill.vert` outputs `loc0..loc4`: `flat uint vColorIdx`, `flat float vRipple`,
-`float vDepth`, `vec3 vBary`, `vec2 vWaveGrad`.
+→ `fill.vert` inputs `loc0..loc5`: `vec2 inPos`, `uint inColorIdx`,
+`vec2 inCenter`, `vec2 inBulge`, `vec3 inBary`, `vec4 inTileMat`.
+→ `fill.vert` outputs `loc0..loc5`: `flat uint vColorIdx`, `flat float vRipple`,
+`flat vec2 vBulgeGrad`, `vec3 vBary`, `vec2 vWaveGrad`, `flat vec4 vTileMat`.
 
-**Uniform block `PaletteUbo`** (`render_state.h`) — std140, **mirrored verbatim
-in all four shaders** (see Risks):
+**Uniform block `PaletteUbo`** (`render_state.h`) — std140. The shader-side
+declaration lives once in `shaders/uniforms.glsl` and is `#include`d by
+every stage via `GL_GOOGLE_include_directive`; rows added here only land
+in one shader file.
 
 ```c
 struct PaletteUbo {
   float palette[16][4]; float borderColor[4]; float bgColor[4];
-  uint32_t flags[4]; float anim[4];      // anim:    x=time y=rippleAmt z=waveSym w=pageOffset
-  float borderGeom[4]; float effects[4]; // effects: x=brightness y=depth z=rippleSpeed w=rippleKind
+  uint32_t flags[4]; float anim[4];     // anim:    x=time y=rippleAmt z=waveSym w=pageOffset
+  float borderGeom[4]; float effects[4];// effects: x=brightness y=depth z=rippleSpeed w=rippleKind
   float audioBands[2][4]; float audioBeat[4];
+  // Material rows — packed from MaterialParams (see settings.h).
+  float matNormal[4]; float matSurface[4]; float matLobeA[4]; float matLobeB[4];
+  float matIrid[4]; float matSheenCol[4];
+  float keyLight[4]; float keyColor[4];
+  float fillLight[4]; float fillColor[4]; float ambient[4];
 };
 ```
 
 **Vertex attributes** are declared in `renderer_vulkan.cpp::buildPipelines` —
-`VkVertexInputAttributeDescription fillAttrs[5]`. Adding an attribute = grow
+`VkVertexInputAttributeDescription fillAttrs[6]`. Adding an attribute = grow
 that array + bump `vertexAttributeDescriptionCount`.
 
 **Swapchain formats**: preferred is `A2B10G10R10_UNORM_PACK32` on the
@@ -198,27 +206,31 @@ That single decision is what removes ~30 sliders:
 
 **The control surface.** Two layers, both real, neither audio-dependent:
 
-- **Material presets** — a picker beside the palette picker, each a named
-  bundle of `MaterialParams` values (`Matte`, `Ceramic`, `Pearl`,
-  `Brushed metal`, `Lacquer`, `Oil-slick`). A one-tap starting point.
-- **Per-parameter settings** — every `MaterialParams` field is user-settable,
-  grouped in the settings drawer (Surface / Lobes / Lighting). A preset seeds
-  the group; the user tunes from there. The whole look is reachable with no
-  audio running — essential for a static live wallpaper or lock screen.
+- **Material presets** — six built-in bundles (`Matte`, `Ceramic`, `Pearl`,
+  `Brushed metal`, `Lacquer`, `Oil-slick`) on the Material screen,
+  picker rendered as a 2-column grid of baked tile-thumbnails. A one-tap
+  starting point that writes the slider values into `SharedPreferences`.
+- **Per-parameter sliders** — every user-facing `MaterialParams` field is
+  on the Material screen (eight surface + two variation knobs + five
+  lighting + three sheen-tint RGB + two iridescent-film min/max). A
+  preset seeds the group; the user tunes from there. The whole look is
+  reachable with no audio running — essential for a static live
+  wallpaper or lock screen.
 
-**Modulation.** Every parameter is also a target of the existing node graph,
-which evaluates against audio bands, the beat, and a clock; Phase F adds the
-home-screen pan offset as a fourth source. A target's graphed value *adds
-onto* its settings base, so modulation rides on top of whatever the user set:
+**Modulation.** Every per-frame parameter is also a target of the existing
+node graph, which evaluates against audio bands, the beat, a clock, and
+the home-screen page-scroll offset. A target's graphed value *adds onto*
+its settings base, so modulation rides on top of whatever the user set:
 the wallpaper can sit still, breathe to a clock, sway with home-screen
-panning, or pulse to sound. The channel→field pairings in the table above
-stay fixed in the shader; what the user sets and the graph drives is the
-parameters.
+panning, or pulse to sound. The channel→field pairings in the table
+above stay fixed in the shader; what the user sets and the graph drives
+is the parameters.
 
-**Storage.** Per-tile identity reaches the shader as the `inTileMat` vertex
-attribute (Phase B). The material and light parameters are `PaletteUbo` rows
-packed from a `MaterialParams` struct (done, `43be608`). Phase F connects that
-struct to the persisted settings and the node graph.
+**Storage.** Per-tile identity reaches the shader as the `inTileMat`
+vertex attribute (Phase B). The material and light parameters are
+`PaletteUbo` rows packed from a `MaterialParams` struct; the persisted
+`Settings` flow through `jni_bridge::decodeSettings` into that struct
+each frame.
 
 ---
 
@@ -363,16 +375,19 @@ The material is fully in the UBO (`MaterialParams` → `PaletteUbo`).
 
 | File | Phase(s) | Change |
 |------|----------|--------|
-| `render_state.h` | A✓ B✓ F | `FillVertex` `inBary` + `inTileMat` done; `PaletteUbo` material/light rows (F) |
-| `renderer_vulkan.cpp` | A✓ B✓ E F | vertex attributes done; offscreen + bloom + composite pipelines (E); drop border pipeline (F) |
-| `renderer_geometry.cpp` | A✓ B✓ F | edge basis + `inTileMat` done; UBO writes, drop border build (F) |
-| `renderer.cpp` | E F | multi-pass `drawFrame` (E); audio-graph targets (F) |
-| `shaders/fill.vert` | A✓ B✓ | `inBary`, `inBulge`, `vWaveGrad`, `inTileMat` — done |
-| `shaders/fill.frag` | A✓ B✓ C✓ D✓ F | normal, channels, four lobes, key/fill/ambient lights done; border merge (F) |
-| `shaders/uniforms.glsl` | F✓ | shared `Palette` block, `#include`d by every stage via `GL_GOOGLE_include_directive` — replaces the four-way duplication |
-| `shaders/border.*` | F | removed |
+| `render_state.h` | A B F | `FillVertex` `inBary` + `inTileMat`; `PaletteUbo` material/light rows + `MaterialParams` + `applyLightControls` |
+| `renderer_vulkan.cpp` | A B E F | vertex attributes; offscreen + bloom + composite pipelines (E); drop border pipeline (F border-merge) |
+| `renderer_geometry.cpp` | A B F | edge basis, `inTileMat`, UBO cold-path writes |
+| `renderer.cpp` | E F | multi-pass `drawFrame` (E); per-frame UBO patch + audio-graph targets (F) |
+| `settings.h`, `jni_bridge.cpp` | F | `Settings` struct + 36-float decode for the user-facing material + lighting + sheen-tint + iridescent-film + variation knobs |
+| `kotlin/Settings.kt` | F | persisted keys + `safeInt`/`toNative` for the same fields |
+| `kotlin/SettingsFragment.kt`, `res/xml/preferences_material.xml` | F | Material screen sliders + 2-column preset picker grid |
+| `kotlin/preset/MaterialPreset.kt`, `tools/bake_preset_thumbnails.py`, `res/drawable/preset_*.png` | F | preset bundles (kept in sync with the bake tool) + baked tile-rhomb thumbnails |
+| `shaders/fill.vert` | A B | `inBary`, `inBulge`, `vWaveGrad`, `inTileMat` |
+| `shaders/fill.frag` | A B C D F | normal, channels, four lobes, key/fill/ambient lights; border merge remains (F) |
+| `shaders/uniforms.glsl` | F | shared `Palette` block, `#include`d by every stage via `GL_GOOGLE_include_directive` — replaces the four-way duplication |
+| `shaders/border.*` | F | removed when border merge lands |
 | `shaders/bloom_down/up.frag`, `composite.frag` (new) | E | post chain + AgX tonemap |
-| node-graph params + Android UI | F | Material preset picker; curated audio-modulation targets |
 
 ---
 
@@ -389,9 +404,6 @@ The material is fully in the UBO (`MaterialParams` → `PaletteUbo`).
   If a low-end tier is ever needed, gate the heavier lobes behind a preset flag.
 - `tools/verify_tilings.cpp` is unaffected — tiling topology never changes; the
   new attributes are pure shading data.
-- Material and light params live as `fill.frag` `const`s. Phase F migrates them
-  to the UBO; until then, editing the look means editing the shader and they
-  cannot be driven by audio or sliders.
 
 ---
 

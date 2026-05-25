@@ -42,6 +42,17 @@ constexpr float kStatRelease = 0.01f;
 constexpr float kPllGain   = 0.05f;
 constexpr float kBpmSmooth = 0.95f;
 
+// Per-band RollingStat constants. Fast attack so the rolling max
+// captures a new peak immediately, slow release so the range stays
+// stable across the verse → chorus dynamic. Range-decay is the
+// auto-gain-recovery rate: at ~60 fps it gives a ~3s half-life for
+// the min/max envelope to walk back toward avg during quiet passages
+// (matches the 0.003 in lib.rs:196).
+constexpr float kBandStatAttack     = 0.20f;
+constexpr float kBandStatRelease    = 0.01f;
+constexpr float kBandStatRangeDecay = 0.003f;
+constexpr float kBandStatFloor      = 1e-6f;
+
 // Autocorrelation is heavy (O(N²)) so we only refresh every 8 onset
 // pushes. ~135 ms at 60 fps — fast enough to re-lock on a tempo change
 // within a beat or two, cheap enough to stay invisible at vsync.
@@ -184,6 +195,7 @@ void AudioAnalyzer::resetDspStateUnlocked() {
     std::memset(onsetBuf_,         0, sizeof(onsetBuf_));
     std::memset(acf_,              0, sizeof(acf_));
     std::memset(bandsSmoothed_,    0, sizeof(bandsSmoothed_));
+    for (int b = 0; b < kBands; ++b) bandStats_[b] = BandStat{};
     onsetIdx_     = 0;
     bpm_          = 120.0f;
     rawBpm_       = 120.0f;
@@ -373,11 +385,38 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
                              ? bandSumSq[b] / bandCount[b]
                              : 0.0f;
         const float rms    = std::sqrt(meanSq);
-        // Mild log compression so quiet content still reads as visible
-        // signal — same shape as the previous analyzer so existing
-        // graph configurations keep their feel.
-        float v = std::log1p(rms * 9.0f) * 0.434f;
-        bandsRaw[b] = std::min(1.5f, v);
+        // Mild log compression takes the dynamic range from the wide
+        // raw RMS into a comfortable per-band envelope.
+        const float compressed = std::log1p(rms * 9.0f) * 0.434f;
+
+        // Per-band auto-normalisation. Without this, intrinsically
+        // quiet bands (brilliance / air read RMS ≈ 0.01 in typical
+        // content) wire to graph targets as 0.04..0.18 of the
+        // global range, which is sub-visible against any non-zero
+        // baseline. With this, each band maps to its OWN 0..1
+        // envelope — wiring brilliance to a target now produces an
+        // effect comparable to wiring bass.
+        //
+        // Algorithm (matches lib.rs::RollingStat): asymmetric EMA of
+        // the average, instant expansion of min/max on new extremes,
+        // slow decay of min/max toward the average during quiet
+        // passages so the gain recovers naturally without ever
+        // clipping a louder section.
+        BandStat& s = bandStats_[b];
+        const float delta = compressed - s.avgVal;
+        const float alpha = delta > 0.0f ? kBandStatAttack : kBandStatRelease;
+        s.avgVal += delta * alpha;
+        if (compressed > s.maxVal) s.maxVal = compressed;
+        if (compressed < s.minVal) s.minVal = compressed;
+        s.maxVal -= (s.maxVal - s.avgVal) * kBandStatRangeDecay;
+        s.minVal += (s.avgVal - s.minVal) * kBandStatRangeDecay;
+        if (s.minVal < kBandStatFloor) s.minVal = kBandStatFloor;
+        if (s.maxVal < s.minVal + kBandStatFloor)
+            s.maxVal = s.minVal + kBandStatFloor;
+
+        const float range = s.maxVal - s.minVal;
+        const float norm  = (compressed - s.minVal) / range;
+        bandsRaw[b] = std::clamp(norm, 0.0f, 1.0f);
     }
 
     // -------- Adaptive normalisation of onset & CWT --------

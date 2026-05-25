@@ -155,6 +155,21 @@ private:
     float onsetAvg_ = 0.0f, onsetVar_ = 0.0f;
     float cwtAvg_   = 0.0f, cwtVar_   = 0.0f;
 
+    // Per-band auto-normalisation state. Each band tracks its own
+    // rolling min / max / avg with asymmetric attack/release, so a
+    // band that's intrinsically quiet (brilliance: 3500-8000 Hz,
+    // sparse in most music) still maps to its own 0..1 envelope
+    // rather than reading as 0..0.1 of the global scale.
+    // Matches RollingStat::update + normalize in the Prismic-Holonomy
+    // reference (lib.rs:165-225). Initial range chosen so the first
+    // few frames of audio don't all clamp to 0.
+    struct BandStat {
+        float minVal = 1e-6f;
+        float maxVal = 0.01f;
+        float avgVal = 0.0f;
+    };
+    BandStat bandStats_[kBands] = {};
+
     // Band range = [loBin, hiBin) into the magnitude spectrum.
     int bandLo_[kBands] = {};
     int bandHi_[kBands] = {};

@@ -12,6 +12,7 @@ layout(push_constant) uniform PC {
 } pc;
 
 #include "uniforms.glsl"
+#include "hyperbolic.glsl"
 
 const float TWO_PI = 6.2831853072;
 
@@ -34,60 +35,6 @@ vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float symF) {
         grad += -sin(dot(p, e) * 6.0 + omegaT + pagePhase) * (6.0 * e);
     }
     return grad / float(sym);
-}
-
-// Analytical disk-space tangent of the radial map z = p · tanh(|p|·s/2)/|p|
-// applied to world tangent `tangW` at world point `p`. Decomposes tangW
-// into the radial and tangential components in polar basis at p; the
-// radial component scales by f'(r) = (s/2)·sech²(r·s/2), the tangential
-// by f(r)/r = tanh(r·s/2)/r. Replaces a finite-difference step that
-// loses all precision when the jacobian shrinks below ~1e-7 (i.e. just
-// past r·s/2 ≈ 4, which a default-zoom gen-6 patch hits routinely).
-vec2 projTangentRadial(vec2 p, vec2 tangW, float s) {
-    float r = length(p);
-    if (r < 1e-6) return tangW * (s * 0.5);
-    vec2 er = p / r;
-    float vr = dot(tangW, er);
-    vec2 vt = tangW - vr * er;
-    float rs2 = r * s * 0.5;
-    float ch = cosh(rs2);
-    float fpR = (s * 0.5) / (ch * ch);
-    float ftOverR = tanh(rs2) / r;
-    return fpR * vr * er + ftOverR * vt;
-}
-
-// τ_b applied to a tangent vector at z (the radial-map output). τ_b is
-// conformal: dτ_b/dz = (1-|b|²) / (1+b̄z)². The magnitude doesn't matter
-// for the unit normal but the rotation does. arg(1/(1+b̄z)²) = -2·arg(q)
-// with q = 1+b̄z; rotating tangD by -2·arg(q) gives the post-τ_b tangent
-// direction. In real-vector form, q = (1 + b·z, -b×z) and the rotation
-// factor (as a unit complex number) is q̄²/|q|² = (qx²-qy², -2·qx·qy)/|q|²,
-// which we multiply against tangD via standard complex multiplication.
-vec2 boostTangent(vec2 z, vec2 b, vec2 tangD) {
-    float qx = 1.0 + b.x * z.x + b.y * z.y;
-    float qy = b.x * z.y - b.y * z.x;
-    float qm = qx * qx + qy * qy;
-    if (qm < 1e-12) return tangD;
-    // c = q̄² / |q|² as a unit complex direction multiplier.
-    float cRe = (qx * qx - qy * qy) / qm;
-    float cIm = -2.0 * qx * qy / qm;
-    return vec2(cRe * tangD.x - cIm * tangD.y,
-                cRe * tangD.y + cIm * tangD.x);
-}
-
-vec2 projectHyp(vec2 world) {
-    float r = length(world);
-    vec2 dir = (r > 1e-6) ? (world / r) : vec2(0.0);
-    float d = tanh(r * pc.hyp.z * 0.5);
-    vec2 z = dir * d;
-    vec2 b  = pc.hyp.xy;
-    float bb = dot(b, b);
-    float zz = dot(z, z);
-    float zb = dot(z, b);
-    float denom = bb * zz + 2.0 * zb + 1.0;
-    if (abs(denom) < 1e-6) denom = 1e-6;
-    vec2 num = (1.0 - bb) * z + (zz + 2.0 * zb + 1.0) * b;
-    return num / denom;
 }
 
 void main() {
@@ -119,7 +66,7 @@ void main() {
         // any boost, so edge polyline subdivision reads as a true
         // arc-approximating ribbon instead of vanishing or skewing.
         vec2 zRadial = (length(base) > 1e-6) ? base / length(base) * tanh(length(base) * pc.hyp.z * 0.5) : vec2(0.0);
-        vec2 z       = projectHyp(base);
+        vec2 z       = projectHyp(base, pc.hyp.xy, pc.hyp.z);
         vec2 tangW   = vec2(inNormal.y, -inNormal.x);
         vec2 tangR   = projTangentRadial(base, tangW, pc.hyp.z);
         vec2 tangD   = boostTangent(zRadial, pc.hyp.xy, tangR);

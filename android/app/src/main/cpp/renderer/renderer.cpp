@@ -577,34 +577,22 @@ void Renderer::drawFrame() {
     // surface-to-screen ratio so the visible region (the middle slice of
     // an oversized side-scroll surface) carries the full tiling.
     //
-    // Hyperbolic projection mode: auto-fit the *projected* tiling to the
-    // screen so the slider controls compression, not visibility. The
-    // shader projects the world point at distance r_max to disk radius
-    // tanh(r_max · hypScale / 2); applying the τ_b boost can push that
-    // further out — the maximum |τ_b(z)| over |z| ≤ projR is
-    // (projR + |b|) / (1 + projR·|b|) (Möbius-addition formula, attained
-    // when z is parallel to b). baseScale = 1/postBoost maps that to
-    // clip ±1, so the projected tiling stays exactly on-screen
-    // regardless of how the boost slider or graph drives b. r_max is
-    // the true farthest |vertex| over the actual emitted geometry
-    // (geomRmax_, set in buildGeometry), not the bbox corner — the
-    // latter over-estimates by up to √2 for a centered tiling.
-    // Hyperbolic push-constant values, computed once and shared between
-    // the view-fit step below and the PushBlock at the end of the frame.
-    // Boost b is clamped to |b| ≤ 0.92 to keep the τ_b denominator
-    // bounded; scale ≥ 1e-3 so a runaway graph can't collapse the world
-    // via tanh(0).
+    // Hyperbolic push-constant values are computed once here and shared
+    // between the view-fit step and the PushBlock below. Boost b is
+    // clamped to |b| ≤ 0.92 to keep the τ_b denominator bounded; scale
+    // ≥ 1e-3 so a runaway graph can't collapse the world via tanh(0).
     const float hypScaleEff = std::max(fxHypScale_, 1e-3f);
     float hypBoostXEff = fxHypBoostX_;
     float hypBoostYEff = fxHypBoostY_;
+    float bMag = std::sqrt(hypBoostXEff * hypBoostXEff +
+                           hypBoostYEff * hypBoostYEff);
     {
-        const float bm = std::sqrt(hypBoostXEff * hypBoostXEff +
-                                   hypBoostYEff * hypBoostYEff);
         constexpr float bmClamp = 0.92f;
-        if (bm > bmClamp) {
-            const float bsc = bmClamp / bm;
+        if (bMag > bmClamp) {
+            const float bsc = bmClamp / bMag;
             hypBoostXEff *= bsc;
             hypBoostYEff *= bsc;
+            bMag = bmClamp;
         }
     }
 
@@ -615,9 +603,17 @@ void Renderer::drawFrame() {
     const float aspect = screenW / screenH;
     float baseScale;
     if (settings_.projection == Projection::PoincareDisk) {
+        // Auto-fit the projected and boosted tiling to the screen so
+        // the slider controls compression, not visibility. The shader
+        // projects the world point at distance r_max to disk radius
+        // tanh(r_max · hypScale / 2); applying τ_b can push that
+        // further out — max |τ_b(z)| over |z| ≤ projR is the Möbius
+        // sum (projR + |b|) / (1 + projR·|b|), attained when z is
+        // parallel to b. baseScale = 1/postR maps that to clip ±1, so
+        // the projected tiling stays on-screen at any boost. r_max is
+        // the true farthest |vertex| over the actual emitted geometry
+        // (geomRmax_, set in buildGeometry), not the bbox corner.
         const float projR = std::tanh(geomRmax_ * hypScaleEff * 0.5f);
-        const float bMag  = std::sqrt(hypBoostXEff * hypBoostXEff +
-                                      hypBoostYEff * hypBoostYEff);
         const float postR = (projR + bMag) / (1.0f + projR * bMag);
         baseScale = 1.0f / std::max(postR, 1e-3f);
     } else {

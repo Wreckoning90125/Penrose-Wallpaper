@@ -54,11 +54,20 @@ struct FillVertex {
 };
 
 // Vertex-shader-expanded border quad. Each unique edge emits four
-// vertices that the shader pushes by ± borderHalfWidth along inNormal.
+// vertices; the shader extrudes each by halfWidth × miterScale along
+// the per-corner mitered direction so adjacent edges meeting at a
+// non-90° vertex join flush — no overlapping perpendicular-butt ends,
+// no outside-corner gap. The raw edge tangent is still carried
+// (separately from the mitered direction) so the Poincaré-disk path
+// can recover the per-segment world tangent for the τ_b projection
+// when the miter direction is degenerate. The miter direction is
+// already signed for THIS vertex's world side, so no per-vertex side
+// flag is needed.
 struct BorderVertex {
     float x, y;
-    float side;        // -1 or +1 — which side of the edge midline
-    float nx, ny;      // unit edge normal
+    float tx, ty;       // unit world-space edge tangent (this segment)
+    float mx, my;       // mitered corner direction (already signed for the world side)
+    float miterScale;   // halfWidth multiplier — bridges the angular gap
 };
 
 // Vertex push constants.

@@ -1,9 +1,10 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
 
-layout(location = 0) in vec2 inPos;
-layout(location = 1) in float inSide;
-layout(location = 2) in vec2 inNormal;
+layout(location = 0) in vec2  inPos;
+layout(location = 1) in vec2  inTangent;     // unit world tangent of THIS segment
+layout(location = 2) in vec2  inMiter;       // signed corner extrusion direction (world)
+layout(location = 3) in float inMiterScale;  // halfWidth multiplier at this corner
 
 layout(push_constant) uniform PC {
     vec4 view0;
@@ -49,33 +50,50 @@ void main() {
         base += waveGradient(base, omegaT, pagePhase, waveSym) * amp * 0.006;
     }
 
+    float scaledHalf = ubo.borderGeom.x * inMiterScale;
+
     vec2 finalPos;
     if (pc.hyp.w > 0.5) {
-        // Disk-space border extrusion. The hyperbolic projection's
-        // Jacobian is ~sech²(r·s/2): tiny far from the origin (~5e-4
-        // for a typical r=5, s=1.5), so world-space extrusion produces
-        // sub-pixel borders exactly where the arc curvature matters
-        // most. Project the base point, compute the projected tangent
-        // analytically through both the radial map (projTangentRadial)
-        // and the τ_b boost (boostTangent — conformal rotation by
-        // -2·arg(1+b̄z)), perpendicular = disk normal, and extrude in
-        // disk space at width = world halfwidth × hypScale/2 (the
-        // central scale-factor s/2 that converts world units to disk
-        // units near the origin). Result: borders are visibly constant-
-        // thickness across the entire disk and orient correctly under
-        // any boost, so edge polyline subdivision reads as a true
-        // arc-approximating ribbon instead of vanishing or skewing.
+        // Disk-space border extrusion. Per-corner mitered direction in
+        // world space → push through the same projection Jacobian as
+        // the edge tangent: radial-derivative (projTangentRadial) then
+        // τ_b conformal rotation (boostTangent — −2·arg(1+b̄z)). The
+        // projection is conformal, so the world-space bisector angle
+        // is preserved exactly under the map, i.e. the disk-space
+        // miter direction = normalise(J(P) · inMiter). The disk-space
+        // width target is `halfWidth × hypScale/2` near the origin
+        // (where the radial Jacobian f'(0) = s/2) which keeps borders
+        // visibly constant-thickness even where the Jacobian falls to
+        // ~sech²(r·s/2) ≪ 1 near the boundary. miterScale carries the
+        // 1/|cos(θ/2)| length compensation so the joint closes flush
+        // in disk space too — angle-preserving projection means the
+        // same compensation works in both spaces.
         vec2 zRadial = (length(base) > 1e-6) ? base / length(base) * tanh(length(base) * pc.hyp.z * 0.5) : vec2(0.0);
         vec2 z       = projectHyp(base, pc.hyp.xy, pc.hyp.z);
-        vec2 tangW   = vec2(inNormal.y, -inNormal.x);
-        vec2 tangR   = projTangentRadial(base, tangW, pc.hyp.z);
-        vec2 tangD   = boostTangent(zRadial, pc.hyp.xy, tangR);
-        float tLen   = length(tangD);
-        vec2 nDisk   = (tLen > 1e-9) ? vec2(-tangD.y, tangD.x) / tLen : inNormal;
-        float halfWidth = ubo.borderGeom.x * pc.hyp.z * 0.5;
-        finalPos = z + nDisk * (inSide * halfWidth);
+        vec2 mDiskR  = projTangentRadial(base, inMiter, pc.hyp.z);
+        vec2 mDisk   = boostTangent(zRadial, pc.hyp.xy, mDiskR);
+        float mLen   = length(mDisk);
+        vec2 mDir;
+        if (mLen > 1e-9) {
+            mDir = mDisk / mLen;
+        } else {
+            // Degenerate projection at the disk origin with a radial
+            // miter — fall back to the unprojected world miter; it's
+            // already on the correct world side. Visually identical
+            // since at the origin the Jacobian is the identity scaled
+            // by s/2 and orientation is preserved.
+            mDir = inMiter;
+        }
+        finalPos = z + mDir * (scaledHalf * pc.hyp.z * 0.5);
     } else {
-        finalPos = base + inNormal * (inSide * ubo.borderGeom.x);
+        // Euclidean: extrude along the per-corner mitered direction.
+        // (mx, my) is already signed for this vertex's world side, so
+        // no inSide multiplier is needed. miterScale = 1 / |cos(θ/2)|
+        // for interior angle θ — extends the outside corner just
+        // enough to close the gap and trims the inside corner cleanly.
+        // The CPU pre-clamps miterScale to kMiterLimit so a near-
+        // acute joint can't fire a spike.
+        finalPos = base + inMiter * scaledHalf;
     }
 
     float x = pc.view0.x * finalPos.x + pc.view0.y * finalPos.y + pc.view0.z;

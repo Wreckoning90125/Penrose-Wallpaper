@@ -14,6 +14,7 @@
 #include "tiling/penrose.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
@@ -374,24 +375,213 @@ bool Renderer::buildGeometry() {
                 it->second.secondSet = true;
             }
         }
-        borders.reserve(edgeMap.size() * 4);
-        borderIndices.reserve(edgeMap.size() * 6);
+        // -------- Miter joinery pre-pass ---------------------------------
+        // The naive emit (two endpoints sharing the edge's perpendicular
+        // normal) gives perpendicular butt ends that overlap on one side
+        // and gap on the other wherever a vertex's interior angle isn't
+        // 90° — visible cog-pattern on every Penrose star vertex.
+        //
+        // The fix is the same carpentry trick the Canonical-Surface rib
+        // renderer uses: at each shared endpoint find the angularly-
+        // adjacent edges, compute the bisector of their per-edge normals,
+        // extrude along the bisector at length halfWidth / |cos(θ/2)| so
+        // adjacent ribbons meet flush on both sides. Clamp the miter
+        // length at kMiterLimit × halfWidth so a near-degenerate acute
+        // joint can't fire a spike off into space.
+        //
+        // Planar-graph subtlety: a Penrose vertex may have 2..7 edges
+        // meeting at it (sun, star, ace, ...). We sort the incident edges
+        // by tangent angle around the vertex and, for each edge end,
+        // miter the +1 side with the CCW-adjacent neighbour and the -1
+        // side with the CW-adjacent neighbour. Two collinear sub-segments
+        // of the same parent edge (the disk-mode subdivision case) give
+        // a near-180° joint where the bisector matches the edge normal
+        // and miterScale ≈ 1 — i.e. no change vs. butt, which is correct.
+        //
+        // The same midpoint hash used for edge dedup is too coarse here
+        // (it keys on midpoint, not endpoint); we build a separate
+        // endpoint hash over the kept edges.
+        std::vector<const EdgeRec*> keptEdges;
+        keptEdges.reserve(edgeMap.size());
         for (const auto& kv : edgeMap) {
             const EdgeRec& r = kv.second;
             if (r.secondSet && r.t1 == r.t2 && hideSeam(settings_.family, r.k1, r.k2)) continue;
             const float dx = r.p2x - r.p1x;
             const float dy = r.p2y - r.p1y;
-            const float len = std::sqrt(dx * dx + dy * dy);
-            if (len < 1e-6f) continue;
-            const float inv = 1.0f / len;
-            // Edge tangent (dx,dy)/len; outward normal = perp = (-dy, dx)/len.
-            const float nx = -dy * inv;
-            const float ny =  dx * inv;
+            if ((dx * dx + dy * dy) < 1e-12f) continue;
+            keptEdges.push_back(&r);
+        }
+        // Per-edge cached tangent/normal — computed once, reused twice
+        // (once per endpoint when computing each end's miter).
+        struct EdgeGeom { float tx, ty, nx, ny; };
+        std::vector<EdgeGeom> egeom(keptEdges.size());
+        for (size_t i = 0; i < keptEdges.size(); ++i) {
+            const EdgeRec& r = *keptEdges[i];
+            const float dx = r.p2x - r.p1x;
+            const float dy = r.p2y - r.p1y;
+            const float inv = 1.0f / std::sqrt(dx * dx + dy * dy);
+            egeom[i].tx =  dx * inv;
+            egeom[i].ty =  dy * inv;
+            // +1-side normal is the 90°-CCW rotation of the tangent.
+            egeom[i].nx = -dy * inv;
+            egeom[i].ny =  dx * inv;
+        }
+        // Endpoint hash. For each shared endpoint we collect (edge_idx,
+        // end (0=p1, 1=p2), outward-tangent-angle) entries; we'll sort
+        // by angle to find each entry's CCW + CW neighbours.
+        struct EndRef {
+            uint32_t edgeIdx;
+            uint8_t  end;     // 0 = p1, 1 = p2
+            float    angle;   // atan2 of outward tangent at this endpoint
+        };
+        std::unordered_map<EdgeKey, std::vector<EndRef>, EdgeKeyHash> endHash;
+        endHash.reserve(keptEdges.size());
+        auto endpointKey = [&](float x, float y) {
+            return EdgeKey{ static_cast<int32_t>(std::lround(x * kKeyScale)),
+                            static_cast<int32_t>(std::lround(y * kKeyScale)) };
+        };
+        for (uint32_t i = 0; i < keptEdges.size(); ++i) {
+            const EdgeRec& r = *keptEdges[i];
+            const EdgeGeom& g = egeom[i];
+            // Outward tangent at p1 points TOWARD p2 → (+tx,+ty).
+            // Outward tangent at p2 points TOWARD p1 → (-tx,-ty).
+            endHash[endpointKey(r.p1x, r.p1y)].push_back(
+                EndRef{ i, 0, std::atan2( g.ty,  g.tx) });
+            endHash[endpointKey(r.p2x, r.p2y)].push_back(
+                EndRef{ i, 1, std::atan2(-g.ty, -g.tx) });
+        }
+        // Sort each endpoint's incident list by angle once so the
+        // per-corner CCW / CW neighbour lookup is O(log n) (and n ≤ 7
+        // in practice, so this is functionally O(1)).
+        for (auto& kv : endHash) {
+            auto& v = kv.second;
+            std::sort(v.begin(), v.end(),
+                      [](const EndRef& a, const EndRef& b) { return a.angle < b.angle; });
+        }
+        // Miter computation for one corner. `tSelf` is the OUTWARD
+        // tangent of THIS edge at this endpoint (away from the vertex);
+        // `tNbr` is the OUTWARD tangent of the angular neighbour at the
+        // same endpoint. `sideSign` picks which angular wedge to bisect.
+        // Returns the EXTRUSION DIRECTION (already signed for the
+        // chosen wedge) and the half-width multiplier.
+        constexpr float kMiterLimit = 4.0f;
+        auto computeMiter = [](float tSelfX, float tSelfY,
+                               float tNbrX,  float tNbrY,
+                               float sideSign) -> std::array<float, 3> {
+            // Polyline-style bisector: treat the neighbour as feeding
+            // INTO the vertex (incoming direction = -tNbr) and our edge
+            // as leaving the vertex (outgoing direction = tSelf). The
+            // perpendiculars (90°-CCW = "polyline-left") sum to the
+            // bisector; by symmetry both edges sharing this corner
+            // compute the same point and join flush.
+            const float n0x =  tNbrY;     // perp(-tNbr) = ( tNbr.y, -tNbr.x)
+            const float n0y = -tNbrX;
+            const float n1x = -tSelfY;    // perp( tSelf) = (-tSelf.y, tSelf.x)
+            const float n1y =  tSelfX;
+            // sideSign flips the bisector into the wedge we want.
+            const float n0Sx = n0x * sideSign;
+            const float n0Sy = n0y * sideSign;
+            const float n1Sx = n1x * sideSign;
+            const float n1Sy = n1y * sideSign;
+            float mx = n0Sx + n1Sx;
+            float my = n0Sy + n1Sy;
+            const float mLen = std::sqrt(mx * mx + my * my);
+            if (mLen < 1e-4f) {
+                // Near-anti-parallel pair (~180° interior angle): the
+                // bisector cancels. Use the local perpendicular at scale 1.
+                return { n1Sx, n1Sy, 1.0f };
+            }
+            mx /= mLen;
+            my /= mLen;
+            const float dot = std::fabs(mx * n1Sx + my * n1Sy);
+            float scale = (dot > 1e-3f) ? (1.0f / dot) : kMiterLimit;
+            if (scale > kMiterLimit) scale = kMiterLimit;
+            if (scale < 1.0f)        scale = 1.0f;
+            return { mx, my, scale };
+        };
+        // Look up the angular neighbour of (edgeIdx, end) on the given
+        // angular side. Returns nullptr when the vertex has only this
+        // one edge (boundary case → butt end, no miter).
+        auto findNeighbour = [&endHash](EdgeKey key, uint32_t edgeIdx,
+                                        uint8_t end, int angularOffset)
+                              -> const EndRef* {
+            auto it = endHash.find(key);
+            if (it == endHash.end()) return nullptr;
+            const auto& list = it->second;
+            if (list.size() < 2) return nullptr;
+            int selfIdx = -1;
+            for (int j = 0; j < static_cast<int>(list.size()); ++j) {
+                if (list[j].edgeIdx == edgeIdx && list[j].end == end) {
+                    selfIdx = j;
+                    break;
+                }
+            }
+            if (selfIdx < 0) return nullptr;
+            const int n = static_cast<int>(list.size());
+            const int nbr = ((selfIdx + angularOffset) % n + n) % n;
+            return &list[nbr];
+        };
+        // -------- Emit border quads with per-corner miter ----------------
+        // We compute a "world side" miter at each of the 4 corners of an
+        // edge quad. The canonical world-+1 direction = perp(canonical
+        // tangent T_us). At p1 the outward tangent IS T_us, so world-+1
+        // matches the local-CCW direction (angularOffset = +1). At p2
+        // the outward tangent is -T_us, which inverts the world-side ↔
+        // local-side mapping (world-+1 is now on the local-CW side, so
+        // we step angularOffset = -1 to find the right neighbour). The
+        // shader receives the extrusion direction already on the
+        // correct world side, so it doesn't need to know about local
+        // sign conventions any more.
+        borders.reserve(keptEdges.size() * 4);
+        borderIndices.reserve(keptEdges.size() * 6);
+        for (uint32_t i = 0; i < keptEdges.size(); ++i) {
+            const EdgeRec& r = *keptEdges[i];
+            const EdgeGeom& g = egeom[i];
+            const EdgeKey k1 = endpointKey(r.p1x, r.p1y);
+            const EdgeKey k2 = endpointKey(r.p2x, r.p2y);
+            // Compute the world-side miter at this corner.
+            auto worldCornerMiter = [&](const EdgeKey& vkey, uint8_t end,
+                                        float worldSide) -> std::array<float, 3> {
+                // Outward tangent at this endpoint.
+                const float outX = (end == 0) ?  g.tx : -g.tx;
+                const float outY = (end == 0) ?  g.ty : -g.ty;
+                // World side → local side. At p1 the outward IS the
+                // canonical tangent, so world/local agree. At p2 the
+                // outward is reversed, so world-+1 = local--1 and vice
+                // versa.
+                const float localSide = (end == 0) ? worldSide : -worldSide;
+                const int   angOff    = (localSide > 0.0f) ? +1 : -1;
+                const EndRef* nbr = findNeighbour(vkey, i, end, angOff);
+                if (!nbr) {
+                    // Boundary / single-incident-edge — extrude along
+                    // the canonical world normal, scale 1 (butt).
+                    return { -g.ty * worldSide,  g.tx * worldSide, 1.0f };
+                }
+                const EdgeGeom& gn = egeom[nbr->edgeIdx];
+                float tNbrX, tNbrY;
+                if (nbr->end == 0) { tNbrX =  gn.tx; tNbrY =  gn.ty; }
+                else               { tNbrX = -gn.tx; tNbrY = -gn.ty; }
+                return computeMiter(outX, outY, tNbrX, tNbrY, localSide);
+            };
+            // World -1 side / world +1 side at each endpoint.
+            const auto p1n = worldCornerMiter(k1, 0, -1.0f);
+            const auto p1m = worldCornerMiter(k1, 0,  1.0f);
+            const auto p2n = worldCornerMiter(k2, 1, -1.0f);
+            const auto p2m = worldCornerMiter(k2, 1,  1.0f);
             const uint32_t base = static_cast<uint32_t>(borders.size());
-            borders.push_back({ r.p1x, r.p1y, -1.0f, nx, ny });
-            borders.push_back({ r.p1x, r.p1y,  1.0f, nx, ny });
-            borders.push_back({ r.p2x, r.p2y, -1.0f, nx, ny });
-            borders.push_back({ r.p2x, r.p2y,  1.0f, nx, ny });
+            // Each vertex carries its own EXTRUSION DIRECTION in
+            // (mx, my) — already signed for the world side it belongs
+            // to — and a tangent (tx, ty) for the disk-mode Jacobian
+            // projection. The shader extrudes by halfWidth · miterScale
+            // along (mx, my) directly; no per-vertex side flag.
+            borders.push_back({ r.p1x, r.p1y, g.tx, g.ty,
+                                p1n[0], p1n[1], p1n[2] });
+            borders.push_back({ r.p1x, r.p1y, g.tx, g.ty,
+                                p1m[0], p1m[1], p1m[2] });
+            borders.push_back({ r.p2x, r.p2y, g.tx, g.ty,
+                                p2n[0], p2n[1], p2n[2] });
+            borders.push_back({ r.p2x, r.p2y, g.tx, g.ty,
+                                p2m[0], p2m[1], p2m[2] });
             borderIndices.push_back(base + 0);
             borderIndices.push_back(base + 1);
             borderIndices.push_back(base + 2);

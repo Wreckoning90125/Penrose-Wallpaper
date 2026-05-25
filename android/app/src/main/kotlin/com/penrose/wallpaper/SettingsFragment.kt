@@ -5,8 +5,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.View
@@ -18,11 +21,17 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.TooltipCompat
+import androidx.core.content.ContextCompat
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.SeekBarPreference
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.penrose.wallpaper.audio.AudioControlsPreference
 import com.penrose.wallpaper.audio.AudioPlaybackService
 import com.penrose.wallpaper.preset.MaterialPreset
 import com.penrose.wallpaper.preset.MaterialPresets
@@ -64,6 +73,13 @@ class SettingsFragment : PreferenceFragmentCompat(),
             } catch (_: SecurityException) { }
             AudioPlaybackService.start(requireContext().applicationContext, uri.toString())
             updateAudioSummary()
+            // Service may have just come up. If we were on the Audio
+            // screen with no live controller (initial connect failed
+            // because the service wasn't running), connect now so the
+            // controls row populates from the freshly-started session.
+            if (currentScreen == ScreenKey.Audio && mediaController == null) {
+                connectMediaController()
+            }
         }
     }
 
@@ -73,6 +89,14 @@ class SettingsFragment : PreferenceFragmentCompat(),
     }
 
     private fun loadScreen(screen: ScreenKey) {
+        // Release the audio MediaController if we're leaving the Audio
+        // screen — its AudioControlsPreference instance is about to be
+        // destroyed by setPreferencesFromResource, and we don't want
+        // the controller's listener + position poll firing against a
+        // stale prefkey lookup.
+        if (currentScreen == ScreenKey.Audio && screen != ScreenKey.Audio) {
+            releaseMediaController()
+        }
         currentScreen = screen
         setPreferencesFromResource(screen.resId, null)
         when (screen) {
@@ -92,6 +116,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 bindBack()
                 bindAudioRowActions()
                 updateAudioSummary()
+                connectMediaController()
             }
             ScreenKey.Material -> {
                 bindBack()
@@ -109,13 +134,21 @@ class SettingsFragment : PreferenceFragmentCompat(),
         super.onResume()
         preferenceManager.sharedPreferences
             ?.registerOnSharedPreferenceChangeListener(this)
-        if (currentScreen == ScreenKey.Audio) updateAudioSummary()
+        if (currentScreen == ScreenKey.Audio) {
+            updateAudioSummary()
+            connectMediaController()
+        }
     }
 
     override fun onPause() {
         super.onPause()
         preferenceManager.sharedPreferences
             ?.unregisterOnSharedPreferenceChangeListener(this)
+        // Release the audio MediaController so the binder doesn't leak
+        // while the fragment is off-screen. The audio service itself
+        // keeps playing; only the in-app UI loses its tap into the
+        // session until the fragment resumes.
+        releaseMediaController()
     }
 
     override fun onSharedPreferenceChanged(sp: SharedPreferences?, key: String?) {
@@ -179,8 +212,121 @@ class SettingsFragment : PreferenceFragmentCompat(),
         findPreference<Preference>("audio_stop")?.setOnPreferenceClickListener {
             AudioPlaybackService.stop(requireContext().applicationContext)
             updateAudioSummary()
+            // The service tears down — our controller will see
+            // playbackState → STATE_IDLE next tick, but we also clear
+            // the visible state immediately so the row doesn't sit
+            // showing the last track until the listener fires.
+            findPreference<AudioControlsPreference>("audio_controls")
+                ?.bind(false, false, null, null, null, 0L, 0L)
             true
         }
+    }
+
+    // --- MediaController for the live audio-controls row -----------------
+    //
+    // A MediaController bound to the running AudioPlaybackService gives the
+    // settings UI the same view of playback the system media UI has: title,
+    // artist, embedded artwork, play/pause state, position, duration. The
+    // controller is connected when the Audio screen comes into the
+    // foreground and released on pause / leave-screen so the binder
+    // doesn't leak.
+
+    private var mediaController: MediaController? = null
+    private var mediaControllerFuture:
+        com.google.common.util.concurrent.ListenableFuture<MediaController>? = null
+    private val positionPoll = Handler(Looper.getMainLooper())
+    private val positionTick = object : Runnable {
+        override fun run() {
+            pushControllerStateToPref()
+            // Half-second cadence matches the SeekBar's per-second
+            // granularity without burning the main thread.
+            positionPoll.postDelayed(this, 500L)
+        }
+    }
+    private val controllerListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) { pushControllerStateToPref() }
+        override fun onMediaMetadataChanged(metadata: MediaMetadata) { pushControllerStateToPref() }
+        override fun onPlaybackStateChanged(playbackState: Int) { pushControllerStateToPref() }
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) { pushControllerStateToPref() }
+    }
+
+    private fun connectMediaController() {
+        if (mediaController != null || mediaControllerFuture != null) return
+        val ctx = requireContext().applicationContext
+        val token = SessionToken(ctx, ComponentName(ctx, AudioPlaybackService::class.java))
+        val future = MediaController.Builder(ctx, token).buildAsync()
+        mediaControllerFuture = future
+        future.addListener({
+            // If the screen flipped away before connect, drop the result.
+            if (mediaControllerFuture !== future) return@addListener
+            mediaControllerFuture = null
+            val controller = try {
+                future.get()
+            } catch (_: Exception) {
+                // Service not running — bind the empty state on the
+                // controls row so the user sees "No file selected".
+                findPreference<AudioControlsPreference>("audio_controls")
+                    ?.bind(false, false, null, null, null, 0L, 0L)
+                null
+            } ?: return@addListener
+            mediaController = controller
+            wireControlsPref(controller)
+            controller.addListener(controllerListener)
+            pushControllerStateToPref()
+            positionPoll.removeCallbacks(positionTick)
+            positionPoll.post(positionTick)
+        }, ContextCompat.getMainExecutor(ctx))
+    }
+
+    private fun releaseMediaController() {
+        positionPoll.removeCallbacks(positionTick)
+        mediaControllerFuture?.let {
+            // If we haven't finished connecting, release the future so
+            // the resulting controller (if any) gets cleaned up
+            // immediately when it arrives.
+            MediaController.releaseFuture(it)
+        }
+        mediaControllerFuture = null
+        mediaController?.let {
+            it.removeListener(controllerListener)
+            it.release()
+        }
+        mediaController = null
+    }
+
+    private fun wireControlsPref(controller: MediaController) {
+        val pref = findPreference<AudioControlsPreference>("audio_controls") ?: return
+        pref.onPlayPauseClick = {
+            if (controller.isPlaying) controller.pause() else controller.play()
+        }
+        pref.onSeek = { posMs -> controller.seekTo(posMs) }
+    }
+
+    private fun pushControllerStateToPref() {
+        val pref = findPreference<AudioControlsPreference>("audio_controls") ?: return
+        val c = mediaController
+        if (c == null || c.currentMediaItem == null) {
+            pref.bind(false, false, null, null, null, 0L, 0L)
+            return
+        }
+        val md = c.mediaMetadata
+        val art = md.artworkData?.let { bytes ->
+            try { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) } catch (_: Exception) { null }
+        }
+        val duration = c.duration.let { if (it < 0) 0L else it }
+        pref.bind(
+            hasTrack      = true,
+            isPlaying     = c.isPlaying,
+            title         = md.title?.toString(),
+            artist        = md.artist?.toString(),
+            artworkBitmap = art,
+            positionMs    = c.currentPosition.coerceAtLeast(0L),
+            durationMs    = duration,
+        )
     }
 
     private fun bindBack() {

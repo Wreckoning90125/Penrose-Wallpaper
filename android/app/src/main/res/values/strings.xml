@@ -23,10 +23,15 @@
 
     <string name="audio_category">Audio</string>
     <string name="audio_file_title">Audio file</string>
+    <string name="audio_file_pick_title">Pick audio file</string>
+    <string name="audio_file_pick_summary">Choose any audio file the system can play; it appears in the system media controls and feeds the analyzer for the modulation matrix.</string>
     <string name="audio_file_summary">Plays in the background; feeds the analyzer for the modulation matrix.</string>
-    <string name="audio_file_none">No file selected (tap to choose)</string>
+    <string name="audio_file_none">No file selected — tap "Pick audio file" below</string>
     <string name="audio_file_stop_title">Stop audio</string>
-    <string name="audio_file_stop_summary">Release the audio service.</string>
+    <string name="audio_file_stop_summary">Stops playback and releases the foreground service.</string>
+    <string name="audio_play_desc">Play</string>
+    <string name="audio_pause_desc">Pause</string>
+    <string name="audio_play_pause_desc">Play / pause</string>
 
     <string name="preset_load_title">Load preset…</string>
     <string name="preset_load_summary">Writes a built-in graph + slider set into the current settings. Edit freely afterward.</string>

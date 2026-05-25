@@ -1,4 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Audio screen layout:
+    1. Live "now-playing" controls row (com.penrose.wallpaper.audio.
+       AudioControlsPreference) — album art + title + artist + play/
+       pause + scrub bar with current / duration labels. State and
+       actions are driven by a MediaController bound to the running
+       AudioPlaybackService in SettingsFragment.bindAudioRowActions.
+    2. Pick file row — launches the system audio picker; the chosen
+       URI is forwarded to AudioPlaybackService.start which loads it
+       into the ExoPlayer and the system media UI.
+    3. Stop row — explicit teardown for users who want to release the
+       service without leaving the screen.
+-->
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
@@ -8,10 +21,15 @@
         android:summary="" />
 
     <PreferenceCategory android:title="@string/audio_category">
+
+        <com.penrose.wallpaper.audio.AudioControlsPreference
+            android:key="audio_controls" />
+
         <Preference
             android:key="audio_file_uri"
-            android:title="@string/audio_file_title"
-            android:summary="@string/audio_file_summary" />
+            android:title="@string/audio_file_pick_title"
+            android:summary="@string/audio_file_pick_summary" />
+
         <Preference
             android:key="audio_stop"
             android:title="@string/audio_file_stop_title"

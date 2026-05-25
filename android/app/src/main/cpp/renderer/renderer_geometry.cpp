@@ -411,20 +411,17 @@ bool Renderer::buildGeometry() {
             if ((dx * dx + dy * dy) < 1e-12f) continue;
             keptEdges.push_back(&r);
         }
-        // Per-edge cached tangent/normal — computed once, reused twice
-        // (once per endpoint when computing each end's miter).
-        struct EdgeGeom { float tx, ty, nx, ny; };
+        // Per-edge cached tangent — computed once, reused twice (once
+        // per endpoint when computing each end's miter).
+        struct EdgeGeom { float tx, ty; };
         std::vector<EdgeGeom> egeom(keptEdges.size());
         for (size_t i = 0; i < keptEdges.size(); ++i) {
             const EdgeRec& r = *keptEdges[i];
             const float dx = r.p2x - r.p1x;
             const float dy = r.p2y - r.p1y;
             const float inv = 1.0f / std::sqrt(dx * dx + dy * dy);
-            egeom[i].tx =  dx * inv;
-            egeom[i].ty =  dy * inv;
-            // +1-side normal is the 90°-CCW rotation of the tangent.
-            egeom[i].nx = -dy * inv;
-            egeom[i].ny =  dx * inv;
+            egeom[i].tx = dx * inv;
+            egeom[i].ty = dy * inv;
         }
         // Endpoint hash. For each shared endpoint we collect (edge_idx,
         // end (0=p1, 1=p2), outward-tangent-angle) entries; we'll sort
@@ -571,17 +568,15 @@ bool Renderer::buildGeometry() {
             const uint32_t base = static_cast<uint32_t>(borders.size());
             // Each vertex carries its own EXTRUSION DIRECTION in
             // (mx, my) — already signed for the world side it belongs
-            // to — and a tangent (tx, ty) for the disk-mode Jacobian
-            // projection. The shader extrudes by halfWidth · miterScale
-            // along (mx, my) directly; no per-vertex side flag.
-            borders.push_back({ r.p1x, r.p1y, g.tx, g.ty,
-                                p1n[0], p1n[1], p1n[2] });
-            borders.push_back({ r.p1x, r.p1y, g.tx, g.ty,
-                                p1m[0], p1m[1], p1m[2] });
-            borders.push_back({ r.p2x, r.p2y, g.tx, g.ty,
-                                p2n[0], p2n[1], p2n[2] });
-            borders.push_back({ r.p2x, r.p2y, g.tx, g.ty,
-                                p2m[0], p2m[1], p2m[2] });
+            // to. The shader extrudes by halfWidth · miterScale along
+            // (mx, my) in Euclidean mode and projects it through the
+            // Jacobian in disk mode (no separate tangent needed: the
+            // projection acts the same on any world-tangent-shaped
+            // vector, miter direction included).
+            borders.push_back({ r.p1x, r.p1y, p1n[0], p1n[1], p1n[2] });
+            borders.push_back({ r.p1x, r.p1y, p1m[0], p1m[1], p1m[2] });
+            borders.push_back({ r.p2x, r.p2y, p2n[0], p2n[1], p2n[2] });
+            borders.push_back({ r.p2x, r.p2y, p2m[0], p2m[1], p2m[2] });
             borderIndices.push_back(base + 0);
             borderIndices.push_back(base + 1);
             borderIndices.push_back(base + 2);

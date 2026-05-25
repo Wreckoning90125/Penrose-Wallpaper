@@ -126,7 +126,7 @@ inverse-projection-per-fragment cost.
 | `shaders/hyperbolic.glsl` | Single source of truth for the projection: `projectHyp(world, b, s)` (radial map + τ_b), `projTangentRadial(p, tangW, s)` (analytical disk-space tangent of the radial map, polar-basis decomposition — radial component scaled by f'(r)=(s/2)·sech²(r·s/2), tangential by f(r)/r=tanh(r·s/2)/r; replaces a finite-difference step that would underflow once r·s/2 ≳ 4), and `boostTangent(z, b, tangD)` (τ_b conformal rotation by −2·arg(1+b̄z), complex multiply by q̄²/\|q\|² in real-vector form). Pulled in by both vertex shaders via `#include` and `GL_GOOGLE_include_directive`. |
 | `shaders/fill.vert` | `hyp` push-constant vec4; calls `projectHyp(displacedPos, pc.hyp.xy, pc.hyp.z)` gated on `pc.hyp.w > 0.5`. |
 | `shaders/border.vert` | Same `projectHyp` call as `fill.vert` for the base point; for each corner, projects the **per-vertex world-space mitered direction** through the same `projTangentRadial` + `boostTangent` Jacobian — conformality preserves the world-space bisector angle, so the disk-space joint closes flush at exactly the same `miterScale = 1/\|cos(θ/2)\|` length compensation the Euclidean path uses. Width = world halfwidth × hypScale/2 × miterScale; borders stay visibly thick across the entire disk and orient correctly under any boost. |
-| `cpp/renderer/render_state.h::BorderVertex` | 7 floats per vertex: pos (2), raw segment tangent (2), **mitered corner direction** signed for this vertex's world side (2), miterScale (1). The mitered direction is the polyline angle-bisector at the shared corner, so two edges meeting at vertex `v` extrude to the same world point on each side — no perpendicular butt-end overlap on the inside of the joint, no gap on the outside. See "Border miter joinery" below. |
+| `cpp/renderer/render_state.h::BorderVertex` | 5 floats per vertex: pos (2), **mitered corner direction** signed for this vertex's world side (2), miterScale (1). The mitered direction is the polyline angle-bisector at the shared corner, so two edges meeting at vertex `v` extrude to the same world point on each side — no perpendicular butt-end overlap on the inside of the joint, no gap on the outside. In disk mode the shader projects (mx, my) through the same `projTangentRadial`+`boostTangent` Jacobian a tangent vector would see; conformality preserves the bisector angle, so the joint closes in disk space at the same miterScale. See "Border miter joinery" below. |
 | `cpp/graph/graph.{h,cpp}` | Three new `Target` node kinds: `OutHypBoostX`, `OutHypBoostY`, `OutHypScale`. Clamp ranges defined in the graph's `evaluate()` lo/hi tables. |
 | `kotlin/Settings.kt` | Five new fields with conversion (boost 0..100 → -0.9..+0.9, scale 0..100 → 0..3.0, etc.) and SharedPreferences keys. |
 | `kotlin/SettingsFragment.kt` | New `Projection` screen registered + navigation row. |
@@ -211,12 +211,15 @@ origin — the radial component of the Jacobian's principal axes near 0.
 
 ### Vertex layout
 
-`BorderVertex` carries 7 floats: position (2), raw segment tangent (2,
-for the disk-mode Jacobian), **mitered direction signed for the world
-side this vertex belongs to** (2), and the miter scale (1). No
-per-vertex side flag — the mitered direction's sign carries that. The
-shader is one line for Euclidean (`finalPos = base + inMiter * scaledHalf`)
-and a short branch for disk (project miter through Jacobian, normalise,
+`BorderVertex` carries 5 floats: position (2), **mitered direction
+signed for the world side this vertex belongs to** (2), and the miter
+scale (1). No per-vertex side flag — the mitered direction's sign
+carries that. No separate tangent — the disk-mode shader projects
+`inMiter` through the same `projTangentRadial`+`boostTangent` Jacobian
+a tangent vector would see; the projection's action on a unit vector
+is the same whether the input was a tangent or a miter. The shader is
+one line for Euclidean (`finalPos = base + inMiter * scaledHalf`) and
+a short branch for disk (project miter through Jacobian, normalise,
 extrude at `scaledHalf · hypScale/2`).
 
 ### Related geometry: fill subdivision (loop-subdivision-style)

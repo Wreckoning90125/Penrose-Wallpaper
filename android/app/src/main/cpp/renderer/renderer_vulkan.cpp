@@ -464,30 +464,26 @@ bool Renderer::buildPipelines() {
     borderBinding.binding = 0;
     borderBinding.stride = sizeof(BorderVertex);
     borderBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    // Four attributes: pos / tangent / miter-direction / miter-scale.
+    // Three attributes: pos / miter-direction / miter-scale.
     // The miter-direction is already signed for this vertex's world
-    // side, so no per-vertex side flag is needed. The raw tangent is
-    // kept separately so the disk-mode shader can recover the
-    // projection-correct per-segment tangent when needed.
-    VkVertexInputAttributeDescription borderAttrs[4]{};
+    // side and is what the shader extrudes along directly (Euclidean)
+    // or pushes through the Jacobian (disk).
+    VkVertexInputAttributeDescription borderAttrs[3]{};
     borderAttrs[0].location = 0; borderAttrs[0].binding = 0;
     borderAttrs[0].format   = VK_FORMAT_R32G32_SFLOAT;
     borderAttrs[0].offset   = offsetof(BorderVertex, x);
     borderAttrs[1].location = 1; borderAttrs[1].binding = 0;
     borderAttrs[1].format   = VK_FORMAT_R32G32_SFLOAT;
-    borderAttrs[1].offset   = offsetof(BorderVertex, tx);
+    borderAttrs[1].offset   = offsetof(BorderVertex, mx);
     borderAttrs[2].location = 2; borderAttrs[2].binding = 0;
-    borderAttrs[2].format   = VK_FORMAT_R32G32_SFLOAT;
-    borderAttrs[2].offset   = offsetof(BorderVertex, mx);
-    borderAttrs[3].location = 3; borderAttrs[3].binding = 0;
-    borderAttrs[3].format   = VK_FORMAT_R32_SFLOAT;
-    borderAttrs[3].offset   = offsetof(BorderVertex, miterScale);
+    borderAttrs[2].format   = VK_FORMAT_R32_SFLOAT;
+    borderAttrs[2].offset   = offsetof(BorderVertex, miterScale);
 
     VkPipelineVertexInputStateCreateInfo borderVi{};
     borderVi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     borderVi.vertexBindingDescriptionCount = 1;
     borderVi.pVertexBindingDescriptions = &borderBinding;
-    borderVi.vertexAttributeDescriptionCount = 4;
+    borderVi.vertexAttributeDescriptionCount = 3;
     borderVi.pVertexAttributeDescriptions = borderAttrs;
 
     VkGraphicsPipelineCreateInfo borderGpi = fillGpi;

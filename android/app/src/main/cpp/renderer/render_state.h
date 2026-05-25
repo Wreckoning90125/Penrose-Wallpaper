@@ -57,15 +57,14 @@ struct FillVertex {
 // vertices; the shader extrudes each by halfWidth × miterScale along
 // the per-corner mitered direction so adjacent edges meeting at a
 // non-90° vertex join flush — no overlapping perpendicular-butt ends,
-// no outside-corner gap. The raw edge tangent is still carried
-// (separately from the mitered direction) so the Poincaré-disk path
-// can recover the per-segment world tangent for the τ_b projection
-// when the miter direction is degenerate. The miter direction is
-// already signed for THIS vertex's world side, so no per-vertex side
-// flag is needed.
+// no outside-corner gap. The mitered direction is already signed for
+// this vertex's world side, so no per-vertex side flag is needed. In
+// disk mode the shader projects (mx, my) through the same
+// projTangentRadial+boostTangent Jacobian as a tangent vector would
+// see — conformality preserves the bisector angle exactly, so the
+// joint closes in disk space at the same miterScale.
 struct BorderVertex {
     float x, y;
-    float tx, ty;       // unit world-space edge tangent (this segment)
     float mx, my;       // mitered corner direction (already signed for the world side)
     float miterScale;   // halfWidth multiplier — bridges the angular gap
 };

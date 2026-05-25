@@ -2,9 +2,8 @@
 #extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2  inPos;
-layout(location = 1) in vec2  inTangent;     // unit world tangent of THIS segment
-layout(location = 2) in vec2  inMiter;       // signed corner extrusion direction (world)
-layout(location = 3) in float inMiterScale;  // halfWidth multiplier at this corner
+layout(location = 1) in vec2  inMiter;       // signed corner extrusion direction (world)
+layout(location = 2) in float inMiterScale;  // halfWidth multiplier at this corner
 
 layout(push_constant) uniform PC {
     vec4 view0;
@@ -88,11 +87,11 @@ void main() {
     } else {
         // Euclidean: extrude along the per-corner mitered direction.
         // (mx, my) is already signed for this vertex's world side, so
-        // no inSide multiplier is needed. miterScale = 1 / |cos(θ/2)|
-        // for interior angle θ — extends the outside corner just
-        // enough to close the gap and trims the inside corner cleanly.
-        // The CPU pre-clamps miterScale to kMiterLimit so a near-
-        // acute joint can't fire a spike.
+        // we just add it scaled by halfWidth · miterScale. miterScale =
+        // 1 / |cos(θ/2)| for interior angle θ — extends the outside
+        // corner just enough to close the gap and trims the inside
+        // corner cleanly. The CPU pre-clamps miterScale to kMiterLimit
+        // so a near-acute joint can't fire a spike.
         finalPos = base + inMiter * scaledHalf;
     }
 

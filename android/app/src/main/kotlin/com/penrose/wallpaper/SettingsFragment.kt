@@ -5,11 +5,9 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import android.content.res.ColorStateList
-import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Bundle
-import android.util.TypedValue
+import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -20,7 +18,6 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.TooltipCompat
-import androidx.core.content.ContextCompat
 import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
@@ -209,16 +206,22 @@ class SettingsFragment : PreferenceFragmentCompat(),
      * from the host theme; the cancel button hooks the system's
      * cancel string.
      *
+     * Press feedback is @animator/preset_tile_press attached via
+     * android:stateListAnimator in preset_picker_item.xml — the tile
+     * scales to ~93% on press and springs back, so the cell reads as
+     * pressing into the screen. No colour highlight is drawn behind
+     * the tile.
+     *
      * NOTE: the click listener is wired on each cell View *inside* the
      * adapter (PresetPickerAdapter.onPickClick), NOT on the GridView
      * via setOnItemClickListener. The cell ImageView carries
-     * android:clickable="true" so the foreground RippleDrawable can
-     * fire on press, but a clickable child consumes the touch event
-     * before AdapterView's item-click dispatch sees it — wiring
+     * android:clickable="true" so the stateListAnimator can fire on
+     * press, but a clickable child consumes the touch event before
+     * AdapterView's item-click dispatch sees it — wiring
      * setOnItemClickListener on the GridView is silently dead in this
      * configuration. Do NOT switch back to setOnItemClickListener
      * without also stripping clickable/focusable from the cell layout
-     * (which would lose the tile-shaped ripple).
+     * (which would lose the press animation).
      */
     private fun bindMaterialPresetRow() {
         findPreference<Preference>("material_preset_pick")?.setOnPreferenceClickListener {
@@ -255,12 +258,13 @@ class SettingsFragment : PreferenceFragmentCompat(),
      * No on-screen label, no rectangular container — the cell IS the
      * tile.
      *
-     * The Material ripple is set as a RippleDrawable foreground with the
-     * same tile bitmap as its mask layer, so the ripple paints only
-     * where the tile alpha is non-zero. Result: the cell behaves like a
-     * keyboard key whose "hole" is the tile shape itself, not the
-     * rectangular bounds of the View. Foreground (not background) so
-     * the ripple is composited on top of the tile content when pressed.
+     * Press feedback is the @animator/preset_tile_press stateListAnimator
+     * applied in preset_picker_item.xml: the tile scales to ~93% on
+     * press and springs back on release, so a tap reads as physically
+     * pressing the key into the screen. No colour highlight, no
+     * rectangular ripple — the tile silhouette stays the visible
+     * shape throughout. A KEYBOARD_TAP haptic on click pairs the
+     * visual with a physical tick.
      *
      * setOnClickListener is wired here on every getView call rather
      * than via GridView.setOnItemClickListener — a clickable child
@@ -268,28 +272,15 @@ class SettingsFragment : PreferenceFragmentCompat(),
      * the touch event before AdapterView's item-click dispatch sees
      * it. See bindMaterialPresetRow for the long version.
      *
-     * contentDescription carries the preset name for screen readers
-     * since there is no on-screen label.
+     * contentDescription + tooltip carry the preset name (screen
+     * reader + long-press) since there is no on-screen label.
      */
     private class PresetPickerAdapter(
-        private val ctx: Context,
+        ctx: Context,
         private val presets: List<MaterialPreset>,
         private val onPickClick: (Int) -> Unit,
     ) : ArrayAdapter<MaterialPreset>(ctx, R.layout.preset_picker_item, presets) {
         private val inflater = LayoutInflater.from(ctx)
-
-        // Resolve android:attr/colorControlHighlight from the host
-        // theme so the ripple matches the rest of the Material 3
-        // chrome (dark theme → light pulse, light theme → dark pulse)
-        // instead of a hard-coded grey. Framework attribute since
-        // API 21, populated by the Material3 theme above.
-        private val rippleColor: ColorStateList = run {
-            val tv = TypedValue()
-            ctx.theme.resolveAttribute(android.R.attr.colorControlHighlight, tv, true)
-            ColorStateList.valueOf(
-                if (tv.resourceId != 0) ContextCompat.getColor(ctx, tv.resourceId) else tv.data
-            )
-        }
 
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
             val image = (convertView as? ImageView)
@@ -297,19 +288,11 @@ class SettingsFragment : PreferenceFragmentCompat(),
             val preset = presets[position]
             image.setImageResource(preset.thumbnailRes)
             image.contentDescription = preset.name
-            // Long-press tooltip carries the preset name for users who
-            // want to disambiguate before tapping; the on-tap Toast
-            // still names the applied preset for everyone else.
             TooltipCompat.setTooltipText(image, preset.name)
-            // Tile-shaped ripple: foreground RippleDrawable with the
-            // same thumbnail bitmap as its mask, so the ripple is
-            // alpha-clipped to the tile shape. A fresh drawable copy is
-            // mutated per cell so the per-preset mask doesn't bleed
-            // across recycled views.
-            val maskDrawable = ContextCompat.getDrawable(ctx, preset.thumbnailRes)
-                ?.constantState?.newDrawable()?.mutate()
-            image.foreground = RippleDrawable(rippleColor, null, maskDrawable)
-            image.setOnClickListener { onPickClick(position) }
+            image.setOnClickListener {
+                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                onPickClick(position)
+            }
             return image
         }
     }

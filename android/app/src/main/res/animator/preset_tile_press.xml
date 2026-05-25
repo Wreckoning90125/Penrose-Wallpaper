@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  State-list animator for the Material-preset picker cells. Replaces
+  the rectangular grey ripple with a "press the key into the screen"
+  scale animation: the tile shrinks ~7% under finger, springs back on
+  release. Conveys depth physically (smaller = further into the
+  screen) without painting any chrome around the tile shape, so the
+  tile-shaped key feel is preserved.
+
+  Z-elevation isn't part of this: ImageView shadows are drawn around
+  the rectangular View bounds, not the tile's alpha outline, so any
+  translationZ animation would print a rectangular drop-shadow that
+  betrays the tile silhouette. Scale alone carries the depth read.
+
+  Durations: 80ms press, 160ms release. Press is fast so the
+  feedback feels instant under finger; release is slower so the
+  spring-back reads as a release rather than a snap.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_pressed="true">
+        <set>
+            <objectAnimator
+                android:propertyName="scaleX"
+                android:duration="80"
+                android:valueTo="0.93"
+                android:valueType="floatType" />
+            <objectAnimator
+                android:propertyName="scaleY"
+                android:duration="80"
+                android:valueTo="0.93"
+                android:valueType="floatType" />
+        </set>
+    </item>
+    <item>
+        <set>
+            <objectAnimator
+                android:propertyName="scaleX"
+                android:duration="160"
+                android:valueTo="1.0"
+                android:valueType="floatType" />
+            <objectAnimator
+                android:propertyName="scaleY"
+                android:duration="160"
+                android:valueTo="1.0"
+                android:valueType="floatType" />
+        </set>
+    </item>
+</selector>

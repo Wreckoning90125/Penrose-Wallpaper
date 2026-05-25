@@ -6,15 +6,15 @@
   background, tile-shaped fill; see tools/bake_preset_thumbnails.py),
   so the menu reads as a panel of tile-shaped keys.
 
-  No padding inside the ImageView so the RippleDrawable mask
-  (set programmatically in PresetPickerAdapter to the same tile
-  bitmap) aligns pixel-for-pixel with the visible image content —
-  with padding, the ripple bounds would be larger than the image
-  bounds and the ripple would leak past the tile edge.
+  stateListAnimator scales the tile to ~93% on press and springs back
+  on release, so a tap reads as physically pressing the key into the
+  screen instead of painting a rectangular grey highlight around the
+  tile. No padding inside the View so the press scaling is centered
+  on the tile silhouette.
 
   Inter-cell spacing comes from preset_picker_grid.xml's
   horizontalSpacing / verticalSpacing / padding so the gap between
-  tiles is uniform without per-cell padding.
+  tiles is uniform.
 
   maxHeight caps the tile size on wide screens — without it, a tablet
   dialog could stretch each cell to 200dp+ which loses the
@@ -32,4 +32,5 @@
     android:maxHeight="144dp"
     android:scaleType="fitCenter"
     android:clickable="true"
-    android:focusable="true" />
+    android:focusable="true"
+    android:stateListAnimator="@animator/preset_tile_press" />

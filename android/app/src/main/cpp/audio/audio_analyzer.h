@@ -12,8 +12,28 @@ namespace penrose {
 // the player. The render thread calls analyzeFrame once per vsync, which
 // windows the most recent FFT-sized slice, runs an in-place radix-2 FFT,
 // folds the magnitudes into 8 octave-spaced bands, and feeds them through
-// asymmetric attack/release smoothers. A simple energy-spike detector
-// raises the `beat` value to 1.0 on transients and decays.
+// asymmetric attack/release smoothers.
+//
+// The beat envelope is no longer a naive "current low-band > 1.4× moving
+// average" trigger. The new chain is:
+//
+//   1. SuperFlux onset = HFC-weighted (frequency-emphasised) half-rectified
+//      spectral flux. Quiets steady tones, lights up on percussive onsets.
+//   2. Z-score normalisation against a rolling mean/variance with
+//      asymmetric attack/release so the threshold tracks slowly through
+//      loudness changes but pops on a transient.
+//   3. BeatDetector — an onset ring buffer feeds an autocorrelation
+//      computed every 8 frames; the peak in the [60..200] BPM lag range
+//      drives a phase-locked-loop sawtooth (per beat_detect.rs from
+//      Prismic Holonomy). The PLL nudges its phase toward the onset
+//      moment when an above-threshold onset arrives while confidence is
+//      high, so the phase stays locked across tempo wobble.
+//   4. Micro CWT — 3 pre-computed Morlet wavelet kernels at 2/5/10 kHz
+//      (snare/hat/cymbal range) convolve the raw time window via a
+//      strided dot-product. Catches sub-beat percussive flashes the
+//      tempo grid alone would miss.
+//   5. Final beat scalar = max(PLL flash, CWT flash) → asymmetric
+//      smoother (fast attack 0.55/frame, slow release 0.10/frame).
 //
 // The instance is process-wide (see globalAudioAnalyzer below) so the
 // foreground AudioPlaybackService and every Renderer share one analyzer.
@@ -27,20 +47,33 @@ namespace penrose {
 //     per-vsync).
 //   - snapshot: any render thread. Reads smoothed bands + beat
 //     under analyzeMutex_ so concurrent analyzeFrame can't tear
-//     the float[8] mid-FFT and leak NaN/Inf into shader uniforms
-//     (with -ffast-math, NaN propagation is UB-adjacent).
+//     the float[8] mid-FFT and leak NaN/Inf into shader uniforms.
 //   - quiesce / configure: any thread; both take analyzeMutex_.
 class AudioAnalyzer {
 public:
-    static constexpr int kFftSize = 1024;
-    static constexpr int kBands = 8;
+    static constexpr int kFftSize     = 1024;
+    static constexpr int kBands       = 8;
     static constexpr int kRingSamples = kFftSize * 4;
+
+    // BPM search window. 60..200 covers the human-musical range and
+    // matches the autocorrelation BPM search in beat_detect.rs.
+    static constexpr float kMinBpm = 60.0f;
+    static constexpr float kMaxBpm = 200.0f;
+
+    // Onset ring buffer length. ~4 seconds at 60 fps — long enough to
+    // hold two full BPM periods even at the slowest tempo so the
+    // autocorrelation has a clear peak to lock onto.
+    static constexpr int kOnsetBufLen = 256;
+    static constexpr int kAcfLen      = kOnsetBufLen / 2;
+
+    // Three CWT kernels, targeted at the percussive bands per cwt.rs.
+    static constexpr int kCwtKernels = 3;
 
     AudioAnalyzer();
 
-    // Reconfigure for a new playback stream. Resets ring state and
-    // smoothers; pickRange picks log-spaced band boundaries from the
-    // updated Nyquist limit.
+    // Reconfigure for a new playback stream. Resets ring state, DSP
+    // smoothers, the beat tracker and the Morlet kernels (kernel
+    // sample-counts depend on the rate).
     void configure(int sampleRate);
 
     // Audio thread. Append `count` mono float samples; multi-channel
@@ -49,8 +82,10 @@ public:
     void pushPcm(const float* samples, int count);
 
     // Render thread. Pulls the most recent kFftSize samples from the ring,
-    // runs the FFT, updates `bands_` and `beat_`. `dtSeconds` controls
-    // smoothing rates (longer dt → larger per-call decay).
+    // runs the FFT + SuperFlux + BeatDetector + CWT, updates the smoothed
+    // bands and the beat envelope. `dtSeconds` controls smoothing rates
+    // and also feeds the fps estimator the beat tracker uses to convert
+    // autocorrelation lag to BPM.
     void analyzeFrame(float dtSeconds);
 
     // Snapshot the smoothed bands + beat under analyzeMutex_. Both
@@ -66,41 +101,72 @@ public:
 private:
     void initStaticTables();
     void computeBandRanges();
+    void rebuildCwtKernels();
     void fftRadix2(float* re, float* im) const;
     // Unlocked body of quiesce — for analyzeFrame's early-return path
     // when it's already holding analyzeMutex_.
     void quiesceUnlocked();
+    // Wipes mutable DSP state. Called from configure() to give a fresh
+    // start to a new playback stream.
+    void resetDspStateUnlocked();
+    // Parabolic-interpolated peak in [lo,hi] over the autocorrelation
+    // buffer. Returns a fractional lag for sub-frame BPM precision.
+    float peakLagParabolic(int lo, int hi, float& peakValOut) const;
 
     int sampleRate_ = 48000;
 
     alignas(64) float ring_[kRingSamples] = {};
-    std::atomic<uint32_t> writeIdx_ = 0;
+    std::atomic<uint32_t> writeIdx_{0};
 
-    // Scratch buffers reused across analyze calls.
-    float scratchRe_[kFftSize] = {};
-    float scratchIm_[kFftSize] = {};
-    float window_[kFftSize] = {};
-    int bitRev_[kFftSize] = {};
+    // Scratch + static tables for the FFT.
+    float scratchRe_[kFftSize]      = {};
+    float scratchIm_[kFftSize]      = {};
+    float window_[kFftSize]         = {};
+    int   bitRev_[kFftSize]         = {};
     float twiddleCos_[kFftSize / 2] = {};
     float twiddleSin_[kFftSize / 2] = {};
+
+    // Magnitude history for spectral flux.
+    float prevMag_[kFftSize / 2] = {};
+
+    // Onset ring buffer for the autocorrelation tempo tracker.
+    float onsetBuf_[kOnsetBufLen] = {};
+    int   onsetIdx_               = 0;
+    float acf_[kAcfLen]           = {};
+
+    // Beat-tracker state (autocorrelation + PLL — matches beat_detect.rs).
+    float fpsEma_       = 60.0f;
+    float bpm_          = 120.0f;
+    float rawBpm_       = 120.0f;
+    float beatPhase_    = 0.0f;
+    float beatConf_     = 0.0f;
+    float periodFrames_ = 60.0f * 60.0f / 120.0f;
+
+    // 3 pre-computed complex Morlet wavelet kernels for CWT-based
+    // transient detection (snare / hat / cymbal). Sample counts depend
+    // on sample_rate so the kernels get rebuilt by configure().
+    std::vector<float> cwtRe_[kCwtKernels];
+    std::vector<float> cwtIm_[kCwtKernels];
+    int                cwtKernelLen_[kCwtKernels] = {};
+
+    // Adaptive normalisation for onset + CWT — asymmetric attack/release
+    // tracking of mean & variance (Welford-style, exponential),
+    // matching the RollingStat in lib.rs.
+    float onsetAvg_ = 0.0f, onsetVar_ = 0.0f;
+    float cwtAvg_   = 0.0f, cwtVar_   = 0.0f;
 
     // Band range = [loBin, hiBin) into the magnitude spectrum.
     int bandLo_[kBands] = {};
     int bandHi_[kBands] = {};
 
-    // Smoothing state. Mutated by analyzeFrame and read by bands()/beat().
-    // Two Renderer instances (the wallpaper service and an in-app preview
-    // both live in the same process) can call analyzeFrame concurrently;
-    // analyzeMutex_ serialises the RMW so they don't shred each other's
-    // smoothed values with -ffast-math optimisations downstream.
+    // Smoothing state. Mutated by analyzeFrame and read by snapshot.
     float bandsSmoothed_[kBands] = {};
-    float beatSmoothed_ = 0.0f;
-    float energyHistory_ = 0.0f;
+    float beatSmoothed_          = 0.0f;
     mutable std::mutex analyzeMutex_;
 
     // Stream-active sentinel: time since last pushPcm. Beyond a small
     // window we treat the source as silent.
-    std::atomic<uint64_t> lastPushNs_ = 0;
+    std::atomic<uint64_t> lastPushNs_{0};
 };
 
 // Process-wide analyzer. The AudioPlaybackService feeds it from its

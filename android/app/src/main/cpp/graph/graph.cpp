@@ -136,16 +136,48 @@ public:
     }
 
     // Band nodes pad their body to a shared width; SrcConstant gets an
-    // inline value slider; the remaining sources (beat / time / page
-    // scroll) pull straight from the EvalContext and have nothing to tune.
+    // inline value display + drag-bar + step buttons; the remaining
+    // sources (beat / time / page scroll) pull straight from the
+    // EvalContext and have nothing to tune.
     void draw() override {
         if (isBandKind(kind_)) {
             ImGui::Dummy(ImVec2(widestBandLabelWidth(), 0.0f));
             return;
         }
         if (kind_ != NodeKind::SrcConstant) return;
-        ImGui::SetNextItemWidth(160.0f);
-        ImGui::SliderFloat("##value", &p0, 0.0f, 1.0f, "value %.2f");
+        // Large, unambiguous value readout so the current setting is
+        // legible at a glance — the old slider format string buried
+        // the value inside a 12px-tall track and a touchscreen drag on
+        // a tile that small was unreliable.
+        ImGui::Text("Value  %.3f", static_cast<double>(p0));
+        // DragFloat accepts a drag anywhere on the bar (not just the
+        // thumb) which is the touch-friendly way to nudge a value. The
+        // range goes well past 0..1 so this node is useful with
+        // Multiply / ScaleBias for amplifying upstream signals, not
+        // just as a 0..1 mixer level.
+        ImGui::SetNextItemWidth(180.0f);
+        ImGui::DragFloat("##value", &p0, 0.005f, -10.0f, 10.0f, "%.3f");
+        // Coarse / fine step buttons — the only way to set a precise
+        // value without an OS soft keyboard. Pairs cover ±1 and ±0.1
+        // which is enough to land any common value (0, 0.25, 0.5, 1,
+        // 2, π/4...) in a few taps.
+        const ImVec2 kBtn(32.0f, 28.0f);
+        if (ImGui::Button("-1",  kBtn)) p0 -= 1.0f;
+        ImGui::SameLine();
+        if (ImGui::Button("-.1", kBtn)) p0 -= 0.1f;
+        ImGui::SameLine();
+        if (ImGui::Button("+.1", kBtn)) p0 += 0.1f;
+        ImGui::SameLine();
+        if (ImGui::Button("+1",  kBtn)) p0 += 1.0f;
+        // Common presets — single tap snaps to a familiar value.
+        if (ImGui::Button("0",   kBtn)) p0 = 0.0f;
+        ImGui::SameLine();
+        if (ImGui::Button("0.5", kBtn)) p0 = 0.5f;
+        ImGui::SameLine();
+        if (ImGui::Button("1",   kBtn)) p0 = 1.0f;
+        ImGui::SameLine();
+        if (ImGui::Button("2",   kBtn)) p0 = 2.0f;
+        p0 = std::clamp(p0, -10.0f, 10.0f);
     }
 
 private:

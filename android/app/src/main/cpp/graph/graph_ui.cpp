@@ -157,26 +157,32 @@ void GraphUi::drawSpawnPopup(Graph& graph) {
                     const NodeDescriptor& d = descriptors()[i];
                     if (std::string_view(d.category) != cat) continue;
                     if (ImGui::MenuItem(d.label)) {
-                        // Place new nodes at the top-left of the
-                        // currently-visible grid region, with a small
-                        // staircase stagger so a burst of "Add" taps
-                        // doesn't pile everyone onto one spot.
+                        // Spawn new nodes near the centre of the
+                        // visible canvas so they land in the empty
+                        // middle lane between the Sources column on
+                        // the left and the Targets column on the
+                        // right, not behind the band-source pile in
+                        // the top-left corner where they're invisible
+                        // and ungrabbable.
                         //
                         // -scroll IS the grid coordinate at the canvas
                         // top-left (per ImNodeFlow's screen2grid math),
-                        // so this works regardless of how far the user
-                        // has panned or scrolled. Using screen2grid on
-                        // io.DisplaySize/2 worked only when origin was
-                        // (0,0) and scale was 1 — anything else (zoom,
-                        // window padding, dialog overlay) landed
-                        // spawns off-screen and the user never saw
-                        // them.
+                        // so adding (gridW/2, gridH/2) to it gives the
+                        // centre regardless of any future pan/zoom.
+                        // The staircase stagger keeps a burst of Adds
+                        // from piling onto one pixel.
+                        float gridW = 0.0f, gridH = 0.0f;
+                        canvasGridSize(graph, gridW, gridH);
                         const ImVec2 topLeft = ImVec2(0.0f, 0.0f)
                                              - graph.handler().getScroll();
-                        const float stagger = (spawnStagger_++ % 8) * 28.0f;
+                        const int   step    = spawnStagger_++ % 8;
+                        const float stagger = step * 32.0f;
+                        // Offset by half the typical node size (~200×80
+                        // grid units) so the spawn lands centred, not
+                        // with its top-left corner on the canvas centre.
                         graph.addNode(d.kind,
-                                      topLeft.x + 80.0f + stagger,
-                                      topLeft.y + 80.0f + stagger);
+                                      topLeft.x + gridW * 0.5f - 100.0f + stagger,
+                                      topLeft.y + gridH * 0.5f - 40.0f  + stagger);
                     }
                 }
                 ImGui::EndMenu();

@@ -294,16 +294,17 @@ internal class Settings(
                 matIridThickMax = safeInt(prefs, KEY_MAT_IRID_THICK_MAX, 560).toFloat(),
                 matRoughMod = safeInt(prefs, KEY_MAT_ROUGH_MOD, 0) / 100f,
                 matMetalMod = safeInt(prefs, KEY_MAT_METAL_MOD, 0) / 100f,
-                // Projection. Stored as a "0"/"1" string from the
-                // ListPreference. The disk-mode params: scale 0..100 →
-                // 0..3.0 world-radius gain (60 → default 0.6); boost
-                // 0..100 → -0.9..+0.9 in B² (50 → 0); edge subdiv 1..32.
+                // Projection mode + disk-mode params. PROJECTION is a
+                // "0"/"1" ListPreference. Scale slider 0..100 maps
+                // LINEAR to 0.05..3.0 — the lower bound is 0.05 (not 0)
+                // because the shader's tanh(r·s/2) collapses everything
+                // to a single point at s=0; a slider position that
+                // mapped to s=0 had a visible discontinuity vs
+                // slider=1. Default 50 → scale 1.525. Boost X / Y
+                // sliders 0..100 → -0.9..+0.9 in B² (50 → 0). Border /
+                // fill subdivisions 1..32 / 1..8.
                 projection    = safeStr(prefs, KEY_PROJECTION, "0").toIntOrNull() ?: 0,
-                // Slider 0..100 → scale 0..3.0; the shader applies
-                // tanh(r·scale/2), so scale=1.5 (slider default 50) maps
-                // unit world radius to tanh(0.75) ≈ 0.64 — well within
-                // the disk and visually a moderate squeeze.
-                hypScale      = safeInt(prefs, KEY_HYP_SCALE, 50) / 100f * 3.0f,
+                hypScale      = 0.05f + safeInt(prefs, KEY_HYP_SCALE, 50) / 100f * 2.95f,
                 hypBoostX       = (safeInt(prefs, KEY_HYP_BOOST_X, 50) - 50) / 50f * 0.9f,
                 hypBoostY       = (safeInt(prefs, KEY_HYP_BOOST_Y, 50) - 50) / 50f * 0.9f,
                 hypBorderSubdiv = safeInt(prefs, KEY_HYP_BORDER_SUBDIV, 1).coerceIn(1, 32),

@@ -18,6 +18,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # Lint emits SARIF; upload-sarif needs `security-events: write` to push
+    # it to the repo's code-scanning database. Without this the upload step
+    # logs "Resource not accessible by integration" before its
+    # `continue-on-error: true` masks the failure — visible as red text in
+    # the run output. `contents: read` keeps actions/checkout working under
+    # the explicit grant (declaring `permissions:` at all drops the default
+    # read-all that GITHUB_TOKEN normally carries).
+    permissions:
+      contents: read
+      security-events: write
+
     defaults:
       run:
         working-directory: android

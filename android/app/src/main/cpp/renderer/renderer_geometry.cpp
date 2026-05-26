@@ -431,11 +431,32 @@ bool Renderer::buildGeometry() {
             uint8_t  end;     // 0 = p1, 1 = p2
             float    angle;   // atan2 of outward tangent at this endpoint
         };
+        // Precision note: each kept edge's endpoint coords come from
+        // whichever tile contributed that edge first in the midpoint
+        // dedup above. Two tiles sharing a vertex compute it through
+        // independent substitution chains; at the default gen 6 on a
+        // ±20-world-unit patch, FP drift between the two tiles'
+        // computations of the SAME vertex accumulates to ~1e-5 world
+        // units — right at the rounding threshold of the dedup's
+        // kKeyScale=1e5. The midpoint dedup tolerated this because
+        // averaging halves the per-tile error; the endpoint hash gets
+        // the raw per-tile coords and would put "same" vertices into
+        // DIFFERENT buckets at 1e-5 precision. findNeighbour then
+        // returns nullptr for everyone and the miter falls back to
+        // butt at every joint — silently regressing the entire fix.
+        //
+        // A coarser endpoint scale (1e3 = 0.001 world units) is 100×
+        // the worst-case FP drift and well below the smallest tile
+        // edge length at any reasonable generation (~0.05 world units
+        // at gen 6, shrinking by phi per gen so still ~0.005 at gen
+        // 10). Safe clustering for shared vertices, no false-merge of
+        // truly distinct vertices.
+        constexpr float kEndpointKeyScale = 1.0e3f;
         std::unordered_map<EdgeKey, std::vector<EndRef>, EdgeKeyHash> endHash;
         endHash.reserve(keptEdges.size());
         auto endpointKey = [&](float x, float y) {
-            return EdgeKey{ static_cast<int32_t>(std::lround(x * kKeyScale)),
-                            static_cast<int32_t>(std::lround(y * kKeyScale)) };
+            return EdgeKey{ static_cast<int32_t>(std::lround(x * kEndpointKeyScale)),
+                            static_cast<int32_t>(std::lround(y * kEndpointKeyScale)) };
         };
         for (uint32_t i = 0; i < keptEdges.size(); ++i) {
             const EdgeRec& r = *keptEdges[i];

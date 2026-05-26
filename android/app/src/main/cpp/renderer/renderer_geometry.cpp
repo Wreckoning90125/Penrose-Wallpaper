@@ -476,6 +476,22 @@ bool Renderer::buildGeometry() {
             std::sort(v.begin(), v.end(),
                       [](const EndRef& a, const EndRef& b) { return a.angle < b.angle; });
         }
+        // Diagnostic: histogram of endpoint-bucket sizes. If most buckets
+        // have size 1, vertex clustering is failing (each kept edge sees
+        // its endpoint alone → no neighbour → butt fallback at every
+        // corner). Healthy Penrose: buckets of size 2-7 dominate.
+        {
+            int hist[10] = {};
+            int solitary = 0;
+            for (const auto& kv : endHash) {
+                const int n = static_cast<int>(kv.second.size());
+                if (n < 10) ++hist[n]; else ++hist[9];
+                if (n < 2) ++solitary;
+            }
+            LOGI("border-miter: %zu endpoints, solitary=%d, hist[1..7]={%d %d %d %d %d %d %d}",
+                 endHash.size(), solitary,
+                 hist[1], hist[2], hist[3], hist[4], hist[5], hist[6], hist[7]);
+        }
         // Miter computation for one corner. `tSelf` is the OUTWARD
         // tangent of THIS edge at this endpoint (away from the vertex);
         // `tNbr` is the OUTWARD tangent of the angular neighbour at the

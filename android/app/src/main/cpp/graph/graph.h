@@ -39,6 +39,32 @@ enum class NodeKind : uint16_t {
     OutRippleSpeed,
     OutBrightness,
     OutDepthAmount,
+    // Material + lighting + hyperbolic-projection targets — must stay
+    // contiguous with the four above; the target block runs
+    // OutRippleAmount .. OutHypScale.
+    OutMatRoughness,
+    OutMatMetalness,
+    OutMatSheen,
+    OutMatClearcoat,
+    OutMatAnisotropy,
+    OutMatIridescence,
+    OutMatEmissive,
+    OutMatRelief,
+    OutLightAngle,
+    OutLightElevation,
+    OutLightIntensity,
+    OutLightWarmth,
+    OutLightAmbient,
+    // Hyperbolic-projection targets — drive the τ_b boost coordinates
+    // and the world-radius scale of the Poincaré-disk mode. Inert when
+    // Settings::projection is Euclidean.
+    OutHypBoostX,
+    OutHypBoostY,
+    OutHypScale,
+
+    // Appended after the target block so existing saved-graph node indices
+    // never shift. A Source by category despite its enum position.
+    SrcPageScroll,
 
     Count_,
 };
@@ -54,9 +80,10 @@ const NodeDescriptor* descriptors();
 int                   descriptorCount();
 
 struct EvalContext {
-    float bands[8] = {};
-    float beat     = 0.0f;
-    float timeSec  = 0.0f;
+    float bands[8]  = {};
+    float beat      = 0.0f;
+    float timeSec   = 0.0f;
+    float pageScroll = 0.0f;  // home-screen horizontal scroll, 0..1
 };
 
 struct EvalResult {
@@ -64,6 +91,24 @@ struct EvalResult {
     float rippleSpeed  = 1.0f;
     float brightness   = 1.0f;
     float depthAmount  = 0.3f;
+    // Material + lighting targets — order matches the OutMat* / OutLight*
+    // NodeKind block.
+    float matRoughness   = 0.50f;
+    float matMetalness   = 0.40f;
+    float matSheen       = 0.35f;
+    float matClearcoat   = 0.45f;
+    float matAnisotropy  = 0.40f;
+    float matIridescence = 0.45f;
+    float matEmissive    = 0.60f;
+    float matRelief      = 1.05f;
+    float lightAngle     = 230.0f;
+    float lightElevation = 55.0f;
+    float lightIntensity = 1.00f;
+    float lightWarmth    = 0.50f;
+    float lightAmbient   = 0.22f;
+    float hypBoostX      = 0.0f;
+    float hypBoostY      = 0.0f;
+    float hypScale       = 1.5f;
 };
 
 // FlowNode is the common base for every modulation node in the editor.

@@ -1,15 +1,9 @@
-# For most projects, this workflow file will not need changing; you simply need
-# to commit it to your repository.
-#
-# You may wish to alter this file to override the set of languages analyzed,
-# or to provide custom queries or build logic.
-#
-# ******** NOTE ********
-# We have attempted to detect the languages in your repository. Please check
-# the `language` matrix defined below to confirm you have the correct set of
-# supported CodeQL languages.
-#
 name: "CodeQL"
+
+# Semantic security analysis. C/C++ and the workflow files scan build-free;
+# Kotlin needs a real build (build-mode none analyses Java only), and that
+# build is an Android NDK build, so the SDK + NDK are installed for it.
+# Third-party actions are pinned by full commit SHA — see android.yml.
 
 on:
   push:
@@ -18,6 +12,12 @@ on:
     branches: ["main"]
   schedule:
     - cron: "34 22 * * 4"
+
+# A new commit cancels a superseded PR run; main and scheduled runs always
+# finish so the Security tab stays current.
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   analyze:
@@ -50,21 +50,21 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
 
       # Java/Kotlin only: CodeQL traces the build below to extract Kotlin.
       # It is an Android NDK build, so the SDK + NDK must be present —
       # Gradle configuration resolves the NDK path even for a Kotlin compile.
       - name: Set up JDK 25
         if: matrix.language == 'java-kotlin'
-        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9  # v4.8.0
+        uses: actions/setup-java@f2beeb24e141e01a676f977032f5a29d81c9e27e  # v5.1.0
         with:
           distribution: temurin
           java-version: "25"
 
       - name: Set up Android SDK
         if: matrix.language == 'java-kotlin'
-        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407  # v3.2.2
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699  # v4.0.1
         with:
           packages: ""
 
@@ -80,13 +80,13 @@ jobs:
 
       - name: Set up Gradle
         if: matrix.language == 'java-kotlin'
-        uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1  # v4.4.4
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c  # v5.0.2
         with:
           gradle-version: "9.4.1"
           cache-read-only: true
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4.35.5
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -97,6 +97,6 @@ jobs:
         run: gradle --no-daemon --stacktrace assembleDebug
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4.35.5
         with:
           category: "/language:${{ matrix.language }}"

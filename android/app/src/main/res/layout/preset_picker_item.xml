@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One cell in the Material-preset picker grid. The cell IS the tile
+  thumbnail — no label, no rectangular container, no chrome. The cell
+  laid out by the grid is just the baked thumbnail (transparent
+  background, tile-shaped fill; see tools/bake_preset_thumbnails.py),
+  so the menu reads as a panel of tile-shaped keys.
+
+  stateListAnimator scales the tile to ~93% on press and springs back
+  on release, so a tap reads as physically pressing the key into the
+  screen instead of painting a rectangular grey highlight around the
+  tile. No padding inside the View so the press scaling is centered
+  on the tile silhouette.
+
+  Inter-cell spacing comes from preset_picker_grid.xml's
+  horizontalSpacing / verticalSpacing / padding so the gap between
+  tiles is uniform.
+
+  maxHeight caps the tile size on wide screens — without it, a tablet
+  dialog could stretch each cell to 200dp+ which loses the
+  "keyboard-key" feel.
+
+  contentDescription + tooltipText are set per-cell in the adapter
+  (the preset name) so screen readers and long-press users get the
+  name even though no on-screen label is rendered.
+-->
+<ImageView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/preset_thumbnail"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:adjustViewBounds="true"
+    android:maxHeight="144dp"
+    android:scaleType="fitCenter"
+    android:clickable="true"
+    android:focusable="true"
+    android:stateListAnimator="@animator/preset_tile_press" />

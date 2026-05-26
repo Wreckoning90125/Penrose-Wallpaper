@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <memory>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
@@ -44,6 +45,23 @@ const NodeDescriptor kDescriptors[] = {
     { NodeKind::OutRippleSpeed,  "Ripple speed",        "Target"   },
     { NodeKind::OutBrightness,   "Brightness",          "Target"   },
     { NodeKind::OutDepthAmount,  "Depth",               "Target"   },
+    { NodeKind::OutMatRoughness, "Roughness",           "Target"   },
+    { NodeKind::OutMatMetalness, "Metalness",           "Target"   },
+    { NodeKind::OutMatSheen,     "Sheen",               "Target"   },
+    { NodeKind::OutMatClearcoat, "Clearcoat",           "Target"   },
+    { NodeKind::OutMatAnisotropy,"Anisotropy",          "Target"   },
+    { NodeKind::OutMatIridescence,"Iridescence",        "Target"   },
+    { NodeKind::OutMatEmissive,  "Emissive glow",       "Target"   },
+    { NodeKind::OutMatRelief,    "Surface relief",      "Target"   },
+    { NodeKind::OutLightAngle,     "Light angle",       "Target"   },
+    { NodeKind::OutLightElevation, "Light elevation",   "Target"   },
+    { NodeKind::OutLightIntensity, "Light intensity",   "Target"   },
+    { NodeKind::OutLightWarmth,     "Light warmth",     "Target"   },
+    { NodeKind::OutLightAmbient,    "Ambient level",    "Target"   },
+    { NodeKind::OutHypBoostX,      "Hyperbolic boost X","Target"   },
+    { NodeKind::OutHypBoostY,      "Hyperbolic boost Y","Target"   },
+    { NodeKind::OutHypScale,       "Hyperbolic scale",  "Target"   },
+    { NodeKind::SrcPageScroll,   "Home-screen scroll",  "Source"   },
 };
 static_assert(sizeof(kDescriptors) / sizeof(kDescriptors[0])
                   == static_cast<size_t>(NodeKind::Count_),
@@ -56,21 +74,110 @@ inline float clamp01(float v) { return std::clamp(v, 0.0f, 1.0f); }
 // per-instance pin layout + behaviour rather than a class explosion.
 // -----------------------------------------------------------------------------
 
+// The eight audio-band sources, ordered sub-bass -> air.
+inline bool isBandKind(NodeKind k) {
+    return k >= NodeKind::SrcBand0 && k <= NodeKind::SrcBand7;
+}
+
+// Header colours for the band nodes, low to high — a spectrum ramp
+// (indigo -> teal -> green -> amber -> red) so a glance reads frequency.
+const ImU32 kBandHeader[8] = {
+    IM_COL32( 63,  68, 156, 255),
+    IM_COL32( 54, 108, 178, 255),
+    IM_COL32( 48, 152, 168, 255),
+    IM_COL32( 56, 158,  96, 255),
+    IM_COL32(120, 164,  58, 255),
+    IM_COL32(196, 158,  52, 255),
+    IM_COL32(202, 110,  46, 255),
+    IM_COL32(190,  68,  72, 255),
+};
+
+// Pixel width of the widest band label. Each band node pads its body to
+// this so the eight render as one uniform-width column.
+inline float widestBandLabelWidth() {
+    float w = 0.0f;
+    for (int b = 0; b < 8; ++b) {
+        const auto k = static_cast<NodeKind>(
+            static_cast<int>(NodeKind::SrcBand0) + b);
+        w = std::max(w, ImGui::CalcTextSize(descriptor(k).label).x);
+    }
+    return w;
+}
+
+// Pixel width of the widest Target label. Used by every TargetNode to
+// pad its body so the right-side stack is uniform-width regardless of
+// which Targets the user has wired in. Iterates the contiguous Target
+// block in NodeKind (OutRippleAmount .. OutHypScale).
+inline float widestTargetLabelWidth() {
+    float w = 0.0f;
+    const int first = static_cast<int>(NodeKind::OutRippleAmount);
+    const int last  = static_cast<int>(NodeKind::OutHypScale);
+    for (int i = first; i <= last; ++i) {
+        w = std::max(w, ImGui::CalcTextSize(
+            descriptor(static_cast<NodeKind>(i)).label).x);
+    }
+    return w;
+}
+
 class SourceNode : public FlowNode {
 public:
     SourceNode(NodeKind k, Graph* g) : FlowNode(k, g) {
         setTitle(descriptor(k).label);
         if (k == NodeKind::SrcConstant) p0 = 0.5f;
+        // Colour-code the band nodes by frequency. Other sources keep the
+        // library default (addNode assigns it when the ctor sets none).
+        if (isBandKind(k)) {
+            const int b = static_cast<int>(k)
+                        - static_cast<int>(NodeKind::SrcBand0);
+            setStyle(std::make_shared<ImFlow::NodeStyle>(
+                kBandHeader[b], ImColor(233, 241, 244, 255), 6.5f));
+        }
         addOUT<float>("out")->behaviour([this] { return sample(); });
     }
 
-    // Inline slider for SrcConstant — every other source pulls its
-    // value from the EvalContext (audio bands / beat / time) and has
-    // nothing to tune.
+    // Band nodes pad their body to a shared width; SrcConstant gets an
+    // inline value display + drag-bar + step buttons; the remaining
+    // sources (beat / time / page scroll) pull straight from the
+    // EvalContext and have nothing to tune.
     void draw() override {
+        if (isBandKind(kind_)) {
+            ImGui::Dummy(ImVec2(widestBandLabelWidth(), 0.0f));
+            return;
+        }
         if (kind_ != NodeKind::SrcConstant) return;
-        ImGui::SetNextItemWidth(160.0f);
-        ImGui::SliderFloat("##value", &p0, 0.0f, 1.0f, "value %.2f");
+        // Large, unambiguous value readout so the current setting is
+        // legible at a glance — the old slider format string buried
+        // the value inside a 12px-tall track and a touchscreen drag on
+        // a tile that small was unreliable.
+        ImGui::Text("Value  %.3f", static_cast<double>(p0));
+        // DragFloat accepts a drag anywhere on the bar (not just the
+        // thumb) which is the touch-friendly way to nudge a value. The
+        // range goes well past 0..1 so this node is useful with
+        // Multiply / ScaleBias for amplifying upstream signals, not
+        // just as a 0..1 mixer level.
+        ImGui::SetNextItemWidth(180.0f);
+        ImGui::DragFloat("##value", &p0, 0.005f, -10.0f, 10.0f, "%.3f");
+        // Coarse / fine step buttons — the only way to set a precise
+        // value without an OS soft keyboard. Pairs cover ±1 and ±0.1
+        // which is enough to land any common value (0, 0.25, 0.5, 1,
+        // 2, π/4...) in a few taps.
+        const ImVec2 kBtn(32.0f, 28.0f);
+        if (ImGui::Button("-1",  kBtn)) p0 -= 1.0f;
+        ImGui::SameLine();
+        if (ImGui::Button("-.1", kBtn)) p0 -= 0.1f;
+        ImGui::SameLine();
+        if (ImGui::Button("+.1", kBtn)) p0 += 0.1f;
+        ImGui::SameLine();
+        if (ImGui::Button("+1",  kBtn)) p0 += 1.0f;
+        // Common presets — single tap snaps to a familiar value.
+        if (ImGui::Button("0",   kBtn)) p0 = 0.0f;
+        ImGui::SameLine();
+        if (ImGui::Button("0.5", kBtn)) p0 = 0.5f;
+        ImGui::SameLine();
+        if (ImGui::Button("1",   kBtn)) p0 = 1.0f;
+        ImGui::SameLine();
+        if (ImGui::Button("2",   kBtn)) p0 = 2.0f;
+        p0 = std::clamp(p0, -10.0f, 10.0f);
     }
 
 private:
@@ -85,9 +192,10 @@ private:
             case NodeKind::SrcBand5:    return c.bands[5];
             case NodeKind::SrcBand6:    return c.bands[6];
             case NodeKind::SrcBand7:    return c.bands[7];
-            case NodeKind::SrcBeat:     return c.beat;
-            case NodeKind::SrcTime:     return c.timeSec;
-            case NodeKind::SrcConstant: return p0;
+            case NodeKind::SrcBeat:       return c.beat;
+            case NodeKind::SrcTime:       return c.timeSec;
+            case NodeKind::SrcPageScroll: return c.pageScroll;
+            case NodeKind::SrcConstant:   return p0;
             default:                    return 0.0f;
         }
     }
@@ -192,6 +300,11 @@ public:
     TargetNode(NodeKind k, Graph* g) : FlowNode(k, g) {
         setTitle(descriptor(k).label);
         addIN<float>("in", 0.0f, ImFlow::ConnectionFilter::SameType());
+    }
+    // Pad each Target node body to the widest Target label so the
+    // right-side stack reads as one uniform column.
+    void draw() override {
+        ImGui::Dummy(ImVec2(widestTargetLabelWidth(), 0.0f));
     }
     float pull() { return getInVal<float>("in"); }
 };
@@ -308,17 +421,23 @@ Graph::Graph() {
     // open. Let the library own its window; we just position the
     // toolbar / parameter sheet on top afterwards.
     //
-    // Bump the initial zoom so the default layout reads at thumb-
-    // comfortable size on a phone — at zoom=1 the per-node text and
-    // socket targets are small enough that interaction feels fiddly.
-    // ImNodeFlow's m_scale latches from config().default_zoom at
-    // first ContainedContext::begin(), so setting this BEFORE the
-    // first update() call (i.e. here, in the ctor) is correct.
-    // Clamped at the library's zoom_max (2.0) by ImNodeFlow itself
-    // on pinch; the user can pinch down to zoom_min (0.3) if they
-    // want to see more of the canvas at once.
+    // ImNodeFlow's live zoom (ContainedContext::m_scale) is latched from
+    // default_zoom once, when the ContainedContext is constructed — which
+    // happens before this ctor body runs. Raising default_zoom here does
+    // NOT change the editor scale; ContainedContext::begin() never re-reads
+    // it. default_zoom only retargets the reset-zoom key, which a
+    // touchscreen never presses. The editor therefore runs at scale 1.0;
+    // node legibility is the layout's job (graph_ui.cpp arrangeNodes plus
+    // the per-node sizing in this file), not a canvas zoom. Kept explicit
+    // and equal to the real scale so a stray reset-zoom can't desync it.
     auto& cfg = handler_.getGrid().config();
-    cfg.default_zoom = 1.25f;
+    cfg.default_zoom = 1.0f;
+    // ContainedContext fills its BeginChild with this colour as the
+    // canvas backing. Drop the alpha so the wallpaper shows through the
+    // editor while it is open — the user can see what audio / clock /
+    // page-scroll modulation is doing to the tiles in real time while
+    // wiring the graph, instead of staring at an opaque slab.
+    cfg.color = IM_COL32(28, 34, 40, 130);
     // Leave scroll_button at ImNodeFlow's default (middle mouse). A
     // touchscreen never synthesises a middle button, so the canvas
     // never pans and the scroll offset stays fixed at (0,0). The
@@ -403,6 +522,10 @@ uint64_t Graph::addNode(NodeKind kind, float x, float y) {
     return spawn(handler_, kind, ImVec2(x, y), this);
 }
 
+// The contiguous Target block, OutRippleAmount .. OutHypScale inclusive.
+constexpr int kTargetCount = static_cast<int>(NodeKind::OutHypScale)
+                           - static_cast<int>(NodeKind::OutRippleAmount) + 1;
+
 void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
     ctx_ = ctx;
     // OutPin::val() memoizes per-frame by adding a marker to this list
@@ -410,45 +533,56 @@ void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
     // so frame N+1 actually recomputes instead of replaying frame N.
     handler_.get_recursion_blacklist().clear();
 
-    float ripA = 0.0f, ripS = 0.0f, bri = 0.0f, dep = 0.0f;
-    bool seenA = false, seenS = false, seenB = false, seenD = false;
+    // Accumulate every connected Target by kind index within the block.
+    float add[kTargetCount]  = {};
+    bool  seen[kTargetCount] = {};
+    const int firstTarget = static_cast<int>(NodeKind::OutRippleAmount);
     for (auto& [uid, node] : handler_.getNodes()) {
         // Skip nodes the user deleted this frame — destroy() only marks
         // them; handler_.update() sweeps them afterwards. Evaluating one
         // would feed a stale target for the frame between the two.
         if (!node || node->toDestroy()) continue;
         auto* fn = static_cast<FlowNode*>(node.get());
-        // Targets are the last four kinds in the registry; a single
-        // range check is cheaper than a string-compare on category
-        // and runs once per node per frame.
-        if (fn->kind() < NodeKind::OutRippleAmount) continue;
+        const int ti = static_cast<int>(fn->kind()) - firstTarget;
+        if (ti < 0 || ti >= kTargetCount) continue;  // not a Target
         // Skip Targets whose input pin has no upstream link. An
         // unconnected target should LEAVE the slider baseline alone,
-        // not push it to zero. Without this, the default graph
-        // (which ships with disconnected Target nodes for each of
-        // ripple/brightness/depth) silences brightness on every
-        // frame and the wallpaper renders as black fills under the
-        // borders.
+        // not push it to zero — the default graph ships disconnected
+        // Target nodes, and zeroing brightness would render black.
         const auto& ins = node->getIns();
         if (ins.empty() || !ins[0] || !ins[0]->isConnected()) continue;
-        const float v = static_cast<TargetNode*>(fn)->pull();
-        switch (fn->kind()) {
-            case NodeKind::OutRippleAmount: ripA += v; seenA = true; break;
-            case NodeKind::OutRippleSpeed:  ripS += v; seenS = true; break;
-            case NodeKind::OutBrightness:   bri  += v; seenB = true; break;
-            case NodeKind::OutDepthAmount:  dep  += v; seenD = true; break;
-            default: break;
-        }
+        add[ti]  += static_cast<TargetNode*>(fn)->pull();
+        seen[ti]  = true;
     }
-    // Additive composition: the slider baseline is what the user
-    // chose; the graph ADDS modulation on top. Targets writing 0
-    // (e.g. silent audio band through ScaleBias) leave the slider
-    // value unchanged instead of zeroing the wallpaper out. Clamp
-    // ranges are the same final-output limits the shader expects.
-    if (seenA) out.rippleAmount = std::clamp(out.rippleAmount + ripA, 0.0f, 1.0f);
-    if (seenS) out.rippleSpeed  = std::clamp(out.rippleSpeed  + ripS, 0.1f, 3.0f);
-    if (seenB) out.brightness   = std::clamp(out.brightness   + bri,  0.0f, 2.0f);
-    if (seenD) out.depthAmount  = std::clamp(out.depthAmount  + dep,  0.0f, 1.0f);
+
+    // Additive composition: the slider baseline is what the user chose;
+    // the graph ADDS modulation on top. An unconnected (or zero-writing)
+    // target leaves the baseline untouched. `slot` and the clamp ranges
+    // are in NodeKind target order.
+    float* slot[kTargetCount] = {
+        &out.rippleAmount, &out.rippleSpeed, &out.brightness, &out.depthAmount,
+        &out.matRoughness, &out.matMetalness, &out.matSheen, &out.matClearcoat,
+        &out.matAnisotropy, &out.matIridescence, &out.matEmissive, &out.matRelief,
+        &out.lightAngle, &out.lightElevation, &out.lightIntensity,
+        &out.lightWarmth, &out.lightAmbient,
+        &out.hypBoostX, &out.hypBoostY, &out.hypScale,
+    };
+    // Hyperbolic boost clamped to |b| <= 0.92 component-wise so a runaway
+    // graph can't drive the τ_b transform near the disk boundary where it
+    // becomes numerically singular. Scale stays positive — negative would
+    // invert the radial map sign and put the world outside the disk.
+    const float lo[kTargetCount] = {
+        0.0f, 0.1f, 0.0f, 0.0f,  0.05f, 0.0f, 0.0f, 0.0f,  -1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+        -0.92f, -0.92f, 0.05f,
+    };
+    const float hi[kTargetCount] = {
+        1.0f, 3.0f, 2.0f, 1.0f,  1.0f,  1.0f, 2.0f, 1.0f,   1.0f, 1.0f, 2.0f, 2.0f,
+        360.0f, 90.0f, 2.0f, 1.0f, 1.0f,
+        0.92f, 0.92f, 3.0f,
+    };
+    for (int i = 0; i < kTargetCount; ++i)
+        if (seen[i]) *slot[i] = std::clamp(*slot[i] + add[i], lo[i], hi[i]);
 }
 
 // -----------------------------------------------------------------------------

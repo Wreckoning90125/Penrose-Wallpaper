@@ -348,18 +348,51 @@ void Renderer::drawFrame() {
     {
         graph::EvalContext gctx{};
         for (int i = 0; i < 8; ++i) gctx.bands[i] = audioBands[i];
-        gctx.beat    = audioBeat;
-        gctx.timeSec = time_;
+        gctx.beat       = audioBeat;
+        gctx.timeSec    = time_;
+        gctx.pageScroll = pageOffset_;
         graph::EvalResult gres{};
-        gres.rippleAmount = settings_.rippleAmount;
-        gres.rippleSpeed  = settings_.rippleSpeed;
-        gres.brightness   = settings_.brightness;
-        gres.depthAmount  = settings_.depthAmount;
+        gres.rippleAmount   = settings_.rippleAmount;
+        gres.rippleSpeed    = settings_.rippleSpeed;
+        gres.brightness     = settings_.brightness;
+        gres.depthAmount    = settings_.depthAmount;
+        gres.matRoughness   = settings_.matRoughness;
+        gres.matMetalness   = settings_.matMetalness;
+        gres.matSheen       = settings_.matSheen;
+        gres.matClearcoat   = settings_.matClearcoat;
+        gres.matAnisotropy  = settings_.matAnisotropy;
+        gres.matIridescence = settings_.matIridescence;
+        gres.matEmissive    = settings_.matEmissive;
+        gres.matRelief      = settings_.matRelief;
+        gres.lightAngle     = settings_.lightAngle;
+        gres.lightElevation = settings_.lightElevation;
+        gres.lightIntensity = settings_.lightIntensity;
+        gres.lightWarmth    = settings_.lightWarmth;
+        gres.lightAmbient   = settings_.lightAmbient;
+        gres.hypBoostX      = settings_.hypBoostX;
+        gres.hypBoostY      = settings_.hypBoostY;
+        gres.hypScale       = settings_.hypScale;
         graph_.evaluate(gctx, gres);
         fxRippleAmount_ = gres.rippleAmount;
         fxRippleSpeed_  = gres.rippleSpeed;
         fxBrightness_   = gres.brightness;
         fxDepthAmount_  = gres.depthAmount;
+        fxMatRoughness_   = gres.matRoughness;
+        fxMatMetalness_   = gres.matMetalness;
+        fxMatSheen_       = gres.matSheen;
+        fxMatClearcoat_   = gres.matClearcoat;
+        fxMatAnisotropy_  = gres.matAnisotropy;
+        fxMatIridescence_ = gres.matIridescence;
+        fxMatEmissive_    = gres.matEmissive;
+        fxMatRelief_      = gres.matRelief;
+        fxLightAngle_     = gres.lightAngle;
+        fxLightElevation_ = gres.lightElevation;
+        fxLightIntensity_ = gres.lightIntensity;
+        fxLightWarmth_    = gres.lightWarmth;
+        fxLightAmbient_   = gres.lightAmbient;
+        fxHypBoostX_      = gres.hypBoostX;
+        fxHypBoostY_      = gres.hypBoostY;
+        fxHypScale_       = gres.hypScale;
     }
 
     // Lazily bring ImGui up only when the editor is actually wanted.
@@ -413,6 +446,39 @@ void Renderer::drawFrame() {
         std::memcpy(base + offsetof(PaletteUbo, effects),    effects,    sizeof(effects));
         std::memcpy(base + offsetof(PaletteUbo, audioBands), bandsBlock, sizeof(bandsBlock));
         std::memcpy(base + offsetof(PaletteUbo, audioBeat),  beatBlock,  sizeof(beatBlock));
+
+        // Material rows — the eight graph-modulated controls over the
+        // static MaterialParams defaults, rewritten every frame so audio /
+        // clock / page-scroll modulation reaches the shader.
+        MaterialParams fxMat{};
+        fxMat.roughBase     = fxMatRoughness_;
+        // Metalness slider drives the BASE term (uniform metalness)
+        // rather than the per-tile-type MOD it used to — a slider
+        // labelled "Metalness" should make the wallpaper metallic, not
+        // just create variation between tile kinds. The variation lives
+        // on its own settings_.matMetalMod knob now (default 0).
+        fxMat.metalBase     = fxMatMetalness_;
+        fxMat.sheen         = fxMatSheen_;
+        fxMat.clearcoat     = fxMatClearcoat_;
+        fxMat.anisotropy    = fxMatAnisotropy_;
+        fxMat.iridescence   = fxMatIridescence_;
+        fxMat.emissive      = fxMatEmissive_;
+        fxMat.bevelStrength = fxMatRelief_;
+        // Direct-from-settings: per-preset characteristic colours
+        // (sheen tint + iridescent film range) and the seam / per-tile
+        // variation knobs. None are graph-modulated today.
+        fxMat.sheenColor[0] = settings_.matSheenColorR;
+        fxMat.sheenColor[1] = settings_.matSheenColorG;
+        fxMat.sheenColor[2] = settings_.matSheenColorB;
+        fxMat.iridThickMin  = settings_.matIridThickMin;
+        fxMat.iridThickMax  = settings_.matIridThickMax;
+        fxMat.roughMod      = settings_.matRoughMod;
+        fxMat.metalMod      = settings_.matMetalMod;
+        applyLightControls(fxMat, fxLightAngle_, fxLightElevation_,
+                           fxLightIntensity_, fxLightWarmth_, fxLightAmbient_);
+        writeMaterialRows(
+            reinterpret_cast<float*>(base + offsetof(PaletteUbo, matNormal)),
+            fxMat);
     }
 
     FrameSync& f = frames_[currentFrame_];
@@ -510,14 +576,51 @@ void Renderer::drawFrame() {
     // Aspect comes from the visible screen window; sX/sY shrink by the
     // surface-to-screen ratio so the visible region (the middle slice of
     // an oversized side-scroll surface) carries the full tiling.
-    const float gw = std::max(geomMaxX_ - geomMinX_, 1e-3f);
-    const float gh = std::max(geomMaxY_ - geomMinY_, 1e-3f);
+    //
+    // Hyperbolic push-constant values are computed once here and shared
+    // between the view-fit step and the PushBlock below. Boost b is
+    // clamped to |b| ≤ 0.92 to keep the τ_b denominator bounded; scale
+    // ≥ 1e-3 so a runaway graph can't collapse the world via tanh(0).
+    const float hypScaleEff = std::max(fxHypScale_, 1e-3f);
+    float hypBoostXEff = fxHypBoostX_;
+    float hypBoostYEff = fxHypBoostY_;
+    float bMag = std::sqrt(hypBoostXEff * hypBoostXEff +
+                           hypBoostYEff * hypBoostYEff);
+    {
+        constexpr float bmClamp = 0.92f;
+        if (bMag > bmClamp) {
+            const float bsc = bmClamp / bMag;
+            hypBoostXEff *= bsc;
+            hypBoostYEff *= bsc;
+            bMag = bmClamp;
+        }
+    }
+
     const float surfW = (float)swapchainExtent_.width;
     const float surfH = (float)swapchainExtent_.height;
     const float screenW = (screenW_ > 0) ? (float)screenW_ : surfW;
     const float screenH = (screenH_ > 0) ? (float)screenH_ : surfH;
     const float aspect = screenW / screenH;
-    float baseScale = std::min(2.0f / gw, 2.0f / gh) * 0.95f;
+    float baseScale;
+    if (settings_.projection == Projection::PoincareDisk) {
+        // Auto-fit the projected and boosted tiling to the screen so
+        // the slider controls compression, not visibility. The shader
+        // projects the world point at distance r_max to disk radius
+        // tanh(r_max · hypScale / 2); applying τ_b can push that
+        // further out — max |τ_b(z)| over |z| ≤ projR is the Möbius
+        // sum (projR + |b|) / (1 + projR·|b|), attained when z is
+        // parallel to b. baseScale = 1/postR maps that to clip ±1, so
+        // the projected tiling stays on-screen at any boost. r_max is
+        // the true farthest |vertex| over the actual emitted geometry
+        // (geomRmax_, set in buildGeometry), not the bbox corner.
+        const float projR = std::tanh(geomRmax_ * hypScaleEff * 0.5f);
+        const float postR = (projR + bMag) / (1.0f + projR * bMag);
+        baseScale = 1.0f / std::max(postR, 1e-3f);
+    } else {
+        const float gw = std::max(geomMaxX_ - geomMinX_, 1e-3f);
+        const float gh = std::max(geomMaxY_ - geomMinY_, 1e-3f);
+        baseScale = std::min(2.0f / gw, 2.0f / gh) * 0.95f;
+    }
     float sX = (aspect >= 1.0f ? baseScale / aspect : baseScale) * view_.zoom;
     float sY = (aspect >= 1.0f ? baseScale          : baseScale * aspect) * view_.zoom;
     sX *= (screenW / surfW);
@@ -530,9 +633,17 @@ void Renderer::drawFrame() {
     // Affine model→clip. Model space is math-convention (y-up); Vulkan
     // clip is y-down. The tilings are symmetric so passing coords
     // through unflipped looks identical either way.
+    //
+    // Hyperbolic mode: the shader pre-projects each world point through
+    // E² → B² (radial hyperbolic-radius map) and τ_b (the B² boost)
+    // before this affine view matrix takes the result to clip space.
     PushBlock pc{};
     pc.view0x =  cosR * sX; pc.view0y = -sinR * sY; pc.view0z = tX;
     pc.view1x =  sinR * sX; pc.view1y =  cosR * sY; pc.view1z = tY;
+    pc.hypBoostX  = hypBoostXEff;
+    pc.hypBoostY  = hypBoostYEff;
+    pc.hypScale   = hypScaleEff;
+    pc.projection = (settings_.projection == Projection::PoincareDisk) ? 1.0f : 0.0f;
 
     vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             pipelineLayout_, 0, 1, &descSet_, 0, nullptr);

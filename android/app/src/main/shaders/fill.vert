@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 inPos;
 layout(location = 1) in uint inColorIdx;
@@ -10,19 +11,11 @@ layout(location = 5) in vec4 inTileMat;
 layout(push_constant) uniform PC {
     vec4 view0;
     vec4 view1;
+    vec4 hyp;     // x=hypBoostX, y=hypBoostY, z=hypScale, w=projection (0=E², 1=B²)
 } pc;
 
-layout(set = 0, binding = 0, std140) uniform Palette {
-    vec4 palette[16];
-    vec4 borderColor;
-    vec4 bgColor;
-    uvec4 flags;
-    vec4 anim;       // x=time, y=rippleAmount, z=waveSymmetry, w=pageOffset
-    vec4 borderGeom;
-    vec4 effects;    // x=brightness, y=depthAmount, z=rippleSpeed, w=rippleKind
-    vec4 audioBands[2];
-    vec4 audioBeat;
-} ubo;
+#include "uniforms.glsl"
+#include "hyperbolic.glsl"
 
 layout(location = 0) flat out uint vColorIdx;
 layout(location = 1) flat out float vRipple;
@@ -111,8 +104,17 @@ void main() {
         }
     }
 
-    float x = pc.view0.x * displacedPos.x + pc.view0.y * displacedPos.y + pc.view0.z;
-    float y = pc.view1.x * displacedPos.x + pc.view1.y * displacedPos.y + pc.view1.z;
+    // Poincaré-disk projection — gated on the projection flag in the
+    // hyp push constant. The shared projectHyp() helper in
+    // hyperbolic.glsl runs the radial map E² → B² then τ_b in B²; the
+    // affine view matrix below takes the resulting disk point to clip
+    // space. Euclidean mode skips the call.
+    vec2 world = (pc.hyp.w > 0.5)
+        ? projectHyp(displacedPos, pc.hyp.xy, pc.hyp.z)
+        : displacedPos;
+
+    float x = pc.view0.x * world.x + pc.view0.y * world.y + pc.view0.z;
+    float y = pc.view1.x * world.x + pc.view1.y * world.y + pc.view1.z;
     gl_Position = vec4(x, y, 0.0, 1.0);
 
     vRipple = phiCenter * amp * 0.5;

@@ -2,18 +2,39 @@ package com.penrose.wallpaper
 
 import android.app.WallpaperManager
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.HapticFeedbackConstants
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ArrayAdapter
+import android.widget.GridView
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.widget.TooltipCompat
+import androidx.core.content.ContextCompat
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.SeekBarPreference
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.penrose.wallpaper.audio.AudioControlsPreference
 import com.penrose.wallpaper.audio.AudioPlaybackService
+import com.penrose.wallpaper.preset.MaterialPreset
+import com.penrose.wallpaper.preset.MaterialPresets
 import com.penrose.wallpaper.preset.PresetStore
 
 /**
@@ -34,6 +55,8 @@ class SettingsFragment : PreferenceFragmentCompat(),
         Color(R.xml.preferences_color),
         Borders(R.xml.preferences_borders),
         Motion(R.xml.preferences_motion),
+        Projection(R.xml.preferences_projection),
+        Material(R.xml.preferences_material),
         Background(R.xml.preferences_background),
         Audio(R.xml.preferences_audio),
         CustomPalette(R.xml.preferences_custom_palette),
@@ -50,6 +73,13 @@ class SettingsFragment : PreferenceFragmentCompat(),
             } catch (_: SecurityException) { }
             AudioPlaybackService.start(requireContext().applicationContext, uri.toString())
             updateAudioSummary()
+            // Service may have just come up. If we were on the Audio
+            // screen with no live controller (initial connect failed
+            // because the service wasn't running), connect now so the
+            // controls row populates from the freshly-started session.
+            if (currentScreen == ScreenKey.Audio && mediaController == null) {
+                connectMediaController()
+            }
         }
     }
 
@@ -59,6 +89,14 @@ class SettingsFragment : PreferenceFragmentCompat(),
     }
 
     private fun loadScreen(screen: ScreenKey) {
+        // Release the audio MediaController if we're leaving the Audio
+        // screen — its AudioControlsPreference instance is about to be
+        // destroyed by setPreferencesFromResource, and we don't want
+        // the controller's listener + position poll firing against a
+        // stale prefkey lookup.
+        if (currentScreen == ScreenKey.Audio && screen != ScreenKey.Audio) {
+            releaseMediaController()
+        }
         currentScreen = screen
         setPreferencesFromResource(screen.resId, null)
         when (screen) {
@@ -78,9 +116,15 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 bindBack()
                 bindAudioRowActions()
                 updateAudioSummary()
+                connectMediaController()
+            }
+            ScreenKey.Material -> {
+                bindBack()
+                bindMaterialPresetRow()
             }
             ScreenKey.Borders,
             ScreenKey.Motion,
+            ScreenKey.Projection,
             ScreenKey.Background,
             ScreenKey.CustomPalette -> bindBack()
         }
@@ -90,13 +134,21 @@ class SettingsFragment : PreferenceFragmentCompat(),
         super.onResume()
         preferenceManager.sharedPreferences
             ?.registerOnSharedPreferenceChangeListener(this)
-        if (currentScreen == ScreenKey.Audio) updateAudioSummary()
+        if (currentScreen == ScreenKey.Audio) {
+            updateAudioSummary()
+            connectMediaController()
+        }
     }
 
     override fun onPause() {
         super.onPause()
         preferenceManager.sharedPreferences
             ?.unregisterOnSharedPreferenceChangeListener(this)
+        // Release the audio MediaController so the binder doesn't leak
+        // while the fragment is off-screen. The audio service itself
+        // keeps playing; only the in-app UI loses its tap into the
+        // session until the fragment resumes.
+        releaseMediaController()
     }
 
     override fun onSharedPreferenceChanged(sp: SharedPreferences?, key: String?) {
@@ -138,6 +190,12 @@ class SettingsFragment : PreferenceFragmentCompat(),
         findPreference<Preference>("nav_motion")?.setOnPreferenceClickListener {
             loadScreen(ScreenKey.Motion); true
         }
+        findPreference<Preference>("nav_projection")?.setOnPreferenceClickListener {
+            loadScreen(ScreenKey.Projection); true
+        }
+        findPreference<Preference>("nav_material")?.setOnPreferenceClickListener {
+            loadScreen(ScreenKey.Material); true
+        }
         findPreference<Preference>("nav_background")?.setOnPreferenceClickListener {
             loadScreen(ScreenKey.Background); true
         }
@@ -154,14 +212,234 @@ class SettingsFragment : PreferenceFragmentCompat(),
         findPreference<Preference>("audio_stop")?.setOnPreferenceClickListener {
             AudioPlaybackService.stop(requireContext().applicationContext)
             updateAudioSummary()
+            // The service tears down — our controller will see
+            // playbackState → STATE_IDLE next tick, but we also clear
+            // the visible state immediately so the row doesn't sit
+            // showing the last track until the listener fires.
+            findPreference<AudioControlsPreference>("audio_controls")
+                ?.bind(false, false, null, null, null, 0L, 0L)
             true
         }
+    }
+
+    // --- MediaController for the live audio-controls row -----------------
+    //
+    // A MediaController bound to the running AudioPlaybackService gives the
+    // settings UI the same view of playback the system media UI has: title,
+    // artist, embedded artwork, play/pause state, position, duration. The
+    // controller is connected when the Audio screen comes into the
+    // foreground and released on pause / leave-screen so the binder
+    // doesn't leak.
+
+    private var mediaController: MediaController? = null
+    private var mediaControllerFuture:
+        com.google.common.util.concurrent.ListenableFuture<MediaController>? = null
+    private val positionPoll = Handler(Looper.getMainLooper())
+    private val positionTick = object : Runnable {
+        override fun run() {
+            pushControllerStateToPref()
+            // Half-second cadence matches the SeekBar's per-second
+            // granularity without burning the main thread.
+            positionPoll.postDelayed(this, 500L)
+        }
+    }
+    private val controllerListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) { pushControllerStateToPref() }
+        override fun onMediaMetadataChanged(metadata: MediaMetadata) { pushControllerStateToPref() }
+        override fun onPlaybackStateChanged(playbackState: Int) { pushControllerStateToPref() }
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) { pushControllerStateToPref() }
+    }
+
+    private fun connectMediaController() {
+        if (mediaController != null || mediaControllerFuture != null) return
+        val ctx = requireContext().applicationContext
+        val token = SessionToken(ctx, ComponentName(ctx, AudioPlaybackService::class.java))
+        val future = MediaController.Builder(ctx, token).buildAsync()
+        mediaControllerFuture = future
+        future.addListener({
+            // If the screen flipped away before connect, drop the result.
+            if (mediaControllerFuture !== future) return@addListener
+            mediaControllerFuture = null
+            val controller = try {
+                future.get()
+            } catch (_: Exception) {
+                // Service not running — bind the empty state on the
+                // controls row so the user sees "No file selected".
+                findPreference<AudioControlsPreference>("audio_controls")
+                    ?.bind(false, false, null, null, null, 0L, 0L)
+                null
+            } ?: return@addListener
+            mediaController = controller
+            wireControlsPref(controller)
+            controller.addListener(controllerListener)
+            pushControllerStateToPref()
+            positionPoll.removeCallbacks(positionTick)
+            positionPoll.post(positionTick)
+        }, ContextCompat.getMainExecutor(ctx))
+    }
+
+    private fun releaseMediaController() {
+        positionPoll.removeCallbacks(positionTick)
+        mediaControllerFuture?.let {
+            // If we haven't finished connecting, release the future so
+            // the resulting controller (if any) gets cleaned up
+            // immediately when it arrives.
+            MediaController.releaseFuture(it)
+        }
+        mediaControllerFuture = null
+        mediaController?.let {
+            it.removeListener(controllerListener)
+            it.release()
+        }
+        mediaController = null
+    }
+
+    private fun wireControlsPref(controller: MediaController) {
+        val pref = findPreference<AudioControlsPreference>("audio_controls") ?: return
+        pref.onPlayPauseClick = {
+            if (controller.isPlaying) controller.pause() else controller.play()
+        }
+        pref.onSeek = { posMs -> controller.seekTo(posMs) }
+    }
+
+    private fun pushControllerStateToPref() {
+        val pref = findPreference<AudioControlsPreference>("audio_controls") ?: return
+        val c = mediaController
+        if (c == null || c.currentMediaItem == null) {
+            pref.bind(false, false, null, null, null, 0L, 0L)
+            return
+        }
+        val md = c.mediaMetadata
+        val art = md.artworkData?.let { bytes ->
+            try { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) } catch (_: Exception) { null }
+        }
+        val duration = c.duration.let { if (it < 0) 0L else it }
+        pref.bind(
+            hasTrack      = true,
+            isPlaying     = c.isPlaying,
+            title         = md.title?.toString(),
+            artist        = md.artist?.toString(),
+            artworkBitmap = art,
+            positionMs    = c.currentPosition.coerceAtLeast(0L),
+            durationMs    = duration,
+        )
     }
 
     private fun bindBack() {
         findPreference<Preference>("nav_back")?.setOnPreferenceClickListener {
             loadScreen(ScreenKey.Main)
             true
+        }
+    }
+
+    /**
+     * The Material-preset row. Opens a 2-column grid of tile thumbnails
+     * (see `tools/bake_preset_thumbnails.py` — transparent background,
+     * tile-shaped fill). Each cell IS the tile: no label, no
+     * rectangular container, no chrome around it. The tile is a
+     * keyboard-key whose "hole" is the tile shape, and tapping it
+     * applies the preset — a one-shot write to SharedPreferences,
+     * the Material screen re-inflates so every slider re-binds to the
+     * new values, and the dialog dismisses. There is no stored
+     * "active preset" state.
+     *
+     * The dialog is built with MaterialAlertDialogBuilder so the
+     * surface, title, button and corners follow Material 3 styling
+     * from the host theme; the cancel button hooks the system's
+     * cancel string.
+     *
+     * Press feedback is @animator/preset_tile_press attached via
+     * android:stateListAnimator in preset_picker_item.xml — the tile
+     * scales to ~93% on press and springs back, so the cell reads as
+     * pressing into the screen. No colour highlight is drawn behind
+     * the tile.
+     *
+     * NOTE: the click listener is wired on each cell View *inside* the
+     * adapter (PresetPickerAdapter.onPickClick), NOT on the GridView
+     * via setOnItemClickListener. The cell ImageView carries
+     * android:clickable="true" so the stateListAnimator can fire on
+     * press, but a clickable child consumes the touch event before
+     * AdapterView's item-click dispatch sees it — wiring
+     * setOnItemClickListener on the GridView is silently dead in this
+     * configuration. Do NOT switch back to setOnItemClickListener
+     * without also stripping clickable/focusable from the cell layout
+     * (which would lose the press animation).
+     */
+    private fun bindMaterialPresetRow() {
+        findPreference<Preference>("material_preset_pick")?.setOnPreferenceClickListener {
+            val ctx = requireContext()
+            val presets = MaterialPresets.all
+            val grid = LayoutInflater.from(ctx)
+                .inflate(R.layout.preset_picker_grid, null) as GridView
+
+            val dialog = MaterialAlertDialogBuilder(ctx)
+                .setTitle("Material preset")
+                .setView(grid)
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+
+            grid.adapter = PresetPickerAdapter(ctx, presets) { which ->
+                val prefs = preferenceManager.sharedPreferences
+                    ?: return@PresetPickerAdapter
+                val editor = prefs.edit()
+                for ((key, value) in presets[which].values) {
+                    editor.putInt(key, value)
+                }
+                editor.apply()
+                loadScreen(ScreenKey.Material)
+                Toast.makeText(ctx, presets[which].name, Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            }
+            true
+        }
+    }
+
+    /**
+     * GridView cell adapter: each cell is a single ImageView holding the
+     * baked tile thumbnail (transparent background, tile-shaped fill).
+     * No on-screen label, no rectangular container — the cell IS the
+     * tile.
+     *
+     * Press feedback is the @animator/preset_tile_press stateListAnimator
+     * applied in preset_picker_item.xml: the tile scales to ~93% on
+     * press and springs back on release, so a tap reads as physically
+     * pressing the key into the screen. No colour highlight, no
+     * rectangular ripple — the tile silhouette stays the visible
+     * shape throughout. A KEYBOARD_TAP haptic on click pairs the
+     * visual with a physical tick.
+     *
+     * setOnClickListener is wired here on every getView call rather
+     * than via GridView.setOnItemClickListener — a clickable child
+     * (the ImageView itself, since android:clickable="true") consumes
+     * the touch event before AdapterView's item-click dispatch sees
+     * it. See bindMaterialPresetRow for the long version.
+     *
+     * contentDescription + tooltip carry the preset name (screen
+     * reader + long-press) since there is no on-screen label.
+     */
+    private class PresetPickerAdapter(
+        ctx: Context,
+        private val presets: List<MaterialPreset>,
+        private val onPickClick: (Int) -> Unit,
+    ) : ArrayAdapter<MaterialPreset>(ctx, R.layout.preset_picker_item, presets) {
+        private val inflater = LayoutInflater.from(ctx)
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val image = (convertView as? ImageView)
+                ?: inflater.inflate(R.layout.preset_picker_item, parent, false) as ImageView
+            val preset = presets[position]
+            image.setImageResource(preset.thumbnailRes)
+            image.contentDescription = preset.name
+            TooltipCompat.setTooltipText(image, preset.name)
+            image.setOnClickListener {
+                it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                onPickClick(position)
+            }
+            return image
         }
     }
 

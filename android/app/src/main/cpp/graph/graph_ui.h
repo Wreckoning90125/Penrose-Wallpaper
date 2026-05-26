@@ -11,7 +11,10 @@
 
 #include "graph/graph.h"
 
+#include "ImNodeFlow.h"
+
 #include <atomic>
+#include <memory>
 
 namespace penrose::graph {
 
@@ -59,7 +62,15 @@ public:
     }
 
 private:
-    void drawToolbar(Graph& graph);
+    // The toolbar takes the selection by parameter so render() can
+    // snapshot it BEFORE handler.update() runs — Link::update inside
+    // ImNodeFlow deselects every selected link on any left-click event,
+    // including a click on our own Delete button, so reading the
+    // selection here-and-now would lose it the same frame the user
+    // tries to delete a connection.
+    void drawToolbar(Graph& graph,
+                     FlowNode* selNode,
+                     const std::shared_ptr<ImFlow::Link>& selLink);
     void drawSpawnPopup(Graph& graph);
     // One-shot layout pass: arrange the default graph into a grid
     // fitted to the visible canvas, accounting for each node's

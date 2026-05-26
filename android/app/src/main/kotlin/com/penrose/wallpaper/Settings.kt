@@ -36,18 +36,68 @@ internal class Settings(
     val panY: Float,
     val brightness: Float,
     val depthAmount: Float,
+    val matRoughness: Float,
+    val matMetalness: Float,
+    val matSheen: Float,
+    val matClearcoat: Float,
+    val matAnisotropy: Float,
+    val matIridescence: Float,
+    val matEmissive: Float,
+    val matRelief: Float,
+    val lightAngle: Float,
+    val lightElevation: Float,
+    val lightIntensity: Float,
+    val lightWarmth: Float,
+    val lightAmbient: Float,
+    // Per-preset characteristic colours. No slider UI today — these are
+    // seeded by the Material preset picker so each preset has its own
+    // sheen tint and iridescence band; defaults match MaterialParams.
+    val matSheenColorR: Float,
+    val matSheenColorG: Float,
+    val matSheenColorB: Float,
+    val matIridThickMin: Float,
+    val matIridThickMax: Float,
+    // Variation knobs. Defaults 0 — the Roughness / Metalness sliders
+    // above give uniform looks (the way users expect), and dialling
+    // these up brings back seam-modulated roughness + per-tile-type
+    // metalness from Phase B.
+    val matRoughMod: Float,
+    val matMetalMod: Float,
+    // Hyperbolic projection mode (docs/hyperbolic/projection-design.md).
+    // `projection` 0 = Euclidean (default; original affine view),
+    //              1 = Poincaré disk.
+    // `hypScale` controls how aggressively world radius is mapped into
+    // the unit disk; `hypBoostX/Y` is the τ_b boost point in B² (clamped
+    // to |b|≤0.92 server-side). `hypBorderSubdiv` (1..32) and
+    // `hypFillSubdiv` (1..8) are independent because border cost is
+    // linear in N and fill cost is N² — sharing one slider forces the
+    // wrong cap on one of them. 1 = no tessellation.
+    val projection: Int,
+    val hypScale: Float,
+    val hypBoostX: Float,
+    val hypBoostY: Float,
+    val hypBorderSubdiv: Int,
+    val hypFillSubdiv: Int,
     val customOklch: FloatArray,
 ) {
     fun toNative(): Pair<IntArray, FloatArray> {
         val ints = intArrayOf(
             family, seedIdx, generation, preset, colorCount, colorMode,
             if (borderOn) 1 else 0, bgMode, rippleMode, panMode, rippleKind,
+            projection, hypBorderSubdiv, hypFillSubdiv,
         )
         val baseFloats = floatArrayOf(
             borderWidth, borderL, borderC, borderH, borderAlpha,
             bgL, bgC, bgH, rippleAmount,
             zoom, rotation, panX, panY,
             brightness, depthAmount, rippleSpeed,
+            matRoughness, matMetalness, matSheen, matClearcoat,
+            matAnisotropy, matIridescence, matEmissive, matRelief,
+            lightAngle, lightElevation, lightIntensity, lightWarmth, lightAmbient,
+            matSheenColorR, matSheenColorG, matSheenColorB,
+            matIridThickMin, matIridThickMax,
+            matRoughMod, matMetalMod,
+            hypScale, hypBoostX, hypBoostY,
         )
         val floats = FloatArray(baseFloats.size + customOklch.size)
         baseFloats.copyInto(floats)
@@ -86,6 +136,51 @@ internal class Settings(
         const val KEY_PAN_Y         = "view_pan_y"
         const val KEY_BRIGHTNESS    = "brightness"
         const val KEY_DEPTH_AMOUNT  = "depth_amount"
+
+        // Physical-material slider bases. SeekBarPreference stores 0..N
+        // integers; load() divides by 100. The modulation graph drives
+        // these on top of the stored base.
+        const val KEY_MAT_ROUGHNESS   = "mat_roughness"
+        const val KEY_MAT_METALNESS   = "mat_metalness"
+        const val KEY_MAT_SHEEN       = "mat_sheen"
+        const val KEY_MAT_CLEARCOAT   = "mat_clearcoat"
+        const val KEY_MAT_ANISOTROPY  = "mat_anisotropy"
+        const val KEY_MAT_IRIDESCENCE = "mat_iridescence"
+        const val KEY_MAT_EMISSIVE    = "mat_emissive"
+        const val KEY_MAT_RELIEF      = "mat_relief"
+
+        // Lighting rig slider bases. Angle / elevation are stored as plain
+        // degrees; the other three as 0..N integers divided by 100.
+        const val KEY_LIGHT_ANGLE     = "light_angle"
+        const val KEY_LIGHT_ELEVATION = "light_elevation"
+        const val KEY_LIGHT_INTENSITY = "light_intensity"
+        const val KEY_LIGHT_WARMTH    = "light_warmth"
+        const val KEY_LIGHT_AMBIENT   = "light_ambient"
+
+        // Per-preset characteristic colours (sheen tint + iridescent
+        // thin-film range). Set by the Material preset picker only;
+        // todo.md tracks adding picker / slider UI for direct tuning.
+        const val KEY_MAT_SHEEN_COLOR_R  = "mat_sheen_color_r"
+        const val KEY_MAT_SHEEN_COLOR_G  = "mat_sheen_color_g"
+        const val KEY_MAT_SHEEN_COLOR_B  = "mat_sheen_color_b"
+        const val KEY_MAT_IRID_THICK_MIN = "mat_irid_thick_min"
+        const val KEY_MAT_IRID_THICK_MAX = "mat_irid_thick_max"
+
+        // Variation knobs — opt-in seam roughness + per-tile metalness.
+        const val KEY_MAT_ROUGH_MOD = "mat_rough_mod"
+        const val KEY_MAT_METAL_MOD = "mat_metal_mod"
+
+        // Hyperbolic projection. PROJECTION is a ListPreference ("0"=E²,
+        // "1"=Poincaré disk); HYP_SCALE / HYP_BOOST_{X,Y} are 0..100
+        // SeekBars (load() converts to floats, BOOST_{X,Y} re-centred to
+        // [-1, +1]); HYP_BORDER_SUBDIV (1..32) and HYP_FILL_SUBDIV (1..8)
+        // are independent seekbars because their costs are linear vs N².
+        const val KEY_PROJECTION         = "projection"
+        const val KEY_HYP_SCALE          = "hyp_scale"
+        const val KEY_HYP_BOOST_X        = "hyp_boost_x"
+        const val KEY_HYP_BOOST_Y        = "hyp_boost_y"
+        const val KEY_HYP_BORDER_SUBDIV  = "hyp_border_subdiv"
+        const val KEY_HYP_FILL_SUBDIV    = "hyp_fill_subdiv"
 
         // Bumped by PresetStore.applyToPrefs whenever a preset writes a
         // fresh modulation_graph.json, and by the node editor when it
@@ -179,6 +274,41 @@ internal class Settings(
                 panY         = safeFloat(prefs, KEY_PAN_Y, 0.0f),
                 brightness   = safeInt(prefs, KEY_BRIGHTNESS, 100) / 100f,
                 depthAmount  = safeInt(prefs, KEY_DEPTH_AMOUNT, 30) / 100f,
+                matRoughness   = safeInt(prefs, KEY_MAT_ROUGHNESS, 50) / 100f,
+                matMetalness   = safeInt(prefs, KEY_MAT_METALNESS, 40) / 100f,
+                matSheen       = safeInt(prefs, KEY_MAT_SHEEN, 35) / 100f,
+                matClearcoat   = safeInt(prefs, KEY_MAT_CLEARCOAT, 45) / 100f,
+                matAnisotropy  = safeInt(prefs, KEY_MAT_ANISOTROPY, 40) / 100f,
+                matIridescence = safeInt(prefs, KEY_MAT_IRIDESCENCE, 45) / 100f,
+                matEmissive    = safeInt(prefs, KEY_MAT_EMISSIVE, 60) / 100f,
+                matRelief      = safeInt(prefs, KEY_MAT_RELIEF, 105) / 100f,
+                lightAngle     = safeInt(prefs, KEY_LIGHT_ANGLE, 230).toFloat(),
+                lightElevation = safeInt(prefs, KEY_LIGHT_ELEVATION, 55).toFloat(),
+                lightIntensity = safeInt(prefs, KEY_LIGHT_INTENSITY, 100) / 100f,
+                lightWarmth    = safeInt(prefs, KEY_LIGHT_WARMTH, 50) / 100f,
+                lightAmbient   = safeInt(prefs, KEY_LIGHT_AMBIENT, 22) / 100f,
+                matSheenColorR  = safeInt(prefs, KEY_MAT_SHEEN_COLOR_R, 100) / 100f,
+                matSheenColorG  = safeInt(prefs, KEY_MAT_SHEEN_COLOR_G, 97)  / 100f,
+                matSheenColorB  = safeInt(prefs, KEY_MAT_SHEEN_COLOR_B, 92)  / 100f,
+                matIridThickMin = safeInt(prefs, KEY_MAT_IRID_THICK_MIN, 280).toFloat(),
+                matIridThickMax = safeInt(prefs, KEY_MAT_IRID_THICK_MAX, 560).toFloat(),
+                matRoughMod = safeInt(prefs, KEY_MAT_ROUGH_MOD, 0) / 100f,
+                matMetalMod = safeInt(prefs, KEY_MAT_METAL_MOD, 0) / 100f,
+                // Projection mode + disk-mode params. PROJECTION is a
+                // "0"/"1" ListPreference. Scale slider 0..100 maps
+                // LINEAR to 0.05..3.0 — the lower bound is 0.05 (not 0)
+                // because the shader's tanh(r·s/2) collapses everything
+                // to a single point at s=0; a slider position that
+                // mapped to s=0 had a visible discontinuity vs
+                // slider=1. Default 50 → scale 1.525. Boost X / Y
+                // sliders 0..100 → -0.9..+0.9 in B² (50 → 0). Border /
+                // fill subdivisions 1..32 / 1..8.
+                projection    = safeStr(prefs, KEY_PROJECTION, "0").toIntOrNull() ?: 0,
+                hypScale      = 0.05f + safeInt(prefs, KEY_HYP_SCALE, 50) / 100f * 2.95f,
+                hypBoostX       = (safeInt(prefs, KEY_HYP_BOOST_X, 50) - 50) / 50f * 0.9f,
+                hypBoostY       = (safeInt(prefs, KEY_HYP_BOOST_Y, 50) - 50) / 50f * 0.9f,
+                hypBorderSubdiv = safeInt(prefs, KEY_HYP_BORDER_SUBDIV, 1).coerceIn(1, 32),
+                hypFillSubdiv   = safeInt(prefs, KEY_HYP_FILL_SUBDIV, 1).coerceIn(1, 8),
                 customOklch  = custom,
             )
         }

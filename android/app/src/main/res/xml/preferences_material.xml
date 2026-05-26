@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <Preference
+        android:key="nav_back"
+        android:title="← Back"
+        android:summary="" />
+
+    <Preference
+        android:key="material_preset_pick"
+        android:title="Material preset"
+        android:summary="Apply a built-in look — writes the sliders below, then you tune from there" />
+
+    <PreferenceCategory android:title="Material">
+        <SeekBarPreference
+            android:key="mat_roughness"
+            android:title="Roughness"
+            android:summary="Uniform surface roughness — matte at high, glossy at low"
+            android:min="0" android:max="100" android:defaultValue="50"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_rough_mod"
+            android:title="Worn edges"
+            android:summary="Extra roughness in the bevel valleys — seam wear / patina"
+            android:min="0" android:max="100" android:defaultValue="0"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_metalness"
+            android:title="Metalness"
+            android:summary="Uniform metallic-ness — 0 dielectric, 100 fully metal"
+            android:min="0" android:max="100" android:defaultValue="40"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_metal_mod"
+            android:title="Metal variation"
+            android:summary="Extra metalness on alternate tile types — distinct kinds, distinct metals"
+            android:min="0" android:max="100" android:defaultValue="0"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_iridescence"
+            android:title="Iridescence"
+            android:summary="Thin-film oil-slick sheen"
+            android:min="0" android:max="100" android:defaultValue="45"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_sheen"
+            android:title="Sheen"
+            android:summary="Velvet grazing-angle lobe"
+            android:min="0" android:max="200" android:defaultValue="35"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_clearcoat"
+            android:title="Clearcoat"
+            android:summary="Glossy lacquer layer over the base"
+            android:min="0" android:max="100" android:defaultValue="45"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_anisotropy"
+            android:title="Anisotropy"
+            android:summary="Brushed-metal streak along each tile"
+            android:min="0" android:max="100" android:defaultValue="40"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_emissive"
+            android:title="Emissive glow"
+            android:summary="Glow on the ripple crests"
+            android:min="0" android:max="200" android:defaultValue="60"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_relief"
+            android:title="Surface relief"
+            android:summary="Depth of the beveled chamfer"
+            android:min="0" android:max="200" android:defaultValue="105"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Sheen tint">
+        <SeekBarPreference
+            android:key="mat_sheen_color_r"
+            android:title="Sheen red"
+            android:summary="Red channel of the Charlie sheen lobe tint (0–100%)"
+            android:min="0" android:max="100" android:defaultValue="100"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_sheen_color_g"
+            android:title="Sheen green"
+            android:summary="Green channel of the Charlie sheen lobe tint"
+            android:min="0" android:max="100" android:defaultValue="97"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_sheen_color_b"
+            android:title="Sheen blue"
+            android:summary="Blue channel of the Charlie sheen lobe tint"
+            android:min="0" android:max="100" android:defaultValue="92"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Iridescent film">
+        <SeekBarPreference
+            android:key="mat_irid_thick_min"
+            android:title="Film thickness (min, nm)"
+            android:summary="Thin end of the Belcour–Barla thin-film sweep"
+            android:min="100" android:max="800" android:defaultValue="280"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="mat_irid_thick_max"
+            android:title="Film thickness (max, nm)"
+            android:summary="Thick end of the sweep — wider range = more colour cycles"
+            android:min="100" android:max="800" android:defaultValue="560"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Lighting">
+        <SeekBarPreference
+            android:key="light_angle"
+            android:title="Light angle"
+            android:summary="Key-light azimuth, degrees"
+            android:min="0" android:max="360" android:defaultValue="230"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="light_elevation"
+            android:title="Light elevation"
+            android:summary="Key-light height, degrees"
+            android:min="0" android:max="90" android:defaultValue="55"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="light_intensity"
+            android:title="Light intensity"
+            android:summary="Master key + fill brightness"
+            android:min="0" android:max="200" android:defaultValue="100"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="light_warmth"
+            android:title="Warmth"
+            android:summary="Cool to warm — warms the key, cools the fill"
+            android:min="0" android:max="100" android:defaultValue="50"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="light_ambient"
+            android:title="Ambient"
+            android:summary="Flat fill on the unlit side"
+            android:min="0" android:max="100" android:defaultValue="22"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+</PreferenceScreen>

@@ -194,9 +194,14 @@ private:
     VkDeviceMemory borderIdxMem_ = VK_NULL_HANDLE;
     uint32_t borderIndexCount_ = 0;
 
-    // Untransformed geometry extent (model space).
+    // Untransformed geometry extent (model space). `geomRmax_` is the
+    // largest |vertex| over the actual emitted tile vertices, not the
+    // bbox corner — the hyperbolic auto-fit needs the true distance
+    // from origin to the farthest visible vertex, which can be much
+    // less than √(maxX² + maxY²) for a centered tiling.
     float geomMinX_ = -1.0f, geomMinY_ = -1.0f;
     float geomMaxX_ =  1.0f, geomMaxY_ =  1.0f;
+    float geomRmax_ =  1.0f;
 
     ANativeWindow* window_ = nullptr;
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
@@ -230,6 +235,28 @@ private:
     float fxRippleSpeed_  = 1.0f;
     float fxBrightness_   = 1.0f;
     float fxDepthAmount_  = 0.3f;
+    // Graph-modulated material controls — slider baseline from settings_,
+    // result after Graph::evaluate. Written to the UBO per frame.
+    float fxMatRoughness_   = 0.50f;
+    float fxMatMetalness_   = 0.40f;
+    float fxMatSheen_       = 0.35f;
+    float fxMatClearcoat_   = 0.45f;
+    float fxMatAnisotropy_  = 0.40f;
+    float fxMatIridescence_ = 0.45f;
+    float fxMatEmissive_    = 0.60f;
+    float fxMatRelief_      = 1.05f;
+    float fxLightAngle_     = 230.0f;
+    float fxLightElevation_ = 55.0f;
+    float fxLightIntensity_ = 1.00f;
+    float fxLightWarmth_    = 0.50f;
+    float fxLightAmbient_   = 0.22f;
+    // Hyperbolic-projection targets — slider/setting baseline plus the
+    // sum of any connected OutHypBoost{X,Y} / OutHypScale Target nodes.
+    // The boost is clamped to |b| <= 0.92 in the graph so the τ_b
+    // transform never goes singular near the disk boundary.
+    float fxHypBoostX_      = 0.0f;
+    float fxHypBoostY_      = 0.0f;
+    float fxHypScale_       = 1.5f;
 
     // Effective generation for the currently-built geometry. Equal to
     // settings_.generation in Locked pan mode; grows past it in Generative

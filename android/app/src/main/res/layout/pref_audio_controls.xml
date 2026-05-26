@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Rich "now-playing" preference row used by AudioControlsPreference.
+  One stack:
+    1. horizontal — album art (48dp, leading), title/artist column
+       (expanding middle), play/pause button (40dp, trailing).
+    2. SeekBar scrubber.
+    3. horizontal — current position (left), duration (right).
+  SettingsFragment wires the widgets via PreferenceViewHolder.findViewById
+  in AudioControlsPreference.onBindViewHolder; the data + listeners come
+  from a MediaController connected to the AudioPlaybackService.
+
+  The layout intentionally has no left ImageView slot for an icon —
+  the preference theme inserts one for tile-style preferences, and we
+  override it to be invisible (icon column collapsed) so the album art
+  inside our layout has the full width to work with.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <ImageView
+            android:id="@+id/audio_art"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:scaleType="centerCrop"
+            android:background="?attr/colorSurfaceVariant"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_audio_default" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="8dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/audio_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textAppearance="?attr/textAppearanceTitleSmall"
+                android:singleLine="true"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/audio_artist"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textAppearance="?attr/textAppearanceBodySmall"
+                android:singleLine="true"
+                android:ellipsize="end" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/audio_play_pause"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_audio_play"
+            android:contentDescription="@string/audio_play_pause_desc" />
+    </LinearLayout>
+
+    <SeekBar
+        android:id="@+id/audio_scrub"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="-4dp">
+
+        <TextView
+            android:id="@+id/audio_position"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textAppearance="?attr/textAppearanceBodySmall" />
+
+        <TextView
+            android:id="@+id/audio_duration"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textAppearance="?attr/textAppearanceBodySmall" />
+    </LinearLayout>
+</LinearLayout>

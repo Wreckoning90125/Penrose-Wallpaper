@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Grid container for the Material-preset picker dialog. Two columns of
+  tile cells (preset_picker_item.xml) — the tile thumbnails themselves
+  are the selectors, so there is no separate dropdown text. Stretched
+  column width keeps cells equal-sized across phone widths.
+-->
+<GridView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/preset_picker_grid"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:numColumns="2"
+    android:verticalSpacing="4dp"
+    android:horizontalSpacing="4dp"
+    android:padding="8dp"
+    android:gravity="center"
+    android:stretchMode="columnWidth"
+    android:listSelector="@android:color/transparent" />

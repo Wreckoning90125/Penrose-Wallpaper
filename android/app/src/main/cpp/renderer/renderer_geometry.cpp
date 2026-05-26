@@ -14,6 +14,7 @@
 #include "tiling/penrose.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
@@ -148,8 +149,60 @@ bool Renderer::buildGeometry() {
                                     mat4[0], mat4[1], mat4[2], mat4[3] });
     };
 
+    // Per-tile subdivision count for fill triangles in hyperbolic mode.
+    // Each parent tri is split into N² child tris by a barycentric
+    // (i,j,k) grid, with every child-vertex attribute computed by
+    // linear interpolation from parent corners. Because bary, bulge,
+    // centroid and material are all linear-interpolation-safe, the
+    // fragment shader's bevel still falls only on parent edges (the
+    // min(bary) is zero only along original edges, never along
+    // interior subdivision cuts). Driven by Settings.hypFillSubdiv,
+    // separate from the border subdivision because the costs are
+    // different shapes (N² vs N) — JNI already clamped to [1, 8].
+    const int fillSub = (settings_.projection == Projection::PoincareDisk)
+                        ? settings_.hypFillSubdiv : 1;
+
+    auto emitFillTri = [&](float ax, float ay, float bx, float by,
+                           float cx_v, float cy_v,
+                           uint32_t paletteIdx, float ctrX, float ctrY,
+                           float bgx, float bgy, const Bary3& bary, const float* mat) {
+        if (fillSub <= 1) {
+            pushFill(ax,   ay,   paletteIdx, ctrX, ctrY, bgx, bgy, bary.v[0], mat);
+            pushFill(bx,   by,   paletteIdx, ctrX, ctrY, bgx, bgy, bary.v[1], mat);
+            pushFill(cx_v, cy_v, paletteIdx, ctrX, ctrY, bgx, bgy, bary.v[2], mat);
+            return;
+        }
+        const float invN = 1.0f / static_cast<float>(fillSub);
+        auto pushGrid = [&](int i, int j) {
+            // Child vertex at barycentric (i, j, k) on parent (i+j+k=fillSub).
+            const int k = fillSub - i - j;
+            const float fa = i * invN, fb = j * invN, fc = k * invN;
+            const float vx = fa * ax + fb * bx + fc * cx_v;
+            const float vy = fa * ay + fb * by + fc * cy_v;
+            float vb[3];
+            for (int c = 0; c < 3; ++c)
+                vb[c] = fa * bary.v[0][c] + fb * bary.v[1][c] + fc * bary.v[2][c];
+            pushFill(vx, vy, paletteIdx, ctrX, ctrY, bgx, bgy, vb, mat);
+        };
+        for (int i = 0; i < fillSub; ++i) {
+            for (int j = 0; j < fillSub - i; ++j) {
+                // Upright child tri: (i,j) (i+1,j) (i,j+1)
+                pushGrid(i,     j);
+                pushGrid(i + 1, j);
+                pushGrid(i,     j + 1);
+                // Inverted child tri (skip the rightmost slot per row).
+                if (j < fillSub - i - 1) {
+                    pushGrid(i + 1, j);
+                    pushGrid(i + 1, j + 1);
+                    pushGrid(i,     j + 1);
+                }
+            }
+        }
+    };
+
     float minX =  1e9f, minY =  1e9f;
     float maxX = -1e9f, maxY = -1e9f;
+    float rSqMax = 0.0f;
 
     for (size_t i = 0; i < tiles.size(); ++i) {
         const Tile& t = tiles[i];
@@ -194,11 +247,8 @@ bool Renderer::buildGeometry() {
             float bgx, bgy;
             bulgeDir(t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2],
                      depths[0], depths[1], depths[2], bgx, bgy);
-            for (int v = 0; v < 3; ++v) {
-                pushFill(t.x[v], t.y[v], paletteIdx, cx, cy, bgx, bgy, bary.v[v], mat);
-                minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
-                minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
-            }
+            emitFillTri(t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2],
+                        paletteIdx, cx, cy, bgx, bgy, bary, mat);
         } else if (fi.centroidFan) {
             // Concave polygons (P1 star / boat) — fan from the centroid so
             // the triangulation stays inside a star-shaped tile. The
@@ -212,11 +262,8 @@ bool Renderer::buildGeometry() {
                 float bgx, bgy;
                 bulgeDir(cx, cy, t.x[v], t.y[v], t.x[w], t.y[w],
                          cd, 0.0f, 0.0f, bgx, bgy);
-                pushFill(cx,     cy,     paletteIdx, cx, cy, bgx, bgy, bary.v[0], mat);
-                pushFill(t.x[v], t.y[v], paletteIdx, cx, cy, bgx, bgy, bary.v[1], mat);
-                pushFill(t.x[w], t.y[w], paletteIdx, cx, cy, bgx, bgy, bary.v[2], mat);
-                minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
-                minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
+                emitFillTri(cx, cy, t.x[v], t.y[v], t.x[w], t.y[w],
+                            paletteIdx, cx, cy, bgx, bgy, bary, mat);
             }
         } else {
             // Convex polygons fanned from vertex 0. A rhomb (the de Bruijn
@@ -238,19 +285,25 @@ bool Renderer::buildGeometry() {
                 float bgx, bgy;
                 bulgeDir(t.x[0], t.y[0], t.x[v], t.y[v], t.x[v + 1], t.y[v + 1],
                          depth[0], depth[v], depth[v + 1], bgx, bgy);
-                pushFill(t.x[0],     t.y[0],     paletteIdx, cx, cy, bgx, bgy, bary.v[0], mat);
-                pushFill(t.x[v],     t.y[v],     paletteIdx, cx, cy, bgx, bgy, bary.v[1], mat);
-                pushFill(t.x[v + 1], t.y[v + 1], paletteIdx, cx, cy, bgx, bgy, bary.v[2], mat);
+                emitFillTri(t.x[0], t.y[0], t.x[v], t.y[v], t.x[v + 1], t.y[v + 1],
+                            paletteIdx, cx, cy, bgx, bgy, bary, mat);
             }
-            for (int v = 0; v < vc; ++v) {
-                minX = std::min(minX, t.x[v]); maxX = std::max(maxX, t.x[v]);
-                minY = std::min(minY, t.y[v]); maxY = std::max(maxY, t.y[v]);
-            }
+        }
+        // Per-vertex extents: bbox AND true farthest |vertex| for the
+        // hyperbolic auto-fit. Tracked once per tile across all vc
+        // vertices (shared by every emit branch above).
+        for (int v = 0; v < vc; ++v) {
+            const float vx = t.x[v], vy = t.y[v];
+            minX = std::min(minX, vx); maxX = std::max(maxX, vx);
+            minY = std::min(minY, vy); maxY = std::max(maxY, vy);
+            const float rSq = vx * vx + vy * vy;
+            if (rSq > rSqMax) rSqMax = rSq;
         }
     }
     fillVertexCount_ = static_cast<uint32_t>(fills.size());
     geomMinX_ = minX; geomMaxX_ = maxX;
     geomMinY_ = minY; geomMaxY_ = maxY;
+    geomRmax_ = std::sqrt(rSqMax);
 
     // -------- Border geometry: indexed triangle quads -----------------------
     // For each unique edge (dedup via midpoint hash, honouring hideSeam) we
@@ -274,6 +327,34 @@ bool Renderer::buildGeometry() {
             else               edgesChair(t, edges);
         }
 
+        // In Poincaré-disk projection, straight world-space edges map to
+        // straight clip-space chords (the shader projects per-vertex,
+        // clip-space interpolation is linear). Splitting each edge into
+        // hypBorderSubdiv sub-segments before the dedup map sees them
+        // gives a polyline that approximates the true hyperbolic
+        // geodesic arc; the dedup map keeps a sub-segment's two
+        // endpoints shared with the adjacent tile's matching
+        // sub-segment, so the border still draws once per shared edge.
+        const int sub = (settings_.projection == Projection::PoincareDisk)
+                        ? settings_.hypBorderSubdiv : 1;
+        if (sub > 1) {
+            std::vector<Edge> tess;
+            tess.reserve(edges.size() * sub);
+            for (const Edge& e : edges) {
+                const float dx = e.p2x - e.p1x;
+                const float dy = e.p2y - e.p1y;
+                float prevX = e.p1x, prevY = e.p1y;
+                for (int k = 1; k <= sub; ++k) {
+                    const float t = static_cast<float>(k) / static_cast<float>(sub);
+                    const float curX = e.p1x + dx * t;
+                    const float curY = e.p1y + dy * t;
+                    tess.push_back(Edge{ prevX, prevY, curX, curY, e.kind, e.tileType });
+                    prevX = curX; prevY = curY;
+                }
+            }
+            edges = std::move(tess);
+        }
+
         std::unordered_map<EdgeKey, EdgeRec, EdgeKeyHash> edgeMap;
         edgeMap.reserve(edges.size() / 2 + 16);
         constexpr float kKeyScale = 1.0e5f;
@@ -294,24 +375,229 @@ bool Renderer::buildGeometry() {
                 it->second.secondSet = true;
             }
         }
-        borders.reserve(edgeMap.size() * 4);
-        borderIndices.reserve(edgeMap.size() * 6);
+        // -------- Miter joinery pre-pass ---------------------------------
+        // The naive emit (two endpoints sharing the edge's perpendicular
+        // normal) gives perpendicular butt ends that overlap on one side
+        // and gap on the other wherever a vertex's interior angle isn't
+        // 90° — visible cog-pattern on every Penrose star vertex.
+        //
+        // The fix is the same carpentry trick the Canonical-Surface rib
+        // renderer uses: at each shared endpoint find the angularly-
+        // adjacent edges, compute the bisector of their per-edge normals,
+        // extrude along the bisector at length halfWidth / |cos(θ/2)| so
+        // adjacent ribbons meet flush on both sides. Clamp the miter
+        // length at kMiterLimit × halfWidth so a near-degenerate acute
+        // joint can't fire a spike off into space.
+        //
+        // Planar-graph subtlety: a Penrose vertex may have 2..7 edges
+        // meeting at it (sun, star, ace, ...). We sort the incident edges
+        // by tangent angle around the vertex and, for each edge end,
+        // miter the +1 side with the CCW-adjacent neighbour and the -1
+        // side with the CW-adjacent neighbour. Two collinear sub-segments
+        // of the same parent edge (the disk-mode subdivision case) give
+        // a near-180° joint where the bisector matches the edge normal
+        // and miterScale ≈ 1 — i.e. no change vs. butt, which is correct.
+        //
+        // The same midpoint hash used for edge dedup is too coarse here
+        // (it keys on midpoint, not endpoint); we build a separate
+        // endpoint hash over the kept edges.
+        std::vector<const EdgeRec*> keptEdges;
+        keptEdges.reserve(edgeMap.size());
         for (const auto& kv : edgeMap) {
             const EdgeRec& r = kv.second;
             if (r.secondSet && r.t1 == r.t2 && hideSeam(settings_.family, r.k1, r.k2)) continue;
             const float dx = r.p2x - r.p1x;
             const float dy = r.p2y - r.p1y;
-            const float len = std::sqrt(dx * dx + dy * dy);
-            if (len < 1e-6f) continue;
-            const float inv = 1.0f / len;
-            // Edge tangent (dx,dy)/len; outward normal = perp = (-dy, dx)/len.
-            const float nx = -dy * inv;
-            const float ny =  dx * inv;
+            if ((dx * dx + dy * dy) < 1e-12f) continue;
+            keptEdges.push_back(&r);
+        }
+        // Per-edge cached tangent — computed once, reused twice (once
+        // per endpoint when computing each end's miter).
+        struct EdgeGeom { float tx, ty; };
+        std::vector<EdgeGeom> egeom(keptEdges.size());
+        for (size_t i = 0; i < keptEdges.size(); ++i) {
+            const EdgeRec& r = *keptEdges[i];
+            const float dx = r.p2x - r.p1x;
+            const float dy = r.p2y - r.p1y;
+            const float inv = 1.0f / std::sqrt(dx * dx + dy * dy);
+            egeom[i].tx = dx * inv;
+            egeom[i].ty = dy * inv;
+        }
+        // Endpoint hash. For each shared endpoint we collect (edge_idx,
+        // end (0=p1, 1=p2), outward-tangent-angle) entries; we'll sort
+        // by angle to find each entry's CCW + CW neighbours.
+        struct EndRef {
+            uint32_t edgeIdx;
+            uint8_t  end;     // 0 = p1, 1 = p2
+            float    angle;   // atan2 of outward tangent at this endpoint
+        };
+        // Precision note: each kept edge's endpoint coords come from
+        // whichever tile contributed that edge first in the midpoint
+        // dedup above. Two tiles sharing a vertex compute it through
+        // independent substitution chains; at the default gen 6 on a
+        // ±20-world-unit patch, FP drift between the two tiles'
+        // computations of the SAME vertex accumulates to ~1e-5 world
+        // units — right at the rounding threshold of the dedup's
+        // kKeyScale=1e5. The midpoint dedup tolerated this because
+        // averaging halves the per-tile error; the endpoint hash gets
+        // the raw per-tile coords and would put "same" vertices into
+        // DIFFERENT buckets at 1e-5 precision. findNeighbour then
+        // returns nullptr for everyone and the miter falls back to
+        // butt at every joint — silently regressing the entire fix.
+        //
+        // A coarser endpoint scale (1e3 = 0.001 world units) is 100×
+        // the worst-case FP drift and well below the smallest tile
+        // edge length at any reasonable generation (~0.05 world units
+        // at gen 6, shrinking by phi per gen so still ~0.005 at gen
+        // 10). Safe clustering for shared vertices, no false-merge of
+        // truly distinct vertices.
+        constexpr float kEndpointKeyScale = 1.0e3f;
+        std::unordered_map<EdgeKey, std::vector<EndRef>, EdgeKeyHash> endHash;
+        endHash.reserve(keptEdges.size());
+        auto endpointKey = [&](float x, float y) {
+            return EdgeKey{ static_cast<int32_t>(std::lround(x * kEndpointKeyScale)),
+                            static_cast<int32_t>(std::lround(y * kEndpointKeyScale)) };
+        };
+        for (uint32_t i = 0; i < keptEdges.size(); ++i) {
+            const EdgeRec& r = *keptEdges[i];
+            const EdgeGeom& g = egeom[i];
+            // Outward tangent at p1 points TOWARD p2 → (+tx,+ty).
+            // Outward tangent at p2 points TOWARD p1 → (-tx,-ty).
+            endHash[endpointKey(r.p1x, r.p1y)].push_back(
+                EndRef{ i, 0, std::atan2( g.ty,  g.tx) });
+            endHash[endpointKey(r.p2x, r.p2y)].push_back(
+                EndRef{ i, 1, std::atan2(-g.ty, -g.tx) });
+        }
+        // Sort each endpoint's incident list by angle once so the
+        // per-corner CCW / CW neighbour lookup is O(log n) (and n ≤ 7
+        // in practice, so this is functionally O(1)).
+        for (auto& kv : endHash) {
+            auto& v = kv.second;
+            std::sort(v.begin(), v.end(),
+                      [](const EndRef& a, const EndRef& b) { return a.angle < b.angle; });
+        }
+        // Miter computation for one corner. `tSelf` is the OUTWARD
+        // tangent of THIS edge at this endpoint (away from the vertex);
+        // `tNbr` is the OUTWARD tangent of the angular neighbour at the
+        // same endpoint. `sideSign` picks which angular wedge to bisect.
+        // Returns the EXTRUSION DIRECTION (already signed for the
+        // chosen wedge) and the half-width multiplier.
+        constexpr float kMiterLimit = 4.0f;
+        auto computeMiter = [](float tSelfX, float tSelfY,
+                               float tNbrX,  float tNbrY,
+                               float sideSign) -> std::array<float, 3> {
+            // Polyline-style bisector: treat the neighbour as feeding
+            // INTO the vertex (incoming direction = -tNbr) and our edge
+            // as leaving the vertex (outgoing direction = tSelf). The
+            // perpendiculars (90°-CCW = "polyline-left") sum to the
+            // bisector; by symmetry both edges sharing this corner
+            // compute the same point and join flush.
+            const float n0x =  tNbrY;     // perp(-tNbr) = ( tNbr.y, -tNbr.x)
+            const float n0y = -tNbrX;
+            const float n1x = -tSelfY;    // perp( tSelf) = (-tSelf.y, tSelf.x)
+            const float n1y =  tSelfX;
+            // sideSign flips the bisector into the wedge we want.
+            const float n0Sx = n0x * sideSign;
+            const float n0Sy = n0y * sideSign;
+            const float n1Sx = n1x * sideSign;
+            const float n1Sy = n1y * sideSign;
+            float mx = n0Sx + n1Sx;
+            float my = n0Sy + n1Sy;
+            const float mLen = std::sqrt(mx * mx + my * my);
+            if (mLen < 1e-4f) {
+                // Near-anti-parallel pair (~180° interior angle): the
+                // bisector cancels. Use the local perpendicular at scale 1.
+                return { n1Sx, n1Sy, 1.0f };
+            }
+            mx /= mLen;
+            my /= mLen;
+            const float dot = std::fabs(mx * n1Sx + my * n1Sy);
+            float scale = (dot > 1e-3f) ? (1.0f / dot) : kMiterLimit;
+            if (scale > kMiterLimit) scale = kMiterLimit;
+            if (scale < 1.0f)        scale = 1.0f;
+            return { mx, my, scale };
+        };
+        // Look up the angular neighbour of (edgeIdx, end) on the given
+        // angular side. Returns nullptr when the vertex has only this
+        // one edge (boundary case → butt end, no miter).
+        auto findNeighbour = [&endHash](EdgeKey key, uint32_t edgeIdx,
+                                        uint8_t end, int angularOffset)
+                              -> const EndRef* {
+            auto it = endHash.find(key);
+            if (it == endHash.end()) return nullptr;
+            const auto& list = it->second;
+            if (list.size() < 2) return nullptr;
+            int selfIdx = -1;
+            for (int j = 0; j < static_cast<int>(list.size()); ++j) {
+                if (list[j].edgeIdx == edgeIdx && list[j].end == end) {
+                    selfIdx = j;
+                    break;
+                }
+            }
+            if (selfIdx < 0) return nullptr;
+            const int n = static_cast<int>(list.size());
+            const int nbr = ((selfIdx + angularOffset) % n + n) % n;
+            return &list[nbr];
+        };
+        // -------- Emit border quads with per-corner miter ----------------
+        // We compute a "world side" miter at each of the 4 corners of an
+        // edge quad. The canonical world-+1 direction = perp(canonical
+        // tangent T_us). At p1 the outward tangent IS T_us, so world-+1
+        // matches the local-CCW direction (angularOffset = +1). At p2
+        // the outward tangent is -T_us, which inverts the world-side ↔
+        // local-side mapping (world-+1 is now on the local-CW side, so
+        // we step angularOffset = -1 to find the right neighbour). The
+        // shader receives the extrusion direction already on the
+        // correct world side, so it doesn't need to know about local
+        // sign conventions any more.
+        borders.reserve(keptEdges.size() * 4);
+        borderIndices.reserve(keptEdges.size() * 6);
+        for (uint32_t i = 0; i < keptEdges.size(); ++i) {
+            const EdgeRec& r = *keptEdges[i];
+            const EdgeGeom& g = egeom[i];
+            const EdgeKey k1 = endpointKey(r.p1x, r.p1y);
+            const EdgeKey k2 = endpointKey(r.p2x, r.p2y);
+            // Compute the world-side miter at this corner.
+            auto worldCornerMiter = [&](const EdgeKey& vkey, uint8_t end,
+                                        float worldSide) -> std::array<float, 3> {
+                // Outward tangent at this endpoint.
+                const float outX = (end == 0) ?  g.tx : -g.tx;
+                const float outY = (end == 0) ?  g.ty : -g.ty;
+                // World side → local side. At p1 the outward IS the
+                // canonical tangent, so world/local agree. At p2 the
+                // outward is reversed, so world-+1 = local--1 and vice
+                // versa.
+                const float localSide = (end == 0) ? worldSide : -worldSide;
+                const int   angOff    = (localSide > 0.0f) ? +1 : -1;
+                const EndRef* nbr = findNeighbour(vkey, i, end, angOff);
+                if (!nbr) {
+                    // Boundary / single-incident-edge — extrude along
+                    // the canonical world normal, scale 1 (butt).
+                    return { -g.ty * worldSide,  g.tx * worldSide, 1.0f };
+                }
+                const EdgeGeom& gn = egeom[nbr->edgeIdx];
+                float tNbrX, tNbrY;
+                if (nbr->end == 0) { tNbrX =  gn.tx; tNbrY =  gn.ty; }
+                else               { tNbrX = -gn.tx; tNbrY = -gn.ty; }
+                return computeMiter(outX, outY, tNbrX, tNbrY, localSide);
+            };
+            // World -1 side / world +1 side at each endpoint.
+            const auto p1n = worldCornerMiter(k1, 0, -1.0f);
+            const auto p1m = worldCornerMiter(k1, 0,  1.0f);
+            const auto p2n = worldCornerMiter(k2, 1, -1.0f);
+            const auto p2m = worldCornerMiter(k2, 1,  1.0f);
             const uint32_t base = static_cast<uint32_t>(borders.size());
-            borders.push_back({ r.p1x, r.p1y, -1.0f, nx, ny });
-            borders.push_back({ r.p1x, r.p1y,  1.0f, nx, ny });
-            borders.push_back({ r.p2x, r.p2y, -1.0f, nx, ny });
-            borders.push_back({ r.p2x, r.p2y,  1.0f, nx, ny });
+            // Each vertex carries its own EXTRUSION DIRECTION in
+            // (mx, my) — already signed for the world side it belongs
+            // to. The shader extrudes by halfWidth · miterScale along
+            // (mx, my) in Euclidean mode and projects it through the
+            // Jacobian in disk mode (no separate tangent needed: the
+            // projection acts the same on any world-tangent-shaped
+            // vector, miter direction included).
+            borders.push_back({ r.p1x, r.p1y, p1n[0], p1n[1], p1n[2] });
+            borders.push_back({ r.p1x, r.p1y, p1m[0], p1m[1], p1m[2] });
+            borders.push_back({ r.p2x, r.p2y, p2n[0], p2n[1], p2n[2] });
+            borders.push_back({ r.p2x, r.p2y, p2m[0], p2m[1], p2m[2] });
             borderIndices.push_back(base + 0);
             borderIndices.push_back(base + 1);
             borderIndices.push_back(base + 2);
@@ -433,6 +719,34 @@ void Renderer::updatePaletteUbo() {
     ubo.audioBeat[1] = 0.0f;
     ubo.audioBeat[2] = 0.0f;
     ubo.audioBeat[3] = 0.0f;
+
+    // Physical material: the eight user-facing controls come from the
+    // settings sliders; the rest hold the MaterialParams defaults (a
+    // material preset sets those as a bundle). The per-frame UBO patch in
+    // drawFrame overwrites these rows with the modulation-graph result, so
+    // this is the cold-path seed for the first frame after a settings change.
+    MaterialParams m{};
+    m.roughBase     = settings_.matRoughness;
+    // See renderer.cpp drawFrame — Metalness slider drives the uniform
+    // base; variation is its own settings_.matMetalMod knob.
+    m.metalBase     = settings_.matMetalness;
+    m.sheen         = settings_.matSheen;
+    m.clearcoat     = settings_.matClearcoat;
+    m.anisotropy    = settings_.matAnisotropy;
+    m.iridescence   = settings_.matIridescence;
+    m.emissive      = settings_.matEmissive;
+    m.bevelStrength = settings_.matRelief;
+    m.sheenColor[0] = settings_.matSheenColorR;
+    m.sheenColor[1] = settings_.matSheenColorG;
+    m.sheenColor[2] = settings_.matSheenColorB;
+    m.iridThickMin  = settings_.matIridThickMin;
+    m.iridThickMax  = settings_.matIridThickMax;
+    m.roughMod      = settings_.matRoughMod;
+    m.metalMod      = settings_.matMetalMod;
+    applyLightControls(m, settings_.lightAngle, settings_.lightElevation,
+                       settings_.lightIntensity, settings_.lightWarmth,
+                       settings_.lightAmbient);
+    writeMaterialRows(&ubo.matNormal[0], m);
 
     std::memcpy(paletteUboMapped_, &ubo, sizeof(ubo));
 }

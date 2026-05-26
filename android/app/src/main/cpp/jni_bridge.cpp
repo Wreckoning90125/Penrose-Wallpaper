@@ -21,14 +21,22 @@ inline Renderer* asRenderer(jlong ptr) { return reinterpret_cast<Renderer*>(ptr)
 // Decode a Settings struct from the flat int/float arrays the Kotlin side
 // passes us. Layout (ints / floats):
 //   ints:   [family, seedIdx, generation, preset, colorCount, colorMode,
-//            borderOn, bgMode, rippleMode, panMode, rippleKind]
+//            borderOn, bgMode, rippleMode, panMode, rippleKind,
+//            projection, hypBorderSubdiv, hypFillSubdiv]
 //   floats: [borderWidth, borderL, borderC, borderH, borderAlpha,
 //            bgL, bgC, bgH, rippleAmount,
 //            zoom, rotation, panX, panY,
 //            brightness, depthAmount, rippleSpeed,
-//            custom_0_L, custom_0_C, custom_0_H, ..., custom_9_L, custom_9_C, custom_9_H]
-constexpr int kIntCount = 11;
-constexpr int kFloatCount = 13 + 3 + 3 * kMaxColors;
+//            matRoughness, matMetalness, matSheen, matClearcoat,
+//            matAnisotropy, matIridescence, matEmissive, matRelief,
+//            lightAngle, lightElevation, lightIntensity, lightWarmth, lightAmbient,
+//            matSheenColorR, matSheenColorG, matSheenColorB,
+//            matIridThickMin, matIridThickMax,
+//            matRoughMod, matMetalMod,
+//            hypScale, hypBoostX, hypBoostY,
+//            custom_0_L, custom_0_C, custom_0_H, ..., custom_15_L, custom_15_C, custom_15_H]
+constexpr int kIntCount   = 14;
+constexpr int kFloatCount = 16 + 8 + 5 + 5 + 2 + 3 + 3 * kMaxColors;
 
 Settings decodeSettings(const jint* ints, const jfloat* floats) {
     Settings s{};
@@ -50,6 +58,12 @@ Settings decodeSettings(const jint* ints, const jfloat* floats) {
     s.panMode = pm;
     int rk = ints[10]; if (rk < 0 || rk > 2) rk = 0;
     s.rippleKind = rk;
+    int pj = ints[11]; if (pj < 0 || pj > 1) pj = 0;
+    s.projection = static_cast<Projection>(pj);
+    int bsub = ints[12]; if (bsub < 1) bsub = 1; if (bsub > 32) bsub = 32;
+    s.hypBorderSubdiv = bsub;
+    int fsub = ints[13]; if (fsub < 1) fsub = 1; if (fsub > 8)  fsub = 8;
+    s.hypFillSubdiv = fsub;
 
     s.borderWidth = floats[0];
     s.borderColor = { floats[1], floats[2], floats[3] };
@@ -63,7 +77,30 @@ Settings decodeSettings(const jint* ints, const jfloat* floats) {
     s.brightness = floats[13];
     s.depthAmount = floats[14];
     s.rippleSpeed = floats[15];
-    int base = 16;
+    s.matRoughness   = floats[16];
+    s.matMetalness   = floats[17];
+    s.matSheen       = floats[18];
+    s.matClearcoat   = floats[19];
+    s.matAnisotropy  = floats[20];
+    s.matIridescence = floats[21];
+    s.matEmissive    = floats[22];
+    s.matRelief      = floats[23];
+    s.lightAngle     = floats[24];
+    s.lightElevation = floats[25];
+    s.lightIntensity = floats[26];
+    s.lightWarmth    = floats[27];
+    s.lightAmbient   = floats[28];
+    s.matSheenColorR  = floats[29];
+    s.matSheenColorG  = floats[30];
+    s.matSheenColorB  = floats[31];
+    s.matIridThickMin = floats[32];
+    s.matIridThickMax = floats[33];
+    s.matRoughMod     = floats[34];
+    s.matMetalMod     = floats[35];
+    s.hypScale        = floats[36];
+    s.hypBoostX       = floats[37];
+    s.hypBoostY       = floats[38];
+    int base = 39;
     for (int i = 0; i < kMaxColors; ++i) {
         s.customOklch[i] = { floats[base + 3 * i + 0],
                              floats[base + 3 * i + 1],

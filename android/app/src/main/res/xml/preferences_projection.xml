@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <Preference
+        android:key="nav_back"
+        android:title="← Back"
+        android:summary="" />
+
+    <PreferenceCategory android:title="Projection">
+        <ListPreference
+            android:key="projection"
+            android:title="Mode"
+            android:summary="Euclidean (default; affine view) or Poincaré disk (the Circle Limit projection)"
+            android:entries="@array/projection_entries"
+            android:entryValues="@array/projection_values"
+            android:defaultValue="0" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Poincaré disk">
+        <SeekBarPreference
+            android:key="hyp_scale"
+            android:title="Boundary compression"
+            android:summary="How strongly the projection piles up tiles against the disk boundary. Low → an even radial squeeze, tiles fill the screen, disk boundary off-screen. High → far tiles compress against the boundary and the disk edge becomes visible — the Circle Limit feel. The view auto-fits the projected tiling to the screen, so the slider only controls compression, never visibility."
+            android:min="0" android:max="100" android:defaultValue="50"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="hyp_boost_x"
+            android:title="Disk centre — X"
+            android:summary="Hyperbolic translation along the X axis. 50 = centred at the origin; 0/100 shifts the disk centre to b ≈ (-0.9, 0) / (+0.9, 0)."
+            android:min="0" android:max="100" android:defaultValue="50"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="hyp_boost_y"
+            android:title="Disk centre — Y"
+            android:summary="Hyperbolic translation along the Y axis. 50 = centred at the origin."
+            android:min="0" android:max="100" android:defaultValue="50"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="hyp_border_subdiv"
+            android:title="Border arc subdivision"
+            android:summary="Splits each tile-edge border into N straight sub-segments before projection. Cost is linear in N. 1 = single chord; 8–16 reads as a smooth geodesic arc near the disk boundary; 32 caps it. Triggers a geometry rebuild."
+            android:min="1" android:max="32" android:defaultValue="1"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="hyp_fill_subdiv"
+            android:title="Fill arc subdivision"
+            android:summary="Splits each fill triangle into N² child triangles (barycentric grid; bevels stay on parent edges via linear-interpolated barycentrics). Cost is N², so the slider caps lower than the border. 1 = chord-filled tile; 4 reads as smooth; 8 is the ceiling — past that vertex memory grows uncomfortably at high tile counts. Triggers a geometry rebuild."
+            android:min="1" android:max="8" android:defaultValue="1"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+</PreferenceScreen>

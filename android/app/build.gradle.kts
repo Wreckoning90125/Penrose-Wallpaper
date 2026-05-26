@@ -206,6 +206,15 @@ abstract class CompileShadersTask @Inject constructor(
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val sources: ConfigurableFileCollection
 
+    // Header files (*.glsl) pulled in via #include from the shaders above.
+    // They are not compiled standalone, but editing one must invalidate
+    // every dependent .vert/.frag — declaring them as a separate
+    // @InputFiles collection lets Gradle track their content without
+    // feeding them to glslc.
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val headers: ConfigurableFileCollection
+
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -295,6 +304,11 @@ androidComponents {
             sources.from(
                 shaderSrcDir.asFileTree.matching {
                     include("**/*.vert", "**/*.frag", "**/*.comp")
+                }
+            )
+            headers.from(
+                shaderSrcDir.asFileTree.matching {
+                    include("**/*.glsl")
                 }
             )
             // SPIR-V target env. NDK 29's bundled glslc/shaderc snapshot

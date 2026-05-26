@@ -19,6 +19,24 @@ enum class BackgroundMode : int {
     Match = 1,  // use palette[0]
 };
 
+// Projection of the (Euclidean) tile generators onto the screen.
+//
+// Euclidean is the original mode — affine view transform, straight tile
+// sides. PoincareDisk maps each world coordinate through the
+// hyperbolic-radius homeomorphism E² → B² then a hyperbolic translation
+// τ_b in B², so the tiling appears inside the unit disk *Circle Limit*-
+// style. Every Family in this repo is Euclidean by construction
+// (substitution + de Bruijn dualisation); the hyperbolic mode is a
+// projection of those generators, not a Fuchsian-group orbit. Cosmetic
+// for the Penrose / Ammann–Beenker / Pinwheel / Danzer families;
+// geometrically meaningful for the Binary family, whose Godrèche–Lançon
+// construction descends from the H² horocyclic binary tiling — see
+// docs/hyperbolic/projection-design.md.
+enum class Projection : int {
+    Euclidean    = 0,
+    PoincareDisk = 1,
+};
+
 struct Settings {
     Family family       = Family::P3;
     int    seedIdx      = 0;
@@ -57,12 +75,79 @@ struct Settings {
     float  panY         = 0.0f;
     int    panMode      = 0;
 
+    // Hyperbolic projection mode. `projection` selects Euclidean (the
+    // default; the original affine view transform) or Poincaré-disk
+    // (the Circle Limit projection — see docs/hyperbolic/). `hypScale`
+    // tunes how aggressively world radius is mapped into the disk — at
+    // 1.0 the unit Euclidean ball maps near the disk centre, at 0.3 the
+    // world reaches well into the boundary at unit radius. `hypBoostX`
+    // and `hypBoostY` give the hyperbolic translation τ_b (a point of
+    // B², |b|<1) applied AFTER the radial map; the graph's
+    // OutHypBoost{X,Y} targets can drive these so audio / time / page
+    // scroll feed an animating boost. `hypBorderSubdiv` and
+    // `hypFillSubdiv` are two independent slider knobs because the
+    // costs are different shapes: borders split linearly (N sub-edges
+    // per parent edge), fills split quadratically (N² child triangles
+    // per parent). One slider for both forced one of them to the
+    // wrong cap — either dead zone for one or memory blowup from the
+    // other. Defaults 1 (no tessellation).
+    Projection projection = Projection::Euclidean;
+    float  hypScale         = 1.5f;
+    float  hypBoostX        = 0.0f;
+    float  hypBoostY        = 0.0f;
+    int    hypBorderSubdiv  = 1;
+    int    hypFillSubdiv    = 1;
+
     // Tile look: master brightness multiplier and per-tile depth/parallax
     // gradient amplitude. Depth follows the tile's geometric apex — fat
     // Penrose rhombi bulge at their long-axis apex, thin ones recede,
     // giving a 3D-cube illusion on P3/P2.
     float  brightness   = 1.0f;
     float  depthAmount  = 0.3f;
+
+    // Physical-material controls — eight user-facing knobs, each a slider
+    // base value the modulation graph can drive on top of. They map 1:1
+    // onto MaterialParams fields (render_state.h); the non-slider material
+    // fields (film thickness, sheen tint, bevel/ripple shaping) keep their
+    // MaterialParams defaults. A material preset bundles the sliders below
+    // plus the lighting controls; it does not touch the non-slider fields.
+    float  matRoughness   = 0.50f;
+    float  matMetalness   = 0.40f;
+    float  matSheen       = 0.35f;
+    float  matClearcoat   = 0.45f;
+    float  matAnisotropy  = 0.40f;
+    float  matIridescence = 0.45f;
+    float  matEmissive    = 0.60f;
+    float  matRelief      = 1.05f;
+
+    // Lighting rig controls. The renderer derives the key/fill directions,
+    // colours and intensities from these five (see applyLightControls);
+    // like the material knobs they are slider bases the graph can drive.
+    float  lightAngle     = 230.0f;  // key azimuth, degrees
+    float  lightElevation = 55.0f;   // key elevation, degrees
+    float  lightIntensity = 1.00f;   // master key+fill scale
+    float  lightWarmth    = 0.50f;   // 0 cool .. 0.5 neutral .. 1 warm
+    float  lightAmbient   = 0.22f;   // flat ambient level
+
+    // Per-preset material colour overrides. No slider UI today — these
+    // are seeded by the Material preset picker so each preset has its
+    // own characteristic sheen tint and iridescence band. Defaults
+    // match MaterialParams (render_state.h).
+    float  matSheenColorR  = 1.00f;
+    float  matSheenColorG  = 0.97f;
+    float  matSheenColorB  = 0.92f;
+    float  matIridThickMin = 280.0f;  // nm — Belcour-Barla thin-film range
+    float  matIridThickMax = 560.0f;
+
+    // Variation knobs. Defaults are 0 — the Roughness slider gives a
+    // uniform surface and the Metalness slider gives a uniform metal,
+    // the way users expect from those names. Dial these up to bring
+    // back the seam-modulated roughness (worn edges in the bevel
+    // valleys) and the per-tile-type metalness from Phase B — both
+    // were always-on before and made the main sliders feel like they
+    // were stuck or only doing half a job.
+    float  matRoughMod = 0.0f;
+    float  matMetalMod = 0.0f;
 
     // Custom palette — used when `preset == Preset::Custom`. 10 OKLCH
     // triples; only the first `colorCount` are actually consumed.
@@ -82,11 +167,16 @@ struct Settings {
 
 // Returns true if any setting that affects geometry (tile generation) changed.
 // Used by the renderer to decide whether to rebuild vertex buffers or just
-// re-record draw commands.
+// re-record draw commands. Both subdivision counts and the projection mode
+// gate the tessellation paths in renderer_geometry.cpp — toggling any of
+// them has to rebuild to actually apply (or strip) the polyline split.
 inline bool geometryChanged(const Settings& a, const Settings& b) {
     return a.family != b.family
         || a.seedIdx != b.seedIdx
-        || a.generation != b.generation;
+        || a.generation != b.generation
+        || a.hypBorderSubdiv != b.hypBorderSubdiv
+        || a.hypFillSubdiv   != b.hypFillSubdiv
+        || a.projection != b.projection;
 }
 
 // Returns true if anything that affects per-tile classification changed.

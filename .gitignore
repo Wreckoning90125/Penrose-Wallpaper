@@ -35,3 +35,7 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Python bytecode cache from tools/ scripts
+__pycache__/
+*.pyc

@@ -8,18 +8,9 @@ import com.penrose.wallpaper.Settings
 import org.json.JSONObject
 
 /**
- * Loads bundled starter presets from `assets/presets/`. A preset captures
- * two pieces of state:
- *
- *   - `settings`: static SharedPreferences values (e.g. `ripple_kind`,
- *     `border_width`) the preset forces. Loaded into prefs directly.
- *   - `graph`: serialized C++ node graph JSON. Written to
- *     `filesDir/modulation_graph.json`; the renderer's graphLoad picks
- *     it up on next surface bring-up.
- *
- * Loading has no ongoing state — once applied, those values ARE the
- * user's settings + graph. The user is free to edit any slot or rewire
- * any node afterward.
+ * Loads bundled starter presets from `assets/presets/`. These presets are
+ * reusable audio/reactivity/material starts; tiling target selection lives in
+ * the Tiling screen and uses `AtlasStore`.
  */
 internal class PresetStore(private val context: Context) {
 
@@ -43,16 +34,10 @@ internal class PresetStore(private val context: Context) {
     }
 
     /**
-     * Writes preset.staticSettings into [prefs]. If — and only if — the
-     * preset ships a graph block, the persisted modulation graph is
-     * overwritten with it. A colours-only / sliders-only preset leaves
-     * the user's hand-built graph completely alone: loading such a
-     * preset must never wipe a graph the user spent time wiring.
+     * Writes preset.staticSettings into [prefs]. If the preset ships a graph
+     * block, the persisted modulation graph is overwritten with it.
      */
     fun applyToPrefs(preset: Preset, prefs: SharedPreferences) {
-        // Write the graph JSON to disk FIRST (before the revision bump)
-        // so a listener reacting to the bump reads the new graph. A
-        // preset with no graph block does not touch the file at all.
         val graphJson = preset.graphJson
         if (graphJson != null) {
             try {
@@ -71,9 +56,6 @@ internal class PresetStore(private val context: Context) {
                     is StaticValue.FloatValue  -> putFloat(key, value.v)
                 }
             }
-            // Bump the revision only when the graph file actually
-            // changed — a slider-only preset must not make listeners
-            // reload (and thereby reset) an unchanged graph.
             if (graphJson != null) {
                 putLong(Settings.KEY_GRAPH_REVISION, System.currentTimeMillis())
             }
@@ -85,21 +67,10 @@ internal class PresetStore(private val context: Context) {
         val id = obj.optString("id", filename.removeSuffix(".json"))
         val name = obj.optString("name", id)
         val desc = obj.optString("description", "")
-        val staticJson = obj.optJSONObject("settings") ?: JSONObject()
-        val staticSettings = mutableMapOf<String, StaticValue>()
-        val keys = staticJson.keys()
-        while (keys.hasNext()) {
-            val k = keys.next()
-            val v = staticJson.get(k)
-            staticSettings[k] = when (v) {
-                is Int     -> StaticValue.IntValue(v)
-                is Long    -> StaticValue.IntValue(v.toInt())
-                is Double  -> StaticValue.FloatValue(v.toFloat())
-                is Boolean -> StaticValue.BoolValue(v)
-                is String  -> StaticValue.StringValue(v)
-                else -> continue
-            }
-        }
+        val staticSettings = StaticSettingsParser.parse(
+            obj.optJSONObject("settings") ?: JSONObject(),
+            filename,
+        )
         val graphJson = obj.optJSONObject("graph")?.toString()
         return Preset(id, name, desc, staticSettings, graphJson)
     }

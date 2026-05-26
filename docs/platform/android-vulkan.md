@@ -10,15 +10,16 @@ or the renderer pipeline.
 
 ## Current pins
 
-| Item | Repo value | Where |
-|------|------------|-------|
-| Android Gradle Plugin | `9.2.0` | `android/gradle/libs.versions.toml` |
-| Gradle in CI | `9.4.1` | `.github/workflows/android.yml`, `.github/workflows/codeql.yml` |
-| NDK | `29.0.14206865` | `android/gradle/libs.versions.toml`, CI SDK install |
-| compile/target/min SDK | `36` | `android/gradle/libs.versions.toml` |
-| CMake | `3.22.1` | `android/app/build.gradle.kts`, CI SDK install |
-| JVM bytecode target | `17` | `android/app/build.gradle.kts` |
-| Shader target env | `vulkan1.3` | `android/app/build.gradle.kts` |
+- Android Gradle Plugin: `9.2.0` in
+  `android/gradle/libs.versions.toml`.
+- Gradle in CI: `9.4.1` in `.github/workflows/android.yml` and
+  `.github/workflows/codeql.yml`.
+- NDK: `29.0.14206865` in `android/gradle/libs.versions.toml` and CI SDK
+  install steps.
+- compile/target/min SDK: `36` in `android/gradle/libs.versions.toml`.
+- CMake: `3.22.1` in `android/app/build.gradle.kts` and CI SDK install steps.
+- JVM bytecode target: `17` in `android/app/build.gradle.kts`.
+- Shader target env: `vulkan1.3` in `android/app/build.gradle.kts`.
 
 ## What matters
 
@@ -43,30 +44,31 @@ or the renderer pipeline.
 - The border pipeline deliberately pads `BorderVertex` to 32 bytes. Do not
   shrink it back to 20 bytes without retesting on mobile Vulkan drivers.
 - The Android build workflow and CodeQL workflow both need `security-events:
-  write` for SARIF/code-scanning upload. Fork PRs can still warn; the Android
-  workflow keeps SARIF upload `continue-on-error: true`.
+  write` for SARIF/code-scanning upload.
+- Static-analysis ratchets live in `ci/static_analysis_baseline.json` and are
+  enforced by `tools/static_analysis_ratchet.py`.
 
 ## Official update sources
 
 Check these pages when bumping versions or debugging platform behavior:
 
 - Android Gradle Plugin release notes:
-  https://developer.android.com/build/releases/gradle-plugin
+  <https://developer.android.com/build/releases/gradle-plugin>
 - AGP built-in Kotlin migration:
-  https://developer.android.com/build/migrate-to-built-in-kotlin
+  <https://developer.android.com/build/migrate-to-built-in-kotlin>
 - Android NDK downloads and revision history:
-  https://developer.android.com/ndk/downloads
+  <https://developer.android.com/ndk/downloads>
 - Android 16 behavior changes for target SDK 36:
-  https://developer.android.com/about/versions/16/behavior-changes-16
+  <https://developer.android.com/about/versions/16/behavior-changes-16>
 - Android Vulkan getting started:
-  https://developer.android.com/ndk/guides/graphics/getting-started
+  <https://developer.android.com/ndk/guides/graphics/getting-started>
 - Android Vulkan shader compilers and `glslc`:
-  https://developer.android.com/ndk/guides/graphics/shader-compilers
+  <https://developer.android.com/ndk/guides/graphics/shader-compilers>
 - Khronos Vulkan specification:
-  https://docs.vulkan.org/spec/latest/index.html
+  <https://docs.vulkan.org/spec/latest/index.html>
 - Khronos Vulkan Guide, especially layers, vertex input, synchronization,
   shader layout, and pipeline cache:
-  https://github.khronos.org/Vulkan-Site/guide/latest/
+  <https://github.khronos.org/Vulkan-Site/guide/latest/>
 
 ## Local refresh checklist
 

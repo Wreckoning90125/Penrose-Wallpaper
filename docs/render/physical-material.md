@@ -22,18 +22,25 @@ object), drawing two pipelines straight to the swapchain image. Two
 draws per frame: fill triangles, then border quads. Shaders are GLSL
 460, compiled by `glslc` in the NDK build.
 
-| File | Owns |
-|------|------|
-| `cpp/renderer/render_state.h` | `FillVertex`, `BorderVertex`, `PushBlock`, `PaletteUbo`, `MaterialParams`, `applyLightControls` |
-| `cpp/renderer/renderer_vulkan.cpp` | device / swapchain / pipeline setup, vertex-attribute descriptions |
-| `cpp/renderer/renderer_geometry.cpp` | `buildGeometry()` (tiles → vertex lists), `updatePaletteUbo()` (cold path) |
-| `cpp/renderer/renderer.cpp` | lifecycle, `drawFrame` (per-frame UBO patch, audio-graph evaluation) |
-| `cpp/settings.h`, `cpp/jni_bridge.cpp` | `Settings` struct + JNI decode for every user-facing control |
-| `kotlin/Settings.kt`, `kotlin/SettingsFragment.kt` | persistence keys, Material screen sliders, preset picker grid |
-| `kotlin/preset/MaterialPreset.kt`, `tools/bake_preset_thumbnails.py` | preset bundles + baked tile-rhomb thumbnails (kept in sync) |
-| `shaders/fill.vert` / `fill.frag` | fill stage — displacement, parallax, bevel, BRDF |
-| `shaders/border.vert` / `border.frag` | expanded-quad borders |
-| `shaders/uniforms.glsl` | shared `Palette` UBO, `#include`'d by every stage via `GL_GOOGLE_include_directive` |
+- `cpp/renderer/render_state.h`: `FillVertex`, `BorderVertex`, `PushBlock`,
+  `PaletteUbo`, `MaterialParams`, and `applyLightControls`.
+- `cpp/renderer/renderer_vulkan.cpp`: device, swapchain, pipeline setup, and
+  vertex-attribute descriptions.
+- `cpp/renderer/renderer_geometry.cpp`: `buildGeometry()` for tile vertex
+  lists and `updatePaletteUbo()` for the cold palette path.
+- `cpp/renderer/renderer.cpp`: lifecycle plus `drawFrame`, including per-frame
+  UBO patching and audio-graph evaluation.
+- `cpp/settings.h` and `cpp/jni_bridge.cpp`: `Settings` plus JNI decode for
+  every user-facing control.
+- `kotlin/Settings.kt` and `kotlin/SettingsFragment.kt`: persistence keys,
+  Material screen sliders, and the preset picker grid.
+- `kotlin/preset/MaterialPreset.kt` and `tools/bake_preset_thumbnails.py`:
+  preset bundles plus baked tile-rhomb thumbnails.
+- `shaders/fill.vert` and `fill.frag`: fill-stage displacement, parallax,
+  bevel, and BRDF.
+- `shaders/border.vert` and `border.frag`: expanded-quad borders.
+- `shaders/uniforms.glsl`: shared `Palette` UBO included by every stage through
+  `GL_GOOGLE_include_directive`.
 
 **Fill vertex** (`render_state.h`) — non-indexed, 3 verts pushed per triangle:
 
@@ -59,11 +66,14 @@ in one shader file.
 ```c
 struct PaletteUbo {
   float palette[16][4]; float borderColor[4]; float bgColor[4];
-  uint32_t flags[4]; float anim[4];     // anim:    x=time y=rippleAmt z=waveSym w=pageOffset
-  float borderGeom[4]; float effects[4];// effects: x=brightness y=depth z=rippleSpeed w=rippleKind
+  uint32_t flags[4]; float anim[4];
+  // anim: x=time y=rippleAmt z=waveSym w=pageOffset
+  float borderGeom[4]; float effects[4];
+  // effects: x=brightness y=depth z=rippleSpeed w=rippleKind
   float audioBands[2][4]; float audioBeat[4];
   // Material rows — packed from MaterialParams (see settings.h).
-  float matNormal[4]; float matSurface[4]; float matLobeA[4]; float matLobeB[4];
+  float matNormal[4]; float matSurface[4];
+  float matLobeA[4]; float matLobeB[4];
   float matIrid[4]; float matSheenCol[4];
   float keyLight[4]; float keyColor[4];
   float fillLight[4]; float fillColor[4]; float ambient[4];
@@ -75,10 +85,9 @@ struct PaletteUbo {
 that array + bump `vertexAttributeDescriptionCount`.
 
 **Swapchain formats**: preferred is `A2B10G10R10_UNORM_PACK32` on the
-Display-P3 colour space (10-bit), with sRGB 8-bit fallbacks — wide gamut
-and the extra bit depth carry tonemapped highlights well. No depth
-buffer, no offscreen/HDR target; the HDR composite pass that owns AgX
-tonemap is tracked in `todo.md`.
+Display-P3 colour space (10-bit). sRGB swapchains write linear colour and let
+hardware encode on store. No depth buffer, no offscreen/HDR target; the HDR
+composite pass that owns AgX tonemap is tracked in `todo.md`.
 
 **Already present, ready to exploit:**
 
@@ -124,14 +133,13 @@ wired into the BRDF's channels — not 3-D geometry, not textures.**
 **It is all portable shader math.** TSL is a node front-end that compiles to
 WGSL; every node maps one-to-one to GLSL we compile with `glslc`:
 
-| Reference (TSL / three.js) | Our Vulkan / GLSL equivalent |
-|---|---|
-| `dFdx` / `dFdy` | `dFdx` / `dFdy` (GLSL core → SPIR-V) |
-| `MeshPhysicalNodeMaterial` | hand-written Cook-Torrance GGX + lobes in `fill.frag` |
-| OKLab → linear-sRGB node | already in `color.cpp` and authored into the palette |
-| ACES filmic tonemap | one GLSL function (we use AgX in the HDR composite pass on the todo list) |
-| directional / point / ambient lights | light vectors + colours in the UBO |
-| `uniform()` param registry | `PaletteUbo` fields + the existing node graph |
+- `dFdx` / `dFdy`: GLSL core derivatives emitted to SPIR-V.
+- `MeshPhysicalNodeMaterial`: hand-written Cook-Torrance GGX plus lobes in
+  `fill.frag`.
+- OKLab to linear-sRGB node: `color.cpp` palette authoring.
+- ACES filmic tonemap: one GLSL function; AgX remains the HDR composite target.
+- Directional, point, and ambient lights: light vectors plus colours in the UBO.
+- `uniform()` param registry: `PaletteUbo` fields plus the existing node graph.
 
 **A tiling beats the reference's single disk in two structural ways.**
 
@@ -157,7 +165,7 @@ UI is replaced by structure + audio + a curated handful of controls.
 
 **Channel-modulation pattern.** Every modulatable BRDF channel `X` is
 
-```
+```text
 X_effective = X_base  +  X_mod · f(field)
 ```
 
@@ -166,15 +174,18 @@ in roughly `[0,1]` drawn from one of the tiling's own fields. **The pairing of
 channel to field is fixed in the shader by design intent — it is not a knob.**
 That single decision is what removes ~30 sliders:
 
-| Channel | Field it keys to | Read |
-|---|---|---|
-| normal | bevel `edgeDist` + bulge `vDepth` + wave `vWaveGrad` | beveled chips, domed tiles, lit ripple |
-| roughness | bevel `edgeDist` (rougher in seam valleys) | free contact-grime / worn-edge read |
-| metalness | per-tile `type` | structural — alternating tile kinds read as different metals |
-| emissive | `max(vRipple, 0)` and/or per-tile `type` | ripple crests and chosen tiles glow |
-| sheen intensity | bevel `edgeDist` (sheen rises toward grazing rim) | velvet catch along every tile edge |
-| anisotropy direction | per-tile `orientation` from `classify()` | brushed-metal streaks aligned per tile |
-| iridescence thickness | per-tile `ring` distance, offset by ripple/audio | oil-slick that shifts with distance and sound |
+- Normal keys to bevel `edgeDist`, bulge `vDepth`, and wave `vWaveGrad`, giving
+  beveled chips, domed tiles, and lit ripple.
+- Roughness keys to bevel `edgeDist`, so contact valleys read as more worn.
+- Metalness keys to per-tile `type`, making alternating tile kinds read as
+  distinct metals.
+- Emissive keys to `max(vRipple, 0)` or per-tile `type`, so ripple crests and
+  chosen tiles glow.
+- Sheen intensity keys to bevel `edgeDist`, catching light along tile edges.
+- Anisotropy direction keys to per-tile `orientation` from `classify()`, giving
+  brushed-metal streaks aligned per tile.
+- Iridescence thickness keys to per-tile `ring` distance plus ripple/audio
+  offsets, shifting the film colour with distance and sound.
 
 **The control surface.** Two layers, both real, neither audio-dependent:
 

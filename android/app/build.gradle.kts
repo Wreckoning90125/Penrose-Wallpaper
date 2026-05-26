@@ -39,13 +39,11 @@ android {
             cmake {
                 arguments += listOf(
                     "-DANDROID_STL=c++_static",
-                    // `latest` resolves to whatever max API the active NDK
-                    // supports — avoids the legacy toolchain's hardcoded
-                    // "android-36 is above the maximum supported version 35"
-                    // bail. minSdk/targetSdk in Gradle stay at 36 and only
-                    // affect the manifest, not the native toolchain.
                     "-DANDROID_PLATFORM=latest",
                 )
+                if (project.findProperty("penroseTidy")?.toString() == "true") {
+                    arguments += "-DPENROSE_TIDY=ON"
+                }
                 cppFlags += "-std=c++20"
             }
         }
@@ -55,15 +53,10 @@ android {
         buildConfig = false
     }
 
-    // Android Lint runs Google's curated set of manifest / resource /
-    // Kotlin checks (FGS permission audits, exported-without-filter,
-    // accessibility, deprecation, security). Promoted to CI gate so
-    // ERROR-severity regressions land as PR failures. Warnings still
-    // get reported (HTML + SARIF artifacts uploaded by the workflow)
-    // but don't gate — every project has a long tail of advisory
-    // warnings (OldTargetApi against the current SDK, unused string
-    // resources from preset assets, etc.) and we'd rather see them
-    // in code-scanning than block CI on them.
+    // Android Lint runs Google's manifest, resource, Kotlin, and security
+    // checks. CI also ratchets the SARIF report through
+    // ci/static_analysis_baseline.json, so critical findings stay at zero
+    // and noncritical findings must keep moving down.
     //
     // No `baseline` file: Lint's baseline workflow CREATES the file
     // on first run and ABORTS the build asking you to re-run, which
@@ -99,13 +92,14 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    packaging {
-        // SPIR-V blobs ship as raw assets; do not let aapt try to compress them.
-        jniLibs.useLegacyPackaging = false
-    }
-
     androidResources {
         noCompress.add("spv")
+    }
+
+    sourceSets {
+        getByName("main") {
+            assets.srcDir(layout.projectDirectory.dir("../../atlas").asFile)
+        }
     }
 
     // A debug keystore is checked into the repo at app/debug.keystore. The
@@ -168,11 +162,6 @@ android {
     }
 }
 
-// AGP 9 removed the legacy `kotlinOptions { jvmTarget = "..." }` block in favour
-// of the kotlin-gradle-plugin's own DSL. The bytecode target stays at 17 — that's
-// where Android's runtime support stops without desugaring tricks. Gradle itself
-// runs on JDK 25 (latest LTS) per the CI workflow; only the *emitted* bytecode
-// is pinned here.
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
@@ -288,11 +277,6 @@ fun glslcExecutable(): String {
     return File(resolveNdkPath(), "shader-tools/$hostTag/$glslcName").absolutePath
 }
 
-// AGP 9 rejects Provider-typed entries on the legacy SourceSet.assets API. The
-// blessed replacement is the Variant API: register one task per variant and
-// let AGP wire its outputDir into the variant's asset sources. AGP assigns the
-// output directory itself (under build/intermediates/...) and adds it as a
-// generated asset srcDir, so merge/package tasks pick it up automatically.
 androidComponents {
     onVariants { variant ->
         val taskName = "compile${variant.name.replaceFirstChar { it.uppercase() }}Shaders"

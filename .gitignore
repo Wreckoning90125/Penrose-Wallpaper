@@ -11,6 +11,11 @@ local.properties
 # Log/OS Files
 *.log
 
+# Web toolchain/build output
+node_modules/
+dist/
+.cache/
+
 # Android Studio generated files and folders
 captures/
 .externalNativeBuild/

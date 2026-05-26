@@ -49,10 +49,10 @@ no reordering.
 | Property        | Value |
 |-----------------|-------|
 | Symmetry order  | <n>-fold (or "periodic") |
-| Symmetry type   | exact-global / single-centre / statistical / periodic / none |
+| Symmetry type   | exact / centred / statistical / periodic / none |
 | Aperiodic       | yes / no / not-forced |
 | Prototiles      | <count> — <names> |
-| Construction    | substitution / matching-rule / dualization / cut-and-project / covering / direct |
+| Construction    | subst. / matching / dual / C&P / covering / direct |
 | Inflation factor| <value> or n/a |
 | Attribution     | <people / sources> |
 
@@ -121,7 +121,7 @@ These terms have a fixed meaning across all documents here. Use them exactly.
 ## Index
 
 | File | Symmetry | Systems documented |
-|------|----------|--------------------|
+| --- | --- | --- |
 | [`pentagonal-penrose.md`](pentagonal-penrose.md) | 5-fold | Penrose P1 (six-tile), P2 (kite & dart), P3 (rhomb); Ammann bars; decapods; Gummelt decagon covering |
 | [`pentagonal-keplerian.md`](pentagonal-keplerian.md) | 5-fold | Keplerian pentagon/star/boat tilings; boat-eliminated tiling; "pentagons and stars alone" |
 | [`pentagonal-binary.md`](pentagonal-binary.md) | 5-fold | Binary tiling; Mikulla–Roth tiling; Robinson & Tübingen triangle tilings; HBS (hexagon-boat-star) tiling |
@@ -133,6 +133,7 @@ These terms have a fixed meaning across all documents here. Use them exactly.
 | [`periodic-reference.md`](periodic-reference.md) | periodic | Cairo tiling; conventional periodic tilings and the 17 wallpaper groups; the 15 monohedral convex pentagonal tilings (contrast baseline) |
 | [`einstein.md`](einstein.md) | none | Smith-Myers-Kaplan-Goodman-Strauss Hat and Spectre monotiles |
 | [`catalogue.md`](catalogue.md) | reference | Flat catalogue of every known aperiodic prototile set (E²/H²/E³), and which the renderer covers |
+| [`atlas.md`](atlas.md) | reference | Shared curated render-target atlas consumed by the Android live wallpaper |
 | [`bibliography.md`](bibliography.md) | reference | Master source list for the whole tree, structured by these files |
 | [`hyperbolic-and-tooling.md`](hyperbolic-and-tooling.md) | reference | Hyperbolic (H²) tilings, the Escher / hyperbolic-crochet lineage, EPINET, and the crystallographic-tooling boundary |
 | [`local-corpus-audit.md`](local-corpus-audit.md) | reference | File-level audit of `.local/**` docs and their tiling usefulness |

@@ -1,0 +1,20 @@
+{
+  "name": "penrose-wallpaper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "web:generate": "python3 tools/generate_web_geometry.py",
+    "preweb:dev": "npm run web:generate",
+    "web:dev": "vite --host 0.0.0.0",
+    "preweb:build": "npm run web:generate",
+    "web:build": "vite build",
+    "web:preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "three": "0.184.0"
+  },
+  "devDependencies": {
+    "vite": "8.0.14"
+  }
+}

@@ -112,6 +112,8 @@ internal class Settings(
         const val KEY_FAMILY        = "family"
         const val KEY_SEED          = "seed"
         const val KEY_GENERATION    = "generation"
+        const val KEY_ATLAS_CATEGORY = "atlas_category"
+        const val KEY_ATLAS_TARGET   = "atlas_target"
         const val KEY_PRESET        = "preset"
         const val KEY_COLOR_COUNT   = "color_count"
         const val KEY_COLOR_MODE    = "color_mode"

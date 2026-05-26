@@ -665,6 +665,10 @@
   function rebuild() {
     const fam = FAMILIES[state.familyId];
     const seed = fam.seeds[state.seedIdx % fam.seeds.length];
+    const title = 'Penrose · ' + fam.name;
+    const titleEl = document.querySelector('.topbar .title');
+    if (titleEl) titleEl.textContent = title;
+    document.title = title;
     let tris = seed.fn();
     for (let i = 0; i < state.generation; i++) {
       const next = fam.subdivide(tris);
@@ -1299,8 +1303,8 @@ document.getElementById('rotate').value = '0';
         await document.exitFullscreen();
       }
     } catch (err) {
-      // iOS Safari fallback: simulate fullscreen by hiding chrome and
-      // engaging the idle timer manually.
+      // iOS Safari path: simulate fullscreen by hiding chrome and engaging
+      // the idle timer manually.
       inFullscreen = !inFullscreen;
       setUiHidden(inFullscreen);
       if (inFullscreen) armIdleTimer(); else clearIdleTimer();

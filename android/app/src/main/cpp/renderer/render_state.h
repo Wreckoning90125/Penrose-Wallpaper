@@ -63,10 +63,21 @@ struct FillVertex {
 // projTangentRadial+boostTangent Jacobian as a tangent vector would
 // see — conformality preserves the bisector angle exactly, so the
 // joint closes in disk space at the same miterScale.
+//
+// Stride padded to 32 bytes (8 floats = 2 vec4). The five live
+// fields only need 20 bytes, but several mobile Vulkan drivers
+// (older Adreno especially) silently misfetch vertex attributes
+// when the binding stride isn't a multiple of 16 — perpendicular
+// butt-end output regardless of what the source CPU data carries.
+// The Vulkan spec doesn't require vec4-multiple stride, but in
+// practice every reliable layout I've seen does it. Cost is 12
+// extra bytes per vertex × ~4 verts/edge × a few thousand edges =
+// <0.5 MB on the wire, invisible.
 struct BorderVertex {
     float x, y;
     float mx, my;       // mitered corner direction (already signed for the world side)
     float miterScale;   // halfWidth multiplier — bridges the angular gap
+    float _pad0, _pad1, _pad2;  // stride → 32 bytes for vec4-multiple alignment
 };
 
 // Vertex push constants.

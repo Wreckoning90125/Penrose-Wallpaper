@@ -146,6 +146,8 @@ int main() {
         { Family::Heptagonal,    "Heptagonal",    3, false },
         { Family::Binary,        "Binary",        2, false },
         { Family::P1,            "P1",            1, false },
+        { Family::Hat,           "Hat",           4, false },
+        { Family::Spectre,       "Spectre",       9, false },
     };
 
     constexpr int kSamples = 20000;

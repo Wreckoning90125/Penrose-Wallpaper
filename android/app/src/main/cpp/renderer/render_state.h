@@ -61,8 +61,8 @@ struct FillVertex {
 // this vertex's world side, so no per-vertex side flag is needed. In
 // disk mode the shader projects (mx, my) through the same
 // projTangentRadial+boostTangent Jacobian as a tangent vector would
-// see — conformality preserves the bisector angle exactly, so the
-// joint closes in disk space at the same miterScale.
+// see — conformality preserves the local join angle, so the joint
+// closes in disk space at the same miterScale.
 //
 // Stride padded to 32 bytes (8 floats = 2 vec4). The five live
 // fields only need 20 bytes, but several mobile Vulkan drivers
@@ -76,7 +76,7 @@ struct FillVertex {
 struct BorderVertex {
     float x, y;
     float mx, my;       // mitered corner direction (already signed for the world side)
-    float miterScale;   // halfWidth multiplier — bridges the angular gap
+    float miterScale;   // halfWidth multiplier to the offset-line intersection
     float _pad0, _pad1, _pad2;  // stride → 32 bytes for vec4-multiple alignment
 };
 

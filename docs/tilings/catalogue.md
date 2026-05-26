@@ -68,13 +68,13 @@ author + year appear here.
 
 ### E² — aperiodic monotiles
 
-| Name | Tiles | Year | Notes |
-|------|-------|------|-------|
-| Aperiodic monotile using dendrites (Mampusti/Whittaker) | 1 | 2021 | Monotile using dendrites and a seed tile |
-| Aperiodic spiral monotile (Klaassen) | 1 | 2022 | Monotile (one matching rule) using a seed tile |
-| Hilbert curve monotile (Klaassen) | 1 | 2022 | Monotile creating a Hilbert curve using a seed tile |
-| Smith–Myers–Kaplan–Goodman-Strauss "Hat" polytile | 1 | 2023 | Mirrored monotiles; the first example of an "einstein" |
-| Smith–Myers–Kaplan–Goodman-Strauss "Spectre" polytile | 1 | 2023 | "Strictly chiral" aperiodic monotile; the first real "einstein" (no reflections needed) |
+| Name | Tiles | Year | Renderer | Notes |
+|------|-------|------|----------|-------|
+| Aperiodic monotile using dendrites (Mampusti/Whittaker) | 1 | 2021 | — | Monotile using dendrites and a seed tile |
+| Aperiodic spiral monotile (Klaassen) | 1 | 2022 | — | Monotile (one matching rule) using a seed tile |
+| Hilbert curve monotile (Klaassen) | 1 | 2022 | — | Monotile creating a Hilbert curve using a seed tile |
+| Smith–Myers–Kaplan–Goodman-Strauss "Hat" polytile | 1 | 2023 | Hat | Mirrored monotiles; the first example of an "einstein" |
+| Smith–Myers–Kaplan–Goodman-Strauss "Spectre" polytile | 1 | 2023 | Spectre | "Strictly chiral" aperiodic monotile; the first real "einstein" (no reflections needed) |
 
 ---
 
@@ -108,11 +108,9 @@ author + year appear here.
 
 The renderer covers the three Penrose sets (P1, P2, P3) directly, plus the
 Binary, Pinwheel, Chair, dodecagonal/Ammann–Beenker/heptagonal (de Bruijn
-multigrid), Tübingen, and Danzer 7-fold families; the Robinson-triangle and
-"starfish, ivy leaf, hex" sets are MLD to the Penrose tilings and so are
-covered through P1/P2/P3. The obvious near-term candidates are the
-Smith–Myers–Kaplan–Goodman-Strauss **Hat** and **Spectre** einsteins (a
-strong E² target — a single substitution-driven monotile), the
-**Socolar–Taylor** monotile, and the **square-triangle** and **Shield /
+multigrid), Tübingen, Danzer 7-fold, Hat, and Spectre families; the
+Robinson-triangle and "starfish, ivy leaf, hex" sets are MLD to the Penrose
+tilings and so are covered through P1/P2/P3. The obvious near-term candidates
+are the **Socolar–Taylor** monotile and the **square-triangle** and **Shield /
 Socolar** sets, which are 12-fold and relate directly to our existing
 Dodecagonal family.

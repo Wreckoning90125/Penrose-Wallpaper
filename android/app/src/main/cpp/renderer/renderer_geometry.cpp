@@ -30,6 +30,7 @@ namespace {
 // reference scale. updatePaletteUbo applies the per-generation
 // deflation factor on top.
 constexpr float kBorderWidthScale = 0.005f;
+constexpr float kPi = 3.14159265358979323846f;
 
 // Edge-dedup map record. Each unique edge midpoint is hit by up to two
 // tiles; we record both kinds so hideSeam can decide whether the seam
@@ -270,7 +271,7 @@ bool Renderer::buildGeometry() {
             // and binary families) carries the bulge along its long
             // diagonal — the ridge of the Penrose rhombus generalised. The
             // Chair L-tromino has no depth axis and stays flat.
-            float depth[12] = { 0.0f };
+            float depth[kMaxTileVerts] = { 0.0f };
             if (fi.depthParallax && vc == 4) {
                 const float dx02 = t.x[2] - t.x[0], dy02 = t.y[2] - t.y[0];
                 const float dx13 = t.x[3] - t.x[1], dy13 = t.y[3] - t.y[1];
@@ -314,14 +315,9 @@ bool Renderer::buildGeometry() {
     std::vector<uint32_t>     borderIndices;
     if (settings_.borderOn) {
         std::vector<Edge> edges;
-        const Family fam = settings_.family;
-        const int edgesPerTile =
-            (fam == Family::Chair || fam == Family::P1) ? 6 :
-            (fam == Family::Dodecagonal  ||
-             fam == Family::AmmannBeenker ||
-             fam == Family::Heptagonal    ||
-             fam == Family::Binary)         ? 4 : 3;
-        edges.reserve(tiles.size() * edgesPerTile);
+        size_t edgeCapacity = 0;
+        for (const Tile& t : tiles) edgeCapacity += t.vcount;
+        edges.reserve(edgeCapacity);
         for (const Tile& t : tiles) {
             if (t.vcount == 3) edgesPenrose(t, edges);
             else               edgesChair(t, edges);
@@ -383,11 +379,11 @@ bool Renderer::buildGeometry() {
         //
         // The fix is the same carpentry trick the Canonical-Surface rib
         // renderer uses: at each shared endpoint find the angularly-
-        // adjacent edges, compute the bisector of their per-edge normals,
-        // extrude along the bisector at length halfWidth / |cos(θ/2)| so
-        // adjacent ribbons meet flush on both sides. Clamp the miter
-        // length at kMiterLimit × halfWidth so a near-degenerate acute
-        // joint can't fire a spike off into space.
+        // adjacent edges, offset both incident edge centre-lines toward
+        // the same angular wedge, and use the offset-line intersection as
+        // the shared corner. Clamp the miter length at kMiterLimit ×
+        // halfWidth so a near-degenerate acute joint can't fire a spike
+        // off into space.
         //
         // Planar-graph subtlety: a Penrose vertex may have 2..7 edges
         // meeting at it (sun, star, ace, ...). We sort the incident edges
@@ -395,8 +391,8 @@ bool Renderer::buildGeometry() {
         // miter the +1 side with the CCW-adjacent neighbour and the -1
         // side with the CW-adjacent neighbour. Two collinear sub-segments
         // of the same parent edge (the disk-mode subdivision case) give
-        // a near-180° joint where the bisector matches the edge normal
-        // and miterScale ≈ 1 — i.e. no change vs. butt, which is correct.
+        // a near-180° joint where the offset lines are effectively
+        // parallel, so the miter falls back to the edge normal at scale 1.
         //
         // The same midpoint hash used for edge dedup is too coarse here
         // (it keys on midpoint, not endpoint); we build a separate
@@ -479,47 +475,51 @@ bool Renderer::buildGeometry() {
         // Miter computation for one corner. `tSelf` is the OUTWARD
         // tangent of THIS edge at this endpoint (away from the vertex);
         // `tNbr` is the OUTWARD tangent of the angular neighbour at the
-        // same endpoint. `sideSign` picks which angular wedge to bisect.
-        // Returns the EXTRUSION DIRECTION (already signed for the
-        // chosen wedge) and the half-width multiplier.
+        // same endpoint. `sideSign` picks the angular wedge: +1 is the
+        // CCW side of tSelf, -1 is the CW side.
+        //
+        // Real joinery is the intersection of the two offset edge lines,
+        // not merely a bisector direction. In half-width units, offset
+        // self toward the wedge by sideSign * left(tSelf), offset the
+        // neighbour toward that same wedge by -sideSign * left(tNbr), and
+        // intersect those two lines. Adjacent edges compute the same point,
+        // so their ribbons meet instead of stopping with an angled gap.
         constexpr float kMiterLimit = 4.0f;
         auto computeMiter = [](float tSelfX, float tSelfY,
                                float tNbrX,  float tNbrY,
                                float sideSign) -> std::array<float, 3> {
-            // Polyline-style bisector: treat the neighbour as feeding
-            // INTO the vertex (incoming direction = -tNbr) and our edge
-            // as leaving the vertex (outgoing direction = tSelf). The
-            // perpendiculars (90°-CCW = "polyline-left") sum to the
-            // bisector; by symmetry both edges sharing this corner
-            // compute the same point and join flush.
-            const float n0x =  tNbrY;     // perp(-tNbr) = ( tNbr.y, -tNbr.x)
-            const float n0y = -tNbrX;
-            const float n1x = -tSelfY;    // perp( tSelf) = (-tSelf.y, tSelf.x)
-            const float n1y =  tSelfX;
-            // sideSign flips the bisector into the wedge we want.
-            const float n0Sx = n0x * sideSign;
-            const float n0Sy = n0y * sideSign;
-            const float n1Sx = n1x * sideSign;
-            const float n1Sy = n1y * sideSign;
-            float mx = n0Sx + n1Sx;
-            float my = n0Sy + n1Sy;
-            const float mLen = std::sqrt(mx * mx + my * my);
-            if (mLen < 1e-4f) {
-                // Near-anti-parallel pair (~180° interior angle): the
-                // bisector cancels. Use the local perpendicular at scale 1.
-                return { n1Sx, n1Sy, 1.0f };
+            const float selfNx = -tSelfY * sideSign;
+            const float selfNy =  tSelfX * sideSign;
+            const float nbrNx  =  tNbrY  * sideSign;  // -sideSign * left(tNbr)
+            const float nbrNy  = -tNbrX  * sideSign;
+
+            const float det = tSelfX * tNbrY - tSelfY * tNbrX;
+            if (std::fabs(det) < 1e-5f) {
+                // Straight-through or doubled-back pair: the two offset
+                // lines are parallel or nearly so, and the rectangle side
+                // is already the correct continuation.
+                return { selfNx, selfNy, 1.0f };
             }
-            mx /= mLen;
-            my /= mLen;
-            const float dot = std::fabs(mx * n1Sx + my * n1Sy);
-            float scale = (dot > 1e-3f) ? (1.0f / dot) : kMiterLimit;
+
+            // Solve selfN + u * tSelf = nbrN + v * tNbr.
+            const float rx = nbrNx - selfNx;
+            const float ry = nbrNy - selfNy;
+            const float u = (rx * tNbrY - ry * tNbrX) / det;
+            float mx = selfNx + u * tSelfX;
+            float my = selfNy + u * tSelfY;
+            float scale = std::sqrt(mx * mx + my * my);
+            if (scale < 1e-5f) return { selfNx, selfNy, 1.0f };
+
+            mx /= scale;
+            my /= scale;
             if (scale > kMiterLimit) scale = kMiterLimit;
             if (scale < 1.0f)        scale = 1.0f;
             return { mx, my, scale };
         };
         // Look up the angular neighbour of (edgeIdx, end) on the given
-        // angular side. Returns nullptr when the vertex has only this
-        // one edge (boundary case → butt end, no miter).
+        // angular side. Same-ray entries are a zero-width wedge, not a
+        // join; skip them so edge-to-partial-edge and hidden-seam remnants
+        // still miter against the next real angular sector.
         auto findNeighbour = [&endHash](EdgeKey key, uint32_t edgeIdx,
                                         uint8_t end, int angularOffset)
                               -> const EndRef* {
@@ -536,8 +536,16 @@ bool Renderer::buildGeometry() {
             }
             if (selfIdx < 0) return nullptr;
             const int n = static_cast<int>(list.size());
-            const int nbr = ((selfIdx + angularOffset) % n + n) % n;
-            return &list[nbr];
+            constexpr float kSameRayEps = 1e-4f;
+            const float selfAngle = list[selfIdx].angle;
+            for (int step = 1; step < n; ++step) {
+                const int nbr = ((selfIdx + step * angularOffset) % n + n) % n;
+                float delta = list[nbr].angle - selfAngle;
+                while (delta <= -kPi) delta += 2.0f * kPi;
+                while (delta >   kPi) delta -= 2.0f * kPi;
+                if (std::fabs(delta) > kSameRayEps) return &list[nbr];
+            }
+            return nullptr;
         };
         // -------- Emit border quads with per-corner miter ----------------
         // We compute a "world side" miter at each of the 4 corners of an

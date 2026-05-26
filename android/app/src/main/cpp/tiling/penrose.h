@@ -25,28 +25,35 @@ namespace penrose {
 //                  order; type 0=pentagon, 1=star, 2=boat, 3=diamond.
 //   Danzer       — four 7-fold triangles. verts = [v0, v1, v2]; type 0..3
 //                  selects the prototile (see subdivideDanzer).
+//   Hat          — 13-vertex hat monotiles generated from the H/T/P/F
+//                  metatile hierarchy in Kaplan's `hatviz`; type identifies
+//                  the leaf role (H, H1, T, P, F).
+//   Spectre      — 14-vertex straight-edged Spectre / Tile(1,1) monotiles
+//                  generated from Kaplan's nine-supertile generator; type
+//                  identifies the substitution label.
 // We pack every shape into the same struct so the renderer can iterate
-// uniformly. `vcount` ranges 3..10 — 3 triangles, 4 rhombs, 6 Chair, 5/10/
-// ≤10/4 for the P1 tiles.
+// uniformly. `vcount` ranges 3..14.
 // =============================================================================
 
+constexpr int kMaxTileVerts = 16;
+
 struct Tile {
-    float x[12];
-    float y[12];
-    uint8_t vcount;   // 3 tris, 4 rhombs, 6 chair, up to 10 for the P1 star
-    uint8_t type;     // 0=L,1=S Penrose; 0..3 chair; 0..2 dodeca; 0/1 pinwheel
+    float x[kMaxTileVerts];
+    float y[kMaxTileVerts];
+    uint8_t vcount;   // polygon vertex count, <= kMaxTileVerts
+    uint8_t type;     // family-defined tile class for color classification
 };
 
 enum class Family : int {
     P3 = 0, P2 = 1, Chair = 2, Dodecagonal = 3, Pinwheel = 4,
     AmmannBeenker = 5, Heptagonal = 6, Binary = 7, Tuebingen = 8,
-    P1 = 9, Danzer = 10,
+    P1 = 9, Danzer = 10, Hat = 11, Spectre = 12,
 };
 
 // Number of Family enumerators. The JNI layer validates the incoming family
 // index against this; keep it in step with the enum above and with the
 // kFamilyInfo[] table in penrose.cpp.
-constexpr int kFamilyCount = 11;
+constexpr int kFamilyCount = 13;
 
 // Per-family edge classification used by the border seam-hiding rule.
 //   For Penrose: Leg = the two equal-length sides, Base = the third.
@@ -72,6 +79,11 @@ enum class SeedPinwheel : int { Square = 0, Triangle = 1, Rectangle = 2 };
 enum class SeedBinary : int { Bear = 0, Dog = 1 };
 enum class SeedTuebingen : int { Sun = 0, Tile = 1 };
 enum class SeedDanzer : int { Sun = 0, Tile = 1 };
+enum class SeedHat : int { H = 0, T = 1, P = 2, F = 3 };
+enum class SeedSpectre : int {
+    Gamma = 0, Delta = 1, Theta = 2, Lambda = 3, Xi = 4,
+    Pi = 5, Sigma = 6, Phi = 7, Psi = 8,
+};
 
 std::vector<Tile> seedP3(SeedP3 seed);
 std::vector<Tile> seedP2(SeedP2 seed);
@@ -79,6 +91,8 @@ std::vector<Tile> seedChair(SeedChair seed);
 std::vector<Tile> seedPinwheel(SeedPinwheel seed);
 std::vector<Tile> seedTuebingen(SeedTuebingen seed);
 std::vector<Tile> seedDanzer(SeedDanzer seed);
+std::vector<Tile> generateHat(int seedIdx, int generations);
+std::vector<Tile> generateSpectre(int seedIdx, int generations);
 
 // =============================================================================
 // Substitutions

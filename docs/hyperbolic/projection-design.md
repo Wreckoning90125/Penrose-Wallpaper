@@ -125,8 +125,8 @@ inverse-projection-per-fragment cost.
 | `cpp/renderer/renderer_geometry.cpp` | When `projection==PoincareDisk`: if `hypBorderSubdiv>1`, splits each border edge into N sub-segments before the dedup map; if `hypFillSubdiv>1`, tessellates each fill triangle into N² child triangles via barycentric grid + linear attribute interpolation. Records `geomRmax_` = max |vertex| across the actual emitted tile vertices for the auto-fit. |
 | `shaders/hyperbolic.glsl` | Single source of truth for the projection: `projectHyp(world, b, s)` (radial map + τ_b), `projTangentRadial(p, tangW, s)` (analytical disk-space tangent of the radial map, polar-basis decomposition — radial component scaled by f'(r)=(s/2)·sech²(r·s/2), tangential by f(r)/r=tanh(r·s/2)/r; replaces a finite-difference step that would underflow once r·s/2 ≳ 4), and `boostTangent(z, b, tangD)` (τ_b conformal rotation by −2·arg(1+b̄z), complex multiply by q̄²/\|q\|² in real-vector form). Pulled in by both vertex shaders via `#include` and `GL_GOOGLE_include_directive`. |
 | `shaders/fill.vert` | `hyp` push-constant vec4; calls `projectHyp(displacedPos, pc.hyp.xy, pc.hyp.z)` gated on `pc.hyp.w > 0.5`. |
-| `shaders/border.vert` | Same `projectHyp` call as `fill.vert` for the base point; for each corner, projects the **per-vertex world-space mitered direction** through the same `projTangentRadial` + `boostTangent` Jacobian — conformality preserves the world-space bisector angle, so the disk-space joint closes flush at exactly the same `miterScale = 1/\|cos(θ/2)\|` length compensation the Euclidean path uses. Width = world halfwidth × hypScale/2 × miterScale; borders stay visibly thick across the entire disk and orient correctly under any boost. |
-| `cpp/renderer/render_state.h::BorderVertex` | 5 floats per vertex: pos (2), **mitered corner direction** signed for this vertex's world side (2), miterScale (1). The mitered direction is the polyline angle-bisector at the shared corner, so two edges meeting at vertex `v` extrude to the same world point on each side — no perpendicular butt-end overlap on the inside of the joint, no gap on the outside. In disk mode the shader projects (mx, my) through the same `projTangentRadial`+`boostTangent` Jacobian a tangent vector would see; conformality preserves the bisector angle, so the joint closes in disk space at the same miterScale. See "Border miter joinery" below. |
+| `shaders/border.vert` | Same `projectHyp` call as `fill.vert` for the base point; for each corner, projects the **per-vertex world-space mitered direction** through the same `projTangentRadial` + `boostTangent` Jacobian. The CPU stores the vector from the shared endpoint to the offset-line intersection, so the disk-space joint closes flush with the same `miterScale` length compensation the Euclidean path uses. Width = world halfwidth × hypScale/2 × miterScale; borders stay visibly thick across the entire disk and orient correctly under any boost. |
+| `cpp/renderer/render_state.h::BorderVertex` | 5 live floats per vertex: pos (2), **mitered corner direction** signed for this vertex's world side (2), miterScale (1), padded to 32-byte stride. The mitered direction is the endpoint-to-offset-line-intersection vector, so two edges meeting at vertex `v` extrude to the same world point on each side. Same-ray endpoint entries are skipped during neighbour lookup so a zero-width wedge cannot force a rectangular fallback. In disk mode the shader projects (mx, my) through the same `projTangentRadial`+`boostTangent` Jacobian a tangent vector would see; conformality preserves the local join angle, so the joint closes in disk space at the same miterScale. See "Border miter joinery" below. |
 | `cpp/graph/graph.{h,cpp}` | Three new `Target` node kinds: `OutHypBoostX`, `OutHypBoostY`, `OutHypScale`. Clamp ranges defined in the graph's `evaluate()` lo/hi tables. |
 | `kotlin/Settings.kt` | Five new fields with conversion (boost 0..100 → -0.9..+0.9, scale 0..100 → 0..3.0, etc.) and SharedPreferences keys. |
 | `kotlin/SettingsFragment.kt` | New `Projection` screen registered + navigation row. |
@@ -156,12 +156,12 @@ perpendicular outward normal" produces perpendicular butt ends that:
 Both artifacts ride at the pixel scale of the border width. Visible
 on every star vertex; visible across the whole tiling at higher zoom.
 
-The fix is the same carpentry trick the *Canonical-Surface* visualiser
-used for its waveform ribs (`push_thick_polyline` in `visuals.rs`):
-compute the **bisector miter** at each shared corner, scale the
-half-width by `1 / |cos((π − θ) / 2)|` so the two ribbons meet
-flush, clamp at `kMiterLimit × halfWidth` so a near-degenerate acute
-joint can't fire a spike off into space.
+The fix is the same line-join construction used by stroked vector
+renderers: at each shared corner, offset both incident edge centre-lines
+toward the same angular wedge and use the intersection of those two
+offset lines as the shared ribbon corner. The endpoint-to-intersection
+distance becomes `miterScale`; clamp at `kMiterLimit × halfWidth` so a
+near-degenerate acute joint can't fire a spike off into space.
 
 ### Planar-graph extension
 
@@ -179,18 +179,19 @@ case by:
    `+1` in the sorted list at `p1` (or `−1` at `p2`, since the
    outward-tangent convention flips); the −1 world side miters the
    other way. Two independent miters per endpoint so a star vertex's
-   five angular wedges each get their own correct bisector.
+   five angular wedges each get their own correct corner. Same-ray
+   entries are skipped because they are a zero-width wedge, not a join.
 
-The polyline-miter formula then reduces to the usual one (Canonical
-Surface, `lib.rs::push_thick_polyline`):
+For one wedge, the CPU solves the offset-line intersection directly:
 
-    n0 = perp(-t_neighbour)        // incoming direction perpendicular
-    n1 = perp( t_self)             // outgoing direction perpendicular
-    m  = normalise(n0 · s + n1 · s)   // s = ±1 picks the wedge
-    scale = clamp(1 / |dot(m, n1·s)|, 1, kMiterLimit)
+    selfN =  s * left(t_self)
+    nbrN  = -s * left(t_neighbour)
+    selfN + u * t_self = nbrN + v * t_neighbour
+    miter = selfN + u * t_self
+    scale = clamp(length(miter), 1, kMiterLimit)
 
-By construction both edges sharing a corner compute the same bisector,
-so the joint is consistent (no T-junction artifacts).
+By construction both edges sharing a corner compute the same intersection,
+so the joint is consistent rather than two independent caps stopping short.
 
 ### Disk-mode miter under the conformal map
 
@@ -198,8 +199,8 @@ The miter is computed once on the CPU in world space and stored per
 vertex. In disk mode, `border.vert` projects the world-space miter
 direction through the same Jacobian (`projTangentRadial` +
 `boostTangent`) as the segment tangent. The projection is **conformal**
-(angles preserved exactly), so the world-space bisector angle maps to
-the disk-space bisector angle, i.e.
+(angles preserved exactly), so the local world-space join angle maps to
+the local disk-space join angle, i.e.
 
     diskMiterDir = normalise(J(P) · worldMiter)
 

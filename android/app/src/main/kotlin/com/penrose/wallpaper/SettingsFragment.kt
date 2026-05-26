@@ -103,7 +103,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
             ScreenKey.Main -> bindMainActions()
             ScreenKey.Tiling -> {
                 bindBack()
-                applySeedListForCurrentFamily()
+                applyFamilySpecificTilingControls(resetSeed = false)
             }
             ScreenKey.Color -> {
                 bindBack()
@@ -153,7 +153,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
 
     override fun onSharedPreferenceChanged(sp: SharedPreferences?, key: String?) {
         if (currentScreen == ScreenKey.Tiling && key == Settings.KEY_FAMILY) {
-            applySeedListForCurrentFamily()
+            applyFamilySpecificTilingControls(resetSeed = true)
         }
     }
 
@@ -503,7 +503,12 @@ class SettingsFragment : PreferenceFragmentCompat(),
             .show()
     }
 
-    private fun applySeedListForCurrentFamily() {
+    private fun applyFamilySpecificTilingControls(resetSeed: Boolean) {
+        applySeedListForCurrentFamily(resetSeed)
+        applyGenerationMaxForCurrentFamily()
+    }
+
+    private fun applySeedListForCurrentFamily(resetSeed: Boolean) {
         val seedPref = findPreference<ListPreference>(Settings.KEY_SEED) ?: return
         val familyPref = findPreference<ListPreference>(Settings.KEY_FAMILY) ?: return
         val family = familyPref.value?.toIntOrNull() ?: 0
@@ -518,15 +523,33 @@ class SettingsFragment : PreferenceFragmentCompat(),
             8 -> R.array.seed_tuebingen_entries to R.array.seed_tuebingen_values
             9 -> R.array.seed_p1_entries to R.array.seed_p1_values
             10 -> R.array.seed_danzer_entries to R.array.seed_danzer_values
+            11 -> R.array.seed_hat_entries to R.array.seed_hat_values
+            12 -> R.array.seed_spectre_entries to R.array.seed_spectre_values
             else -> R.array.seed_p3_entries to R.array.seed_p3_values
         }
         val entries = resources.getStringArray(entriesId)
         val values = resources.getStringArray(valuesId)
         seedPref.entries = entries
         seedPref.entryValues = values
-        val current = seedPref.value?.toIntOrNull() ?: 0
-        if (current >= values.size || seedPref.value == null) {
+        if (resetSeed || seedPref.value == null || !values.contains(seedPref.value)) {
             seedPref.value = values[0]
+        }
+    }
+
+    private fun applyGenerationMaxForCurrentFamily() {
+        val generationPref = findPreference<SeekBarPreference>(Settings.KEY_GENERATION) ?: return
+        val familyPref = findPreference<ListPreference>(Settings.KEY_FAMILY) ?: return
+        val family = familyPref.value?.toIntOrNull() ?: 0
+        val maxGen = when (family) {
+            2 -> 7       // Chair
+            4 -> 6       // Pinwheel
+            9, 10 -> 7   // P1, Danzer
+            11, 12 -> 5  // Hat, Spectre
+            else -> 8
+        }
+        generationPref.max = maxGen
+        if (generationPref.value > maxGen) {
+            generationPref.value = maxGen
         }
     }
 

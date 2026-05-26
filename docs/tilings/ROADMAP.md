@@ -6,14 +6,14 @@ Danzer family was; high = new subsystem).
 
 Two tracks run in parallel: **tiling choice** (this file) and **surface
 sophistication** (`docs/render/physical-material.md`, the BRDF + lighting +
-preset architecture). The tiling track's committed next item is the
-Hat / Spectre einstein family — see *Obvious next step* below.
+preset architecture). The Hat / Spectre einstein family is now implemented;
+the next tiling work should build on the remaining catalogue gaps below.
 
 ## Renderer — new families and modes
 
 | Candidate | Kind | Effort | Status / blocker |
 |-----------|------|--------|------------------|
-| **Hat / Spectre einstein** | new E² substitution `Family` | medium | **Top pick.** Smith–Myers–Kaplan–Goodman-Strauss 2023 (`catalogue.md`). The metatile substitution (H, T, P, F clusters) is published and volume-hierarchic → closure-verifiable exactly as Danzer was. The Spectre needs no reflections (strictly chiral). |
+| **Hat / Spectre einstein** | E² substitution `Family` | **shipped** | Implemented as `Family::Hat` and `Family::Spectre`; see `einstein.md`. Keep as the baseline for future monotile work. |
 | Square-triangle / Shield / Socolar 12-fold | extend `Dodecagonal` | low–medium | `dodecagonal.md`, `catalogue.md`. Square+triangle is largely a display split of the existing dodecagonal rhombs; Shield/Socolar are MLD. |
 | Socolar–Taylor monotile | new `Family` | medium | `catalogue.md`. Hierarchical; the tile is *not connected*, so the `Tile` model would need a disconnected-tile representation. |
 | Harriss 7-fold rhomb substitution | new `Family` | high | `heptagonal.md`. Blocked on the rhomb-packing closure solver below. |
@@ -37,9 +37,8 @@ Hat / Spectre einstein family — see *Obvious next step* below.
 
 ## Obvious next step
 
-The **Hat/Spectre einstein** family: it is the highest-profile aperiodic
-result of the decade, its substitution is documented and volume-hierarchic,
-and it drops into the engine as one `FamilySpec` row plus one geometry
-function — the same shape of work as the Danzer family, verifiable by
-`tools/verify_tilings.cpp`. Pair it with the `bibliography.md` pointer
-refactor to finish the doc tree.
+The **square-triangle / Shield / Socolar 12-fold** lane is now the cleanest
+next implementation target. It can reuse the existing dodecagonal machinery
+where possible, has local Savard material, and gives immediate visual payoff
+without needing a disconnected-tile model. Pair it with the `bibliography.md`
+pointer refactor to keep the doc tree from drifting again.

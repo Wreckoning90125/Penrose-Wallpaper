@@ -21,17 +21,19 @@ baseline.
 
 1. All tiling docs live in `docs/tilings/`.
 2. One file per **symmetry family** (5-fold, 7-fold, 8-fold, 12-fold,
-   pinwheel, periodic). A family file may document several distinct *systems*.
+   pinwheel, periodic) or explicit non-symmetry class such as einstein
+   monotiles. A family file may document several distinct *systems*.
 3. Within a file, **every distinct tiling system is one `##` section** that
    follows the Document Template below — verbatim, every section present, in
    order. A system with nothing to say under a heading writes `None.` or
    `n/a` rather than dropping the heading.
 4. A new symmetry family means a new file, registered in the Index below.
-5. Three **reference docs** are not symmetry families and do not use the
-   system template: `catalogue.md` (the flat list of every known aperiodic
-   prototile set), `bibliography.md` (the master source list, structured by
-   this tree), and `hyperbolic-and-tooling.md` (the H²/Escher/crystallographic
-   overlap and the external-tooling boundary). They are listed in the Index.
+5. **Reference docs** are not symmetry families and do not use the system
+   template: `catalogue.md` (the flat list of every known aperiodic prototile
+   set), `bibliography.md` (the master source list, structured by this tree),
+   `hyperbolic-and-tooling.md` (the H²/Escher/crystallographic overlap and the
+   external-tooling boundary), and `local-corpus-audit.md` (the `.local/**`
+   source inventory). They are listed in the Index.
 
 ## Document template
 
@@ -129,9 +131,11 @@ These terms have a fixed meaning across all documents here. Use them exactly.
 | [`heptagonal.md`](heptagonal.md) | 7-fold | Keplerian & Dürer-type heptagon attempts; rhomb dualization tilings; Savard binary-style recurrence; Harriss/Goodman-Strauss n-fold rhomb substitution; Danzer sevenfold tiling |
 | [`pinwheel.md`](pinwheel.md) | none (∞ orientations) | Conway–Radin pinwheel tiling; Sadun generalisation |
 | [`periodic-reference.md`](periodic-reference.md) | periodic | Cairo tiling; conventional periodic tilings and the 17 wallpaper groups; the 15 monohedral convex pentagonal tilings (contrast baseline) |
+| [`einstein.md`](einstein.md) | none | Smith-Myers-Kaplan-Goodman-Strauss Hat and Spectre monotiles |
 | [`catalogue.md`](catalogue.md) | reference | Flat catalogue of every known aperiodic prototile set (E²/H²/E³), and which the renderer covers |
 | [`bibliography.md`](bibliography.md) | reference | Master source list for the whole tree, structured by these files |
 | [`hyperbolic-and-tooling.md`](hyperbolic-and-tooling.md) | reference | Hyperbolic (H²) tilings, the Escher / hyperbolic-crochet lineage, EPINET, and the crystallographic-tooling boundary |
+| [`local-corpus-audit.md`](local-corpus-audit.md) | reference | File-level audit of `.local/**` docs and their tiling usefulness |
 | [`ROADMAP.md`](ROADMAP.md) | reference | Ranked candidate additions for future work — families, docs, tooling |
 
 ## Conventions
@@ -142,7 +146,7 @@ These terms have a fixed meaning across all documents here. Use them exactly.
   describe, or link to a source.
 - **Renderer mapping is mandatory.** Every system says, explicitly, whether
   it is implemented in the renderer and what a `Family` entry would cost. The
-  app currently implements eleven families — P3, P2 and P1 (see
+  app currently implements thirteen families — P3, P2 and P1 (see
   `pentagonal-penrose.md`), the Chair L-tromino tiling (a 4-fold substitution
   not covered by the source PDFs; documented as a renderer note only), the
   de Bruijn rhomb-square dodecagonal, Ammann–Beenker and heptagonal tilings
@@ -150,7 +154,8 @@ These terms have a fixed meaning across all documents here. Use them exactly.
   `generateMultigrid` dualization generator), the Conway–Radin pinwheel (see
   `pinwheel.md`), the Godrèche–Lançon binary and Tübingen-triangle tilings
   (see `pentagonal-binary.md`), and the Danzer sevenfold triangle substitution
-  (see `heptagonal.md`).
+  (see `heptagonal.md`), plus the Hat and Spectre monotiles (see
+  `einstein.md`).
 - **Primary source.** Most of this material is synthesised from John Savard's
   tiling series at `http://www.quadibloc.com/math` (page IDs are cited per
   system), cross-checked against the primary academic literature each page

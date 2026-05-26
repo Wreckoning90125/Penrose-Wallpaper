@@ -57,15 +57,15 @@ void main() {
         // world space → push through the same projection Jacobian as
         // the edge tangent: radial-derivative (projTangentRadial) then
         // τ_b conformal rotation (boostTangent — −2·arg(1+b̄z)). The
-        // projection is conformal, so the world-space bisector angle
-        // is preserved exactly under the map, i.e. the disk-space
-        // miter direction = normalise(J(P) · inMiter). The disk-space
+        // projection is conformal, so the world-space join direction is
+        // preserved exactly under the map, i.e. the disk-space miter
+        // direction = normalise(J(P) · inMiter). The disk-space
         // width target is `halfWidth × hypScale/2` near the origin
         // (where the radial Jacobian f'(0) = s/2) which keeps borders
         // visibly constant-thickness even where the Jacobian falls to
         // ~sech²(r·s/2) ≪ 1 near the boundary. miterScale carries the
-        // 1/|cos(θ/2)| length compensation so the joint closes flush
-        // in disk space too — angle-preserving projection means the
+        // offset-line-intersection length compensation so the joint
+        // closes flush in disk space too — angle-preserving projection means the
         // same compensation works in both spaces.
         vec2 zRadial = (length(base) > 1e-6) ? base / length(base) * tanh(length(base) * pc.hyp.z * 0.5) : vec2(0.0);
         vec2 z       = projectHyp(base, pc.hyp.xy, pc.hyp.z);
@@ -87,11 +87,9 @@ void main() {
     } else {
         // Euclidean: extrude along the per-corner mitered direction.
         // (mx, my) is already signed for this vertex's world side, so
-        // we just add it scaled by halfWidth · miterScale. miterScale =
-        // 1 / |cos(θ/2)| for interior angle θ — extends the outside
-        // corner just enough to close the gap and trims the inside
-        // corner cleanly. The CPU pre-clamps miterScale to kMiterLimit
-        // so a near-acute joint can't fire a spike.
+        // we just add it scaled by halfWidth · miterScale. miterScale is
+        // the endpoint-to-offset-line-intersection distance in half-width
+        // units, clamped so a near-acute joint can't fire a spike.
         finalPos = base + inMiter * scaledHalf;
     }
 

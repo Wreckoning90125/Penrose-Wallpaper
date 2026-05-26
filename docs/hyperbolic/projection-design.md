@@ -125,8 +125,8 @@ inverse-projection-per-fragment cost.
 | `cpp/renderer/renderer_geometry.cpp` | When `projection==PoincareDisk`: if `hypBorderSubdiv>1`, splits each border edge into N sub-segments before the dedup map; if `hypFillSubdiv>1`, tessellates each fill triangle into N² child triangles via barycentric grid + linear attribute interpolation. Records `geomRmax_` = max |vertex| across the actual emitted tile vertices for the auto-fit. |
 | `shaders/hyperbolic.glsl` | Single source of truth for the projection: `projectHyp(world, b, s)` (radial map + τ_b), `projTangentRadial(p, tangW, s)` (analytical disk-space tangent of the radial map, polar-basis decomposition — radial component scaled by f'(r)=(s/2)·sech²(r·s/2), tangential by f(r)/r=tanh(r·s/2)/r; replaces a finite-difference step that would underflow once r·s/2 ≳ 4), and `boostTangent(z, b, tangD)` (τ_b conformal rotation by −2·arg(1+b̄z), complex multiply by q̄²/\|q\|² in real-vector form). Pulled in by both vertex shaders via `#include` and `GL_GOOGLE_include_directive`. |
 | `shaders/fill.vert` | `hyp` push-constant vec4; calls `projectHyp(displacedPos, pc.hyp.xy, pc.hyp.z)` gated on `pc.hyp.w > 0.5`. |
-| `shaders/border.vert` | Same `projectHyp` call as `fill.vert` for the base point; for each corner, projects the **per-vertex world-space mitered direction** through the same `projTangentRadial` + `boostTangent` Jacobian. The CPU stores the vector from the shared endpoint to the offset-line intersection, so the disk-space joint closes flush with the same `miterScale` length compensation the Euclidean path uses. Width = world halfwidth × hypScale/2 × miterScale; borders stay visibly thick across the entire disk and orient correctly under any boost. |
-| `cpp/renderer/render_state.h::BorderVertex` | 5 live floats per vertex: pos (2), **mitered corner direction** signed for this vertex's world side (2), miterScale (1), padded to 32-byte stride. The mitered direction is the endpoint-to-offset-line-intersection vector, so two edges meeting at vertex `v` extrude to the same world point on each side. Same-ray endpoint entries are skipped during neighbour lookup so a zero-width wedge cannot force a rectangular fallback. In disk mode the shader projects (mx, my) through the same `projTangentRadial`+`boostTangent` Jacobian a tangent vector would see; conformality preserves the local join angle, so the joint closes in disk space at the same miterScale. See "Border miter joinery" below. |
+| `shaders/border.vert` | Same `projectHyp` call as `fill.vert` for the base point; for each border-mesh vertex, projects the **per-vertex world-space mitered direction** through the same `projTangentRadial` + `boostTangent` Jacobian. Edge quads carry the stroked segments; endpoint joint fans fill the convex sectors between adjacent incident edges. Width = world halfwidth × hypScale/2 × miterScale; borders stay visibly thick across the entire disk and orient correctly under any boost. |
+| `cpp/renderer/render_state.h::BorderVertex` | 5 live floats per vertex: pos (2), **mitered corner direction** signed for this vertex's world side (2), miterScale (1), padded to 32-byte stride. Edge quads use endpoint-to-offset-line-intersection vectors; joint fans add the graph vertex plus the two edge-normal and miter-corner offsets for each convex sector, so a clamped miter cannot leave an uncovered sliver. Same-ray endpoint entries are skipped during neighbour lookup so a zero-width wedge cannot force a rectangular fallback. In disk mode the shader projects (mx, my) through the same `projTangentRadial`+`boostTangent` Jacobian a tangent vector would see; conformality preserves the local join angle. See "Border miter joinery" below. |
 | `cpp/graph/graph.{h,cpp}` | Three new `Target` node kinds: `OutHypBoostX`, `OutHypBoostY`, `OutHypScale`. Clamp ranges defined in the graph's `evaluate()` lo/hi tables. |
 | `kotlin/Settings.kt` | Five new fields with conversion (boost 0..100 → -0.9..+0.9, scale 0..100 → 0..3.0, etc.) and SharedPreferences keys. |
 | `kotlin/SettingsFragment.kt` | New `Projection` screen registered + navigation row. |
@@ -190,8 +190,11 @@ For one wedge, the CPU solves the offset-line intersection directly:
     miter = selfN + u * t_self
     scale = clamp(length(miter), 1, kMiterLimit)
 
-By construction both edges sharing a corner compute the same intersection,
-so the joint is consistent rather than two independent caps stopping short.
+By construction both edges sharing a corner compute the same intersection
+when the miter is not clamped. The emitter also adds an explicit fan for
+each convex endpoint sector, from the graph vertex through both edge
+normals and both miter corners, so a clamped or numerically separated
+corner still covers the sector instead of leaving an angled sliver.
 
 ### Disk-mode miter under the conformal map
 
@@ -204,10 +207,11 @@ the local disk-space join angle, i.e.
 
     diskMiterDir = normalise(J(P) · worldMiter)
 
-with the same `miterScale` length compensation applied. The joint
-closes flush in disk space at any zoom / boost. Lengths warp by the
-local Jacobian, but the per-segment width target `halfWidth × hypScale/2`
-is the same s/2 multiplier the unmitered code already used at the disk
+with the same `miterScale` length compensation applied. Edge quads and
+joint fans go through the same projection path, so the Euclidean join
+coverage maps consistently into disk space. Lengths warp by the local
+Jacobian, but the per-segment width target `halfWidth × hypScale/2` is
+the same s/2 multiplier the unmitered code already used at the disk
 origin — the radial component of the Jacobian's principal axes near 0.
 
 ### Vertex layout

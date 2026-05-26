@@ -427,26 +427,10 @@ bool Renderer::buildGeometry() {
             uint8_t  end;     // 0 = p1, 1 = p2
             float    angle;   // atan2 of outward tangent at this endpoint
         };
-        // Precision note: each kept edge's endpoint coords come from
-        // whichever tile contributed that edge first in the midpoint
-        // dedup above. Two tiles sharing a vertex compute it through
-        // independent substitution chains; at the default gen 6 on a
-        // ±20-world-unit patch, FP drift between the two tiles'
-        // computations of the SAME vertex accumulates to ~1e-5 world
-        // units — right at the rounding threshold of the dedup's
-        // kKeyScale=1e5. The midpoint dedup tolerated this because
-        // averaging halves the per-tile error; the endpoint hash gets
-        // the raw per-tile coords and would put "same" vertices into
-        // DIFFERENT buckets at 1e-5 precision. findNeighbour then
-        // returns nullptr for everyone and the miter falls back to
-        // butt at every joint — silently regressing the entire fix.
-        //
-        // A coarser endpoint scale (1e3 = 0.001 world units) is 100×
-        // the worst-case FP drift and well below the smallest tile
-        // edge length at any reasonable generation (~0.05 world units
-        // at gen 6, shrinking by phi per gen so still ~0.005 at gen
-        // 10). Safe clustering for shared vertices, no false-merge of
-        // truly distinct vertices.
+        // Endpoint clustering is intentionally looser than the midpoint
+        // dedup above. The midpoint key distinguishes edges; the endpoint
+        // key only needs to collect incident kept edges at the same graph
+        // vertex so the join pass can see its angular neighbours.
         constexpr float kEndpointKeyScale = 1.0e3f;
         std::unordered_map<EdgeKey, std::vector<EndRef>, EdgeKeyHash> endHash;
         endHash.reserve(keptEdges.size());
@@ -547,53 +531,62 @@ bool Renderer::buildGeometry() {
             }
             return nullptr;
         };
-        // -------- Emit border quads with per-corner miter ----------------
-        // We compute a "world side" miter at each of the 4 corners of an
-        // edge quad. The canonical world-+1 direction = perp(canonical
-        // tangent T_us). At p1 the outward tangent IS T_us, so world-+1
-        // matches the local-CCW direction (angularOffset = +1). At p2
-        // the outward tangent is -T_us, which inverts the world-side ↔
-        // local-side mapping (world-+1 is now on the local-CW side, so
-        // we step angularOffset = -1 to find the right neighbour). The
-        // shader receives the extrusion direction already on the
-        // correct world side, so it doesn't need to know about local
-        // sign conventions any more.
-        borders.reserve(keptEdges.size() * 4);
-        borderIndices.reserve(keptEdges.size() * 6);
-        for (uint32_t i = 0; i < keptEdges.size(); ++i) {
-            const EdgeRec& r = *keptEdges[i];
-            const EdgeGeom& g = egeom[i];
+        auto sideNormal = [&](uint32_t edgeIdx, float worldSide) -> std::array<float, 3> {
+            const EdgeGeom& g = egeom[edgeIdx];
+            return { -g.ty * worldSide, g.tx * worldSide, 1.0f };
+        };
+
+        auto worldSideForLocal = [](uint8_t end, float localSide) {
+            return (end == 0) ? localSide : -localSide;
+        };
+
+        auto endpointPos = [&](const EndRef& ref) -> std::array<float, 2> {
+            const EdgeRec& r = *keptEdges[ref.edgeIdx];
+            return (ref.end == 0) ? std::array<float, 2>{ r.p1x, r.p1y }
+                                  : std::array<float, 2>{ r.p2x, r.p2y };
+        };
+
+        // Compute the world-side miter at one edge endpoint. The canonical
+        // world-+1 direction = perp(canonical tangent T_us). At p1 the
+        // outward tangent IS T_us, so world/local agree. At p2 the outward
+        // tangent is -T_us, so the world-side mapping flips.
+        auto cornerMiter = [&](uint32_t edgeIdx, uint8_t end,
+                               float worldSide) -> std::array<float, 3> {
+            const EdgeRec& r = *keptEdges[edgeIdx];
+            const EdgeGeom& g = egeom[edgeIdx];
             const EdgeKey k1 = endpointKey(r.p1x, r.p1y);
             const EdgeKey k2 = endpointKey(r.p2x, r.p2y);
-            // Compute the world-side miter at this corner.
-            auto worldCornerMiter = [&](const EdgeKey& vkey, uint8_t end,
-                                        float worldSide) -> std::array<float, 3> {
-                // Outward tangent at this endpoint.
-                const float outX = (end == 0) ?  g.tx : -g.tx;
-                const float outY = (end == 0) ?  g.ty : -g.ty;
-                // World side → local side. At p1 the outward IS the
-                // canonical tangent, so world/local agree. At p2 the
-                // outward is reversed, so world-+1 = local--1 and vice
-                // versa.
-                const float localSide = (end == 0) ? worldSide : -worldSide;
-                const int   angOff    = (localSide > 0.0f) ? +1 : -1;
-                const EndRef* nbr = findNeighbour(vkey, i, end, angOff);
-                if (!nbr) {
-                    // Boundary / single-incident-edge — extrude along
-                    // the canonical world normal, scale 1 (butt).
-                    return { -g.ty * worldSide,  g.tx * worldSide, 1.0f };
-                }
-                const EdgeGeom& gn = egeom[nbr->edgeIdx];
-                float tNbrX, tNbrY;
-                if (nbr->end == 0) { tNbrX =  gn.tx; tNbrY =  gn.ty; }
-                else               { tNbrX = -gn.tx; tNbrY = -gn.ty; }
-                return computeMiter(outX, outY, tNbrX, tNbrY, localSide);
-            };
+            const EdgeKey vkey = (end == 0) ? k1 : k2;
+            const float outX = (end == 0) ?  g.tx : -g.tx;
+            const float outY = (end == 0) ?  g.ty : -g.ty;
+            const float localSide = worldSideForLocal(end, worldSide);
+            const int   angOff    = (localSide > 0.0f) ? +1 : -1;
+            const EndRef* nbr = findNeighbour(vkey, edgeIdx, end, angOff);
+            if (!nbr) {
+                // Boundary / single-incident-edge — extrude along the
+                // canonical world normal, scale 1 (butt).
+                return sideNormal(edgeIdx, worldSide);
+            }
+            const EdgeGeom& gn = egeom[nbr->edgeIdx];
+            float tNbrX, tNbrY;
+            if (nbr->end == 0) { tNbrX =  gn.tx; tNbrY =  gn.ty; }
+            else               { tNbrX = -gn.tx; tNbrY = -gn.ty; }
+            return computeMiter(outX, outY, tNbrX, tNbrY, localSide);
+        };
+
+        // -------- Emit border quads with per-corner miter ----------------
+        // Edge quads carry the long stroked rectangles. Joint fans below
+        // explicitly fill the convex sectors between adjacent incident
+        // edges, so clamp/rounding at one edge cannot leave a sliver.
+        borders.reserve(keptEdges.size() * 4 + endHash.size() * 8);
+        borderIndices.reserve(keptEdges.size() * 6 + endHash.size() * 12);
+        for (uint32_t i = 0; i < keptEdges.size(); ++i) {
+            const EdgeRec& r = *keptEdges[i];
             // World -1 side / world +1 side at each endpoint.
-            const auto p1n = worldCornerMiter(k1, 0, -1.0f);
-            const auto p1m = worldCornerMiter(k1, 0,  1.0f);
-            const auto p2n = worldCornerMiter(k2, 1, -1.0f);
-            const auto p2m = worldCornerMiter(k2, 1,  1.0f);
+            const auto p1n = cornerMiter(i, 0, -1.0f);
+            const auto p1m = cornerMiter(i, 0,  1.0f);
+            const auto p2n = cornerMiter(i, 1, -1.0f);
+            const auto p2m = cornerMiter(i, 1,  1.0f);
             const uint32_t base = static_cast<uint32_t>(borders.size());
             // Each vertex carries its own EXTRUSION DIRECTION in
             // (mx, my) — already signed for the world side it belongs
@@ -612,6 +605,67 @@ bool Renderer::buildGeometry() {
             borderIndices.push_back(base + 1);
             borderIndices.push_back(base + 3);
             borderIndices.push_back(base + 2);
+        }
+
+        // -------- Emit explicit convex joint fans ------------------------
+        // A mitered edge quad alone can still leave a visible sliver when a
+        // true offset-line intersection is clamped or when neighbouring
+        // edges come from different emit paths. For each real angular
+        // sector below 180° at a shared endpoint, emit a small fan from the
+        // graph vertex through the two edge normals and their miter corners.
+        // The border fragment is uniform colour, so overdraw is harmless.
+        for (const auto& kv : endHash) {
+            const auto& list = kv.second;
+            if (list.size() < 2) continue;
+
+            std::vector<int> reps;
+            reps.reserve(list.size());
+            for (int i = 0; i < static_cast<int>(list.size()); ++i) {
+                bool duplicateRay = false;
+                for (int r : reps) {
+                    float delta = list[i].angle - list[r].angle;
+                    while (delta <= -kPi) delta += 2.0f * kPi;
+                    while (delta >   kPi) delta -= 2.0f * kPi;
+                    if (std::fabs(delta) <= 1e-4f) {
+                        duplicateRay = true;
+                        break;
+                    }
+                }
+                if (!duplicateRay) reps.push_back(i);
+            }
+            if (reps.size() < 2) continue;
+
+            for (int ri = 0; ri < static_cast<int>(reps.size()); ++ri) {
+                const EndRef& a = list[reps[ri]];
+                const EndRef& b = list[reps[(ri + 1) % reps.size()]];
+                float delta = b.angle - a.angle;
+                while (delta <= 0.0f) delta += 2.0f * kPi;
+                if (delta <= 1e-4f || delta >= kPi - 1e-4f) continue;
+
+                const auto p = endpointPos(a);
+                const float aWorld = worldSideForLocal(a.end,  1.0f);
+                const float bWorld = worldSideForLocal(b.end, -1.0f);
+                const auto aNorm = sideNormal(a.edgeIdx, aWorld);
+                const auto bNorm = sideNormal(b.edgeIdx, bWorld);
+                const auto aMit  = cornerMiter(a.edgeIdx, a.end, aWorld);
+                const auto bMit  = cornerMiter(b.edgeIdx, b.end, bWorld);
+
+                const uint32_t base = static_cast<uint32_t>(borders.size());
+                borders.push_back({ p[0], p[1], 0.0f,     0.0f,     0.0f     });
+                borders.push_back({ p[0], p[1], aNorm[0], aNorm[1], aNorm[2] });
+                borders.push_back({ p[0], p[1], aMit[0],  aMit[1],  aMit[2]  });
+                borders.push_back({ p[0], p[1], bMit[0],  bMit[1],  bMit[2]  });
+                borders.push_back({ p[0], p[1], bNorm[0], bNorm[1], bNorm[2] });
+                borderIndices.push_back(base + 0);
+                borderIndices.push_back(base + 1);
+                borderIndices.push_back(base + 2);
+                borderIndices.push_back(base + 0);
+                borderIndices.push_back(base + 2);
+                borderIndices.push_back(base + 3);
+                borderIndices.push_back(base + 0);
+                borderIndices.push_back(base + 3);
+                borderIndices.push_back(base + 4);
+            }
         }
     }
     borderIndexCount_ = static_cast<uint32_t>(borderIndices.size());

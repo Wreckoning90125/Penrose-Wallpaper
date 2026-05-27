@@ -9,23 +9,39 @@ import type { Plugin, PreviewServer, ViteDevServer } from 'vite';
 
 type Next = () => void;
 type Middleware = (req: IncomingMessage, res: ServerResponse, next: Next) => void | Promise<void>;
+type Mode = 'serve' | 'preview';
 
+const APP_ID = 'penrose-wallpaper';
+const IDENTITY_PATH = '/__penrose_dev_server.json';
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const devPort = readPort(process.env['PENROSE_DEV_PORT'], 5174);
 const previewPort = readPort(process.env['PENROSE_PREVIEW_PORT'], 4174);
+const activeMode: Mode = process.env['PENROSE_VITE_MODE'] === 'preview' ? 'preview' : 'serve';
+const activePort = readPort(
+  process.env['PENROSE_VITE_PORT'],
+  activeMode === 'preview' ? previewPort : devPort,
+);
+const devHost = process.env['PENROSE_DEV_HOST'] ?? '0.0.0.0';
+const previewHost = process.env['PENROSE_PREVIEW_HOST'] ?? '0.0.0.0';
 
 function readPort(raw: string | undefined, fallback: number): number {
   const parsed = Number(raw ?? fallback);
   return Number.isInteger(parsed) && parsed > 0 && parsed < 65536 ? parsed : fallback;
 }
 
-function writeIdentityResponse(res: ServerResponse): void {
+function hostForMode(mode: Mode): string {
+  return mode === 'preview' ? previewHost : devHost;
+}
+
+function writeIdentityResponse(res: ServerResponse, mode: Mode): void {
   res.statusCode = 200;
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Cache-Control', 'no-store');
   res.end(JSON.stringify({
-    appId: 'penrose-wallpaper',
+    appId: APP_ID,
     repoRoot,
+    mode,
+    host: hostForMode(mode),
     pid: process.pid,
   }));
 }
@@ -34,13 +50,13 @@ function serverIdentityPlugin(): Plugin {
   return {
     name: 'penrose-dev-server-identity',
     configureServer(server: ViteDevServer): void {
-      server.middlewares.use('/__penrose_dev_server.json', (_req: IncomingMessage, res: ServerResponse) => {
-        writeIdentityResponse(res);
+      server.middlewares.use(IDENTITY_PATH, (_req: IncomingMessage, res: ServerResponse) => {
+        writeIdentityResponse(res, 'serve');
       });
     },
     configurePreviewServer(server: PreviewServer): void {
-      server.middlewares.use('/__penrose_dev_server.json', (_req: IncomingMessage, res: ServerResponse) => {
-        writeIdentityResponse(res);
+      server.middlewares.use(IDENTITY_PATH, (_req: IncomingMessage, res: ServerResponse) => {
+        writeIdentityResponse(res, 'preview');
       });
     },
   };
@@ -94,7 +110,7 @@ function liveGeometryPlugin(): Plugin {
 export default defineConfig({
   root: 'web',
   publicDir: 'public',
-  cacheDir: path.join(repoRoot, 'node_modules', '.vite', `penrose-${devPort}`),
+  cacheDir: path.join(repoRoot, 'node_modules', '.vite', `penrose-${activeMode}-${activePort}`),
   plugins: [serverIdentityPlugin(), liveGeometryPlugin()],
   build: {
     outDir: '../dist/web',
@@ -103,12 +119,12 @@ export default defineConfig({
     chunkSizeWarningLimit: 1000,
   },
   server: {
-    host: '0.0.0.0',
+    host: devHost,
     port: devPort,
     strictPort: true,
   },
   preview: {
-    host: '0.0.0.0',
+    host: previewHost,
     port: previewPort,
     strictPort: true,
   },

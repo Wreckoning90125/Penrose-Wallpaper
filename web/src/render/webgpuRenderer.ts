@@ -1,4 +1,23 @@
-import * as THREE from 'three/webgpu';
+import {
+  AgXToneMapping,
+  AmbientLight,
+  BufferGeometry,
+  Color,
+  DataTexture,
+  DirectionalLight,
+  DoubleSide,
+  EquirectangularReflectionMapping,
+  Group,
+  HemisphereLight,
+  Mesh,
+  MeshBasicNodeMaterial,
+  MeshPhysicalNodeMaterial,
+  OrthographicCamera,
+  RGBAFormat,
+  SRGBColorSpace,
+  Scene,
+  WebGPURenderer,
+} from 'three/webgpu';
 import {
   abs,
   attribute,
@@ -10,62 +29,112 @@ import {
   vertexColor,
   vec3,
 } from 'three/tsl';
-import { intSetting, lightSettings, materialSettings } from '../settings/androidSettings.js';
-import { oklchToLinearSrgb } from '../color/palette.js';
+import { intSetting, lightSettings, materialSettings, type MaterialSettings, type Settings } from '../settings/androidSettings';
+import { oklchToLinearSrgb } from '../color/palette';
+import type { Palette } from '../color/palette';
+import type { AudioFeatures, Gains, ProjectionGesture } from '../types';
+
+type RendererUniforms = ReturnType<typeof createRendererUniforms>;
+type DragMode = 'boost' | 'zoom' | 'rotate';
+type DragState = {
+  pointerId: number;
+  mode: DragMode;
+  x: number;
+  y: number;
+  rx: number;
+  ry: number;
+  zoom: number;
+  bx: number;
+  by: number;
+};
+
+function createRendererUniforms() {
+  return {
+    roughness: uniform(0.38),
+    roughMod: uniform(0.2),
+    metalness: uniform(0.35),
+    metalMod: uniform(0.2),
+    clearcoat: uniform(0.62),
+    anisotropy: uniform(0.28),
+    iridescence: uniform(0.44),
+    emissive: uniform(0),
+    sheen: uniform(0.12),
+    brightness: uniform(1),
+    rippleAmp: uniform(0),
+    rippleFreq: uniform(4),
+    time: uniform(0),
+  };
+}
 
 export class WallpaperRenderer {
-  constructor(container) {
+  container: HTMLElement;
+  scene: Scene;
+  camera: OrthographicCamera;
+  group: Group;
+  ambientLight: AmbientLight;
+  hemiLight: HemisphereLight;
+  keyLight: DirectionalLight;
+  fillLight: DirectionalLight;
+  renderer: WebGPURenderer;
+  uniforms: RendererUniforms;
+  material: MeshPhysicalNodeMaterial;
+  edgeMaterial: MeshBasicNodeMaterial;
+  mesh: Mesh<BufferGeometry, MeshPhysicalNodeMaterial> | null;
+  edgeMesh: Mesh<BufferGeometry, MeshBasicNodeMaterial> | null;
+  baseMaterial: MaterialSettings;
+  baseRippleAmp: number;
+  baseScale: number;
+  viewZoom: number;
+  initialized: boolean;
+  clockEnabled: boolean;
+  clockRate: number;
+  clockTime: number;
+  clockFrame: number;
+  clockLast: number;
+  drag: DragState | null;
+  projectionGesture: ProjectionGesture | null;
+  resizeObserver: ResizeObserver;
+
+  constructor(container: HTMLElement) {
     if (!navigator.gpu) {
       throw new Error('WebGPU is required for this renderer');
     }
 
     this.container = container;
-    this.scene = new THREE.Scene();
-    this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -5, 5);
+    this.scene = new Scene();
+    this.camera = new OrthographicCamera(-1, 1, 1, -1, -5, 5);
     this.camera.position.set(0, 0, 2.8);
     this.scene.add(this.camera);
-    this.group = new THREE.Group();
+    this.group = new Group();
     this.scene.add(this.group);
-    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
-    this.hemiLight = new THREE.HemisphereLight(0xbfdcff, 0x24160c, 0.6);
-    this.keyLight = new THREE.DirectionalLight(0xffffff, 2.2);
-    this.fillLight = new THREE.DirectionalLight(0xb8d6ff, 0.55);
+    this.ambientLight = new AmbientLight(0xffffff, 0.3);
+    this.hemiLight = new HemisphereLight(0xbfdcff, 0x24160c, 0.6);
+    this.keyLight = new DirectionalLight(0xffffff, 2.2);
+    this.fillLight = new DirectionalLight(0xb8d6ff, 0.55);
     this.keyLight.position.set(0.45, 0.7, 1.15);
     this.fillLight.position.set(-0.65, -0.35, 0.75);
     this.scene.add(this.ambientLight, this.hemiLight, this.keyLight, this.fillLight);
 
-    this.renderer = new THREE.WebGPURenderer({ antialias: true, alpha: false });
+    this.renderer = new WebGPURenderer({ antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.AgXToneMapping;
+    this.renderer.outputColorSpace = SRGBColorSpace;
+    this.renderer.toneMapping = AgXToneMapping;
     this.renderer.toneMappingExposure = 1.08;
     container.appendChild(this.renderer.domElement);
 
-    this.uniforms = {
-      roughness: uniform(0.38),
-      roughMod: uniform(0.2),
-      metalness: uniform(0.35),
-      metalMod: uniform(0.2),
-      clearcoat: uniform(0.62),
-      anisotropy: uniform(0.28),
-      iridescence: uniform(0.44),
-      emissive: uniform(0),
-      sheen: uniform(0.12),
-      brightness: uniform(1),
-      rippleAmp: uniform(0),
-      rippleFreq: uniform(4),
-      time: uniform(0),
-    };
+    this.uniforms = createRendererUniforms();
 
     this.material = this.createMaterial();
-    this.edgeMaterial = new THREE.MeshBasicNodeMaterial({
+    this.edgeMaterial = new MeshBasicNodeMaterial({
       transparent: true,
       opacity: 0.4,
       depthWrite: false,
     });
+    this.edgeMaterial.positionNode = this.ripplePositionNode();
     this.mesh = null;
     this.edgeMesh = null;
     this.baseMaterial = materialSettings({});
+    this.baseRippleAmp = 0;
     this.baseScale = 1;
     this.viewZoom = 1;
     this.initialized = false;
@@ -86,7 +155,7 @@ export class WallpaperRenderer {
     this.renderer.domElement.addEventListener('wheel', event => this.zoomWheel(event), { passive: false });
   }
 
-  async init() {
+  async init(): Promise<void> {
     await this.renderer.init();
     this.initialized = true;
     this.scene.environment = this.createEnvironmentTexture();
@@ -94,7 +163,7 @@ export class WallpaperRenderer {
     this.render();
   }
 
-  createEnvironmentTexture() {
+  createEnvironmentTexture(): DataTexture {
     const width = 32;
     const height = 16;
     const data = new Uint8Array(width * height * 4);
@@ -110,38 +179,44 @@ export class WallpaperRenderer {
         data[i + 3] = 255;
       }
     }
-    const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
-    texture.mapping = THREE.EquirectangularReflectionMapping;
-    texture.colorSpace = THREE.SRGBColorSpace;
+    const texture = new DataTexture(data, width, height, RGBAFormat);
+    texture.mapping = EquirectangularReflectionMapping;
+    texture.colorSpace = SRGBColorSpace;
     texture.needsUpdate = true;
     return texture;
   }
 
-  createMaterial() {
-    const tileType = attribute('tileType', 'float');
-    const tileRing = attribute('tileRing', 'float');
-    const tileOrient = attribute('tileOrient', 'vec2');
-    const material = new THREE.MeshPhysicalNodeMaterial({
-      side: THREE.DoubleSide,
-    });
+  ripplePositionNode() {
     const ripplePhase = positionLocal.x.mul(this.uniforms.rippleFreq)
       .add(positionLocal.y.mul(this.uniforms.rippleFreq.mul(0.73)))
       .add(this.uniforms.time);
     const ripple = sin(ripplePhase).mul(this.uniforms.rippleAmp);
+    return positionLocal.add(vec3(0, 0, ripple));
+  }
+
+  createMaterial(): MeshPhysicalNodeMaterial {
+    const tileType = attribute<'float'>('tileType', 'float');
+    const tileRing = attribute<'float'>('tileRing', 'float');
+    const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
+    const material = new MeshPhysicalNodeMaterial({
+      side: DoubleSide,
+    });
     material.vertexColors = true;
     material.colorNode = clamp(vertexColor().mul(this.uniforms.brightness), 0.0, 1.0);
-    material.positionNode = positionLocal.add(vec3(0, 0, ripple));
+    material.positionNode = this.ripplePositionNode();
     material.roughnessNode = clamp(this.uniforms.roughness.add(tileRing.mul(this.uniforms.roughMod)), 0.035, 1.0);
     material.metalnessNode = clamp(this.uniforms.metalness.add(tileType.mul(this.uniforms.metalMod)), 0.0, 1.0);
     material.clearcoatNode = this.uniforms.clearcoat;
+    material.clearcoatRoughnessNode = clamp(this.uniforms.roughness.mul(0.28), 0.018, 0.32);
     material.anisotropyNode = clamp(abs(tileOrient.x).mul(this.uniforms.anisotropy), 0.0, 1.0);
     material.iridescenceNode = clamp(this.uniforms.iridescence.mul(float(0.7).add(tileRing.mul(0.3))), 0.0, 1.0);
     material.sheenNode = this.uniforms.sheen;
+    material.sheenRoughnessNode = float(0.44);
     material.emissiveNode = vertexColor().mul(this.uniforms.emissive);
     return material;
   }
 
-  setGeometry(geometry, edgeGeometry = null) {
+  setGeometry(geometry: BufferGeometry, edgeGeometry: BufferGeometry | null = null): void {
     if (this.mesh) {
       this.group.remove(this.mesh);
       this.mesh.geometry.dispose();
@@ -151,10 +226,10 @@ export class WallpaperRenderer {
       this.edgeMesh.geometry.dispose();
       this.edgeMesh = null;
     }
-    this.mesh = new THREE.Mesh(geometry, this.material);
+    this.mesh = new Mesh(geometry, this.material);
     this.group.add(this.mesh);
     if (edgeGeometry) {
-      this.edgeMesh = new THREE.Mesh(edgeGeometry, this.edgeMaterial);
+      this.edgeMesh = new Mesh(edgeGeometry, this.edgeMaterial);
       this.edgeMesh.renderOrder = 2;
       this.group.add(this.edgeMesh);
     }
@@ -162,7 +237,7 @@ export class WallpaperRenderer {
     this.render();
   }
 
-  setSettings(settings, palette) {
+  setSettings(settings: Settings, palette: Palette): void {
     const mat = materialSettings(settings);
     this.baseMaterial = mat;
     this.uniforms.roughness.value = mat.roughness;
@@ -175,9 +250,10 @@ export class WallpaperRenderer {
     this.uniforms.emissive.value = mat.emissive;
     this.uniforms.sheen.value = mat.sheen;
     this.uniforms.brightness.value = intSetting(settings, 'brightness', 0, 200) / 100;
-    this.uniforms.rippleAmp.value = intSetting(settings, 'ripple_amount', 0, 100) / 100
+    this.baseRippleAmp = intSetting(settings, 'ripple_amount', 0, 100) / 100
       * intSetting(settings, 'depth_amount', 0, 100) / 100
       * 0.075;
+    this.uniforms.rippleAmp.value = this.baseRippleAmp;
     this.uniforms.rippleFreq.value = 2 + intSetting(settings, 'ripple_kind', 0, 3) * 2.25;
     this.material.roughness = mat.roughness;
     this.material.metalness = mat.metalness;
@@ -198,28 +274,30 @@ export class WallpaperRenderer {
     this.applyLights(settings);
 
     const bg = oklchToLinearSrgb(palette.bg);
-    this.renderer.setClearColor(new THREE.Color(bg[0], bg[1], bg[2]), 1);
+    this.renderer.setClearColor(new Color(bg[0], bg[1], bg[2]), 1);
     this.setClockFromSettings(settings);
     this.render();
   }
 
-  setAudioDrive(features, gains) {
+  setAudioDrive(features: AudioFeatures, gains: Gains): void {
     const mat = this.baseMaterial;
     this.uniforms.emissive.value = Math.min(2, mat.emissive + features.bass * gains.emissive);
     this.uniforms.iridescence.value = Math.min(1, mat.iridescence + features.treble * gains.film);
     this.uniforms.metalness.value = Math.min(1, mat.metalness + features.mid * gains.metal * 0.35);
+    this.uniforms.rippleAmp.value = this.baseRippleAmp * (1 + features.level * Math.max(0, gains.relief));
     if (this.mesh) {
       const z = 1 + features.level * gains.relief * 0.08;
       this.mesh.scale.z = z;
+      if (this.edgeMesh) this.edgeMesh.scale.z = z;
     }
     this.render();
   }
 
-  setProjectionGesture(config) {
+  setProjectionGesture(config: ProjectionGesture): void {
     this.projectionGesture = config;
   }
 
-  setClockFromSettings(settings) {
+  setClockFromSettings(settings: Settings): void {
     this.clockEnabled = String(settings.clock_enabled ?? '1') !== '0';
     this.clockRate = Math.max(0, intSetting(settings, 'clock_rate', 0, 240) / 100)
       * Math.max(0.1, intSetting(settings, 'ripple_speed', 0, 200) / 50);
@@ -230,16 +308,16 @@ export class WallpaperRenderer {
     }
   }
 
-  resetClock() {
+  resetClock(): void {
     this.clockTime = 0;
     this.uniforms.time.value = 0;
     this.render();
   }
 
-  startClock() {
+  startClock(): void {
     if (this.clockFrame || !this.initialized) return;
     this.clockLast = performance.now();
-    const tick = now => {
+    const tick = (now: number) => {
       this.clockFrame = 0;
       if (!this.clockEnabled) return;
       const delta = Math.min(0.05, Math.max(0, (now - this.clockLast) / 1000));
@@ -252,13 +330,13 @@ export class WallpaperRenderer {
     this.clockFrame = requestAnimationFrame(tick);
   }
 
-  stopClock() {
+  stopClock(): void {
     if (!this.clockFrame) return;
     cancelAnimationFrame(this.clockFrame);
     this.clockFrame = 0;
   }
 
-  applyLights(settings) {
+  applyLights(settings: Settings): void {
     const light = lightSettings(settings);
     const xy = Math.cos(light.elevation);
     this.keyLight.position.set(
@@ -277,7 +355,7 @@ export class WallpaperRenderer {
     );
   }
 
-  resize() {
+  resize(): void {
     const width = Math.max(1, this.container.clientWidth);
     const height = Math.max(1, this.container.clientHeight);
     this.renderer.setSize(width, height, false);
@@ -291,7 +369,7 @@ export class WallpaperRenderer {
     this.render();
   }
 
-  frameMesh() {
+  frameMesh(): void {
     if (!this.mesh?.geometry.boundingSphere) return;
     const radius = this.mesh.geometry.boundingSphere.radius || 1;
     const scale = 0.92 / radius;
@@ -299,70 +377,81 @@ export class WallpaperRenderer {
     this.group.scale.setScalar(this.baseScale * this.viewZoom);
   }
 
-  zoomWheel(event) {
+  zoomWheel(event: WheelEvent): void {
     event.preventDefault();
     const factor = Math.exp(-event.deltaY * 0.0012);
-    this.viewZoom = Math.max(0.25, Math.min(5, this.viewZoom * factor));
+    this.setViewZoom(this.viewZoom * factor);
+  }
+
+  setViewZoom(value: number): void {
+    this.viewZoom = Math.max(0.25, Math.min(5, value));
     this.group.scale.setScalar(this.baseScale * this.viewZoom);
     this.render();
   }
 
-  resetView() {
+  resetView(): void {
     this.viewZoom = 1;
     this.group.rotation.set(0, 0, 0);
     this.group.scale.setScalar(this.baseScale);
     this.render();
   }
 
-  startDrag(event) {
+  startDrag(event: PointerEvent): void {
     if (!this.mesh) return;
     const isBoost = event.button === 2 && String(this.projectionGesture?.settings?.projection) === '1';
-    const settings = this.projectionGesture?.settings ?? {};
+    const isZoom = event.button === 1;
+    const settings = this.projectionGesture?.settings;
+    event.preventDefault();
     this.drag = {
       pointerId: event.pointerId,
-      mode: isBoost ? 'boost' : 'rotate',
+      mode: isBoost ? 'boost' : isZoom ? 'zoom' : 'rotate',
       x: event.clientX,
       y: event.clientY,
       rx: this.group.rotation.x,
       ry: this.group.rotation.y,
-      bx: Number(settings.hyp_boost_x ?? 50),
-      by: Number(settings.hyp_boost_y ?? 50),
+      zoom: this.viewZoom,
+      bx: Number(settings?.hyp_boost_x ?? 50),
+      by: Number(settings?.hyp_boost_y ?? 50),
     };
     this.renderer.domElement.setPointerCapture(event.pointerId);
   }
 
-  dragPointer(event) {
+  dragPointer(event: PointerEvent): void {
     if (!this.drag || this.drag.pointerId !== event.pointerId || !this.mesh) return;
     const dx = (event.clientX - this.drag.x) / Math.max(1, this.container.clientWidth);
     const dy = (event.clientY - this.drag.y) / Math.max(1, this.container.clientHeight);
     if (this.drag.mode === 'boost') {
-      const bx = Math.max(0, Math.min(100, Math.round(this.drag.bx + dx * 100)));
-      const by = Math.max(0, Math.min(100, Math.round(this.drag.by + dy * 100)));
+      const bx = Math.max(0, Math.min(100, this.drag.bx + dx * 100));
+      const by = Math.max(0, Math.min(100, this.drag.by + dy * 100));
       this.projectionGesture?.onBoost?.(bx, by);
+      return;
+    }
+    if (this.drag.mode === 'zoom') {
+      this.setViewZoom(this.drag.zoom * Math.exp(-dy * 2.6));
       return;
     }
     this.pointer(this.drag.rx + dy * 1.2, this.drag.ry - dx * 1.2);
   }
 
-  endDrag(event) {
+  endDrag(event: PointerEvent): void {
     if (this.drag?.pointerId === event.pointerId) {
       this.drag = null;
     }
   }
 
-  pointer(rotationX, rotationY) {
+  pointer(rotationX: number, rotationY: number): void {
     if (!this.group) return;
     this.group.rotation.x = rotationX;
     this.group.rotation.y = rotationY;
     this.render();
   }
 
-  render() {
+  render(): void {
     if (!this.initialized) return;
     this.renderer.render(this.scene, this.camera);
   }
 
-  dispose() {
+  dispose(): void {
     this.stopClock();
     this.resizeObserver.disconnect();
     this.mesh?.geometry.dispose();

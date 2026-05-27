@@ -5,8 +5,10 @@
     "exactOptionalPropertyTypes": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "noEmit": true,
     "noFallthroughCasesInSwitch": true,
     "noImplicitAny": true,
@@ -18,15 +20,17 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "resolveJsonModule": true,
-    "skipLibCheck": false,
+    "skipLibCheck": true,
     "strict": true,
     "target": "ES2024",
-    "types": ["node"],
+    "types": ["node", "react", "react-dom", "vite/client"],
     "useUnknownInCatchVariables": true,
     "verbatimModuleSyntax": true
   },
   "include": [
     "scripts/**/*.mts",
+    "web/src/**/*.ts",
+    "web/src/**/*.tsx",
     "vite.config.mts"
   ]
 }

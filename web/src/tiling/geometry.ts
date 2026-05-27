@@ -1,8 +1,59 @@
-import * as THREE from 'three/webgpu';
-import { intSetting } from '../settings/androidSettings.js';
-import { buildPalette, oklchToLinearSrgb } from '../color/palette.js';
+import { BufferAttribute, BufferGeometry } from 'three/webgpu';
+import { intSetting, numberSetting, type Settings } from '../settings/androidSettings';
+import { buildPalette, oklchToLinearSrgb, type Oklch } from '../color/palette';
+import type { AtlasItem, GeometryBuild, Patch, Point, Point3, Tile } from '../types';
 
-const FAMILY = [
+type FamilySpec = {
+  typeBuckets: number;
+  orientBuckets: number;
+  orientFromType: boolean;
+  angA: number;
+  angB: number;
+  orientHalfTurn: boolean;
+  ringChebyshev: boolean;
+};
+
+type PatchIdentity = {
+  family: number;
+  seed: number;
+  generation: number;
+};
+
+type TileClasses = {
+  bucket: Uint8Array;
+  numBuckets: number;
+};
+
+type Projector = {
+  enabled: boolean;
+  map: (x: number, y: number) => Point;
+};
+
+type MeshBuffers = {
+  position: Float32Array;
+  color: Float32Array;
+  tileType: Float32Array;
+  tileRing: Float32Array;
+  tileOrient: Float32Array;
+};
+
+type VisibleEdge = {
+  a: Point;
+  b: Point;
+};
+
+type Snapper = (point: Point) => Point;
+type EdgeKind = 'base' | 'leg' | 'edge';
+type EdgeSide = {
+  type: number;
+  kind: EdgeKind;
+};
+type EdgeEntry = VisibleEdge & {
+  first: EdgeSide;
+  second: EdgeSide | null;
+};
+
+const FAMILY: FamilySpec[] = [
   { typeBuckets: 2, orientBuckets: 10, orientFromType: false, angA: 0, angB: 2, orientHalfTurn: false, ringChebyshev: false },
   { typeBuckets: 2, orientBuckets: 10, orientFromType: false, angA: 0, angB: 2, orientHalfTurn: false, ringChebyshev: false },
   { typeBuckets: 4, orientBuckets: 4, orientFromType: true, angA: 0, angB: 0, orientHalfTurn: false, ringChebyshev: true },
@@ -18,13 +69,14 @@ const FAMILY = [
   { typeBuckets: 10, orientBuckets: 12, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: false, ringChebyshev: false },
 ];
 
-export async function loadPatch(item) {
+export async function loadPatch(item: AtlasItem): Promise<Patch> {
+  if (!item.geometry) throw new Error(`atlas target has no geometry: ${item.id}`);
   const response = await fetch(`/generated/atlas/${item.geometry}`, { cache: 'force-cache' });
   if (!response.ok) throw new Error(`geometry HTTP ${response.status}: ${item.geometry}`);
   return parsePatch(await response.arrayBuffer());
 }
 
-export async function loadPatchForSettings(settings, item = null) {
+export async function loadPatchForSettings(settings: Settings, item: AtlasItem | null = null): Promise<Patch> {
   const family = intSetting(settings, 'family', 0, 12);
   const seed = intSetting(settings, 'seed', 0, 8);
   const generation = intSetting(settings, 'generation', 0, 8);
@@ -48,11 +100,11 @@ export async function loadPatchForSettings(settings, item = null) {
   return patch;
 }
 
-function samePatchIdentity(patch, expected) {
+function samePatchIdentity(patch: Patch, expected: PatchIdentity): boolean {
   return patch.family === expected.family && patch.seed === expected.seed && patch.generation === expected.generation;
 }
 
-function parsePatch(buffer) {
+function parsePatch(buffer: ArrayBuffer): Patch {
   const view = new DataView(buffer);
   const magic = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
   if (magic !== 'PTG1') throw new Error('bad tiling geometry magic');
@@ -61,11 +113,11 @@ function parsePatch(buffer) {
   const seed = view.getUint32(offset, true); offset += 4;
   const generation = view.getUint32(offset, true); offset += 4;
   const tileCount = view.getUint32(offset, true); offset += 4;
-  const tiles = new Array(tileCount);
+  const tiles: Tile[] = new Array<Tile>(tileCount);
   for (let i = 0; i < tileCount; i++) {
     const vcount = view.getUint8(offset++);
     const type = view.getUint8(offset++);
-    const verts = new Array(vcount);
+    const verts: Point[] = new Array<Point>(vcount);
     for (let j = 0; j < vcount; j++) {
       verts[j] = [view.getFloat32(offset, true), view.getFloat32(offset + 4, true)];
       offset += 8;
@@ -75,15 +127,15 @@ function parsePatch(buffer) {
   return { family, seed, generation, tiles };
 }
 
-export function buildMeshGeometry(patch, settings, customColors = null) {
+export function buildMeshGeometry(patch: Patch, settings: Settings, customColors: Oklch[] | null = null): GeometryBuild {
   const colorMode = intSetting(settings, 'color_mode', 0, 2);
   const colorCount = intSetting(settings, 'color_count', 2, 16);
   const preset = intSetting(settings, 'preset', 0, 11);
   const palette = buildPalette(preset, colorCount, customColors);
   const classes = classify(patch.tiles, patch.family, colorMode, colorCount);
   const relief = averageTileRadius(patch.tiles) * intSetting(settings, 'mat_relief', 0, 200) / 200 * 0.34;
-  const maxType = Math.max(1, FAMILY[patch.family]?.typeBuckets - 1 || 1);
-  const rings = tileRings(patch.tiles, FAMILY[patch.family]);
+  const maxType = Math.max(1, familySpec(patch.family).typeBuckets - 1);
+  const rings = tileRings(patch.tiles, familySpec(patch.family));
   const projector = createProjector(settings);
   const snap = createVertexSnapper(projector.enabled ? 1e-5 : 1e-7);
   const fillSub = projector.enabled ? intSetting(settings, 'hyp_fill_subdiv', 1, 8) : 1;
@@ -99,17 +151,17 @@ export function buildMeshGeometry(patch, settings, customColors = null) {
 
   let cursor = 0;
   for (let tileIndex = 0; tileIndex < patch.tiles.length; tileIndex++) {
-    const tile = patch.tiles[tileIndex];
+    const tile = patch.tiles[tileIndex]!;
     const center = centroid(tile.verts);
     const orient = orientation(tile, patch.family);
     const typeValue = tile.type / maxType;
-    const ringValue = rings[tileIndex];
-    const paletteIndex = bucketToPaletteIdx(classes.bucket[tileIndex], classes.numBuckets, colorCount);
-    const rgb = clampRgb(oklchToLinearSrgb(palette.colors[paletteIndex]));
+    const ringValue = rings[tileIndex] ?? 0;
+    const paletteIndex = bucketToPaletteIdx(classes.bucket[tileIndex] ?? 0, classes.numBuckets, colorCount);
+    const rgb = clampRgb(oklchToLinearSrgb(palette.colors[paletteIndex] ?? palette.colors[0]!));
     const centerZ = relief * (0.65 + ringValue * 0.35 + typeValue * 0.18);
     for (let i = 0; i < tile.verts.length; i++) {
-      const a = tile.verts[i];
-      const b = tile.verts[(i + 1) % tile.verts.length];
+      const a = tile.verts[i]!;
+      const b = tile.verts[(i + 1) % tile.verts.length]!;
       cursor = emitTriangle(
         cursor,
         { position, color, tileType, tileRing, tileOrient },
@@ -127,23 +179,45 @@ export function buildMeshGeometry(patch, settings, customColors = null) {
     }
   }
 
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
-  geometry.setAttribute('color', new THREE.BufferAttribute(color, 3));
-  geometry.setAttribute('tileType', new THREE.BufferAttribute(tileType, 1));
-  geometry.setAttribute('tileRing', new THREE.BufferAttribute(tileRing, 1));
-  geometry.setAttribute('tileOrient', new THREE.BufferAttribute(tileOrient, 2));
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new BufferAttribute(position, 3));
+  geometry.setAttribute('color', new BufferAttribute(color, 3));
+  geometry.setAttribute('uv', new BufferAttribute(buildUv(position), 2));
+  geometry.setAttribute('tileType', new BufferAttribute(tileType, 1));
+  geometry.setAttribute('tileRing', new BufferAttribute(tileRing, 1));
+  geometry.setAttribute('tileOrient', new BufferAttribute(tileOrient, 2));
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   const edgeGeometry = buildEdgeGeometry(patch, settings, projector, snap, relief);
   return { geometry, edgeGeometry, palette };
 }
 
-function clampRgb(rgb) {
-  return rgb.map(channel => Math.max(0, Math.min(1, channel)));
+function familySpec(family: number): FamilySpec {
+  return FAMILY[family] ?? FAMILY[0]!;
 }
 
-function emitTriangle(cursor, buffers, projector, snap, fillSub, a, b, c, rgb, typeValue, ringValue, orient) {
+function clampRgb(rgb: Point3): Point3 {
+  return [
+    Math.max(0, Math.min(1, rgb[0])),
+    Math.max(0, Math.min(1, rgb[1])),
+    Math.max(0, Math.min(1, rgb[2])),
+  ];
+}
+
+function emitTriangle(
+  cursor: number,
+  buffers: MeshBuffers,
+  projector: Projector,
+  snap: Snapper,
+  fillSub: number,
+  a: Point3,
+  b: Point3,
+  c: Point3,
+  rgb: Point3,
+  typeValue: number,
+  ringValue: number,
+  orient: Point,
+): number {
   if (fillSub <= 1) {
     cursor = emitProjectedVertex(cursor, buffers, projector, snap, a, rgb, typeValue, ringValue, orient);
     cursor = emitProjectedVertex(cursor, buffers, projector, snap, b, rgb, typeValue, ringValue, orient);
@@ -151,7 +225,7 @@ function emitTriangle(cursor, buffers, projector, snap, fillSub, a, b, c, rgb, t
     return cursor;
   }
   const invN = 1 / fillSub;
-  const point = (i, j) => {
+  const point = (i: number, j: number): Point3 => {
     const k = fillSub - i - j;
     const fa = i * invN;
     const fb = j * invN;
@@ -177,7 +251,17 @@ function emitTriangle(cursor, buffers, projector, snap, fillSub, a, b, c, rgb, t
   return cursor;
 }
 
-function emitProjectedVertex(cursor, buffers, projector, snap, vertex, rgb, typeValue, ringValue, orient) {
+function emitProjectedVertex(
+  cursor: number,
+  buffers: MeshBuffers,
+  projector: Projector,
+  snap: Snapper,
+  vertex: Point3,
+  rgb: Point3,
+  typeValue: number,
+  ringValue: number,
+  orient: Point,
+): number {
   const [x, y] = snap(projector.map(vertex[0], vertex[1]));
   return emitVertex(
     cursor,
@@ -196,7 +280,21 @@ function emitProjectedVertex(cursor, buffers, projector, snap, vertex, rgb, type
   );
 }
 
-function emitVertex(cursor, position, color, tileType, tileRing, tileOrient, x, y, z, rgb, typeValue, ringValue, orient) {
+function emitVertex(
+  cursor: number,
+  position: Float32Array,
+  color: Float32Array,
+  tileType: Float32Array,
+  tileRing: Float32Array,
+  tileOrient: Float32Array,
+  x: number,
+  y: number,
+  z: number,
+  rgb: Point3,
+  typeValue: number,
+  ringValue: number,
+  orient: Point,
+): number {
   const p = cursor * 3;
   position[p] = x;
   position[p + 1] = y;
@@ -212,8 +310,14 @@ function emitVertex(cursor, position, color, tileType, tileRing, tileOrient, x, 
   return cursor + 1;
 }
 
-function buildEdgeGeometry(patch, settings, projector, snap, relief) {
-  const borderOn = settings.border_on !== false && settings.border_on !== 'false';
+function buildEdgeGeometry(
+  patch: Patch,
+  settings: Settings,
+  projector: Projector,
+  snap: Snapper,
+  relief: number,
+): BufferGeometry | null {
+  const borderOn = String(settings.border_on) !== 'false';
   const borderAlpha = intSetting(settings, 'border_a', 0, 100) / 100;
   const radius = averageTileRadius(patch.tiles);
   const width = radius * intSetting(settings, 'border_width', 0, 600) / 600 * 0.16;
@@ -223,7 +327,7 @@ function buildEdgeGeometry(patch, settings, projector, snap, relief) {
   const sub = projector.enabled ? intSetting(settings, 'hyp_border_subdiv', 1, 32) : 1;
   const halfWidth = width * 0.5;
   const edgeZ = relief * 0.08 + radius * 0.002;
-  const positions = [];
+  const positions: number[] = [];
 
   for (const edge of edges) {
     for (let i = 0; i < sub; i++) {
@@ -252,19 +356,31 @@ function buildEdgeGeometry(patch, settings, projector, snap, relief) {
   }
 
   if (positions.length === 0) return null;
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+  const geometry = new BufferGeometry();
+  const position = new Float32Array(positions);
+  geometry.setAttribute('position', new BufferAttribute(position, 3));
+  geometry.setAttribute('uv', new BufferAttribute(buildUv(position), 2));
   geometry.computeBoundingSphere();
   return geometry;
 }
 
-function collectVisibleEdges(patch) {
-  const map = new Map();
+function buildUv(position: Float32Array): Float32Array {
+  const count = position.length / 3;
+  const uv = new Float32Array(count * 2);
+  for (let i = 0; i < count; i++) {
+    uv[i * 2] = position[i * 3] ?? 0;
+    uv[i * 2 + 1] = position[i * 3 + 1] ?? 0;
+  }
+  return uv;
+}
+
+function collectVisibleEdges(patch: Patch): VisibleEdge[] {
+  const map = new Map<string, EdgeEntry>();
   for (const tile of patch.tiles) {
     for (let i = 0; i < tile.verts.length; i++) {
       const j = (i + 1) % tile.verts.length;
-      const a = tile.verts[i];
-      const b = tile.verts[j];
+      const a = tile.verts[i]!;
+      const b = tile.verts[j]!;
       const key = edgeKey(a, b);
       const entry = map.get(key);
       const kind = edgeKind(patch.family, tile, i);
@@ -275,7 +391,7 @@ function collectVisibleEdges(patch) {
       }
     }
   }
-  const edges = [];
+  const edges: VisibleEdge[] = [];
   for (const edge of map.values()) {
     if (edge.second && edge.first.type === edge.second.type && hiddenEdge(patch.family, edge.first.kind, edge.second.kind)) {
       continue;
@@ -285,54 +401,54 @@ function collectVisibleEdges(patch) {
   return edges;
 }
 
-function edgeKind(family, tile, edgeIndex) {
+function edgeKind(family: number, tile: Tile, edgeIndex: number): EdgeKind {
   if ((family !== 0 && family !== 1) || tile.verts.length !== 3) return 'edge';
   return edgeIndex === 2 ? 'base' : 'leg';
 }
 
-function hiddenEdge(family, first, second) {
+function hiddenEdge(family: number, first: EdgeKind, second: EdgeKind): boolean {
   if (family === 0) return first === 'base' && second === 'base';
   if (family === 1) return first === 'leg' && second === 'leg';
   return false;
 }
 
-function edgeKey(a, b) {
+function edgeKey(a: Point, b: Point): string {
   const ka = pointKey(a);
   const kb = pointKey(b);
   return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
 }
 
-function pointKey([x, y]) {
+function pointKey([x, y]: Point): string {
   return `${Math.round(x * 1e5)},${Math.round(y * 1e5)}`;
 }
 
-function lerp2(a, b, t) {
+function lerp2(a: Point, b: Point, t: number): Point {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 }
 
-function pushQuad(out, a, b, c, d) {
+function pushQuad(out: number[], a: Point3, b: Point3, c: Point3, d: Point3): void {
   out.push(...a, ...b, ...c, ...b, ...d, ...c);
 }
 
-function createVertexSnapper(epsilon) {
-  const seen = new Map();
+function createVertexSnapper(epsilon: number): Snapper {
+  const seen = new Map<string, Point>();
   return ([x, y]) => {
     const key = `${Math.round(x / epsilon)},${Math.round(y / epsilon)}`;
     const existing = seen.get(key);
     if (existing) return existing;
-    const snapped = [x, y];
+    const snapped: Point = [x, y];
     seen.set(key, snapped);
     return snapped;
   };
 }
 
-function createProjector(settings) {
+function createProjector(settings: Settings): Projector {
   if (intSetting(settings, 'projection', 0, 1) !== 1) {
-    return { enabled: false, map: (x, y) => [x, y] };
+    return { enabled: false, map: (x: number, y: number) => [x, y] };
   }
-  const scale = 0.05 + intSetting(settings, 'hyp_scale', 0, 100) / 100 * 2.95;
-  let bx = (intSetting(settings, 'hyp_boost_x', 0, 100) - 50) / 50 * 0.9;
-  let by = (intSetting(settings, 'hyp_boost_y', 0, 100) - 50) / 50 * 0.9;
+  const scale = 0.05 + numberSetting(settings, 'hyp_scale', 0, 100) / 100 * 2.95;
+  let bx = (numberSetting(settings, 'hyp_boost_x', 0, 100) - 50) / 50 * 0.9;
+  let by = (numberSetting(settings, 'hyp_boost_y', 0, 100) - 50) / 50 * 0.9;
   const bMag = Math.hypot(bx, by);
   if (bMag > 0.92) {
     const s = 0.92 / bMag;
@@ -341,11 +457,11 @@ function createProjector(settings) {
   }
   return {
     enabled: true,
-    map: (x, y) => projectHyp(x, y, bx, by, scale),
+    map: (x: number, y: number) => projectHyp(x, y, bx, by, scale),
   };
 }
 
-function projectHyp(x, y, bx, by, scale) {
+function projectHyp(x: number, y: number, bx: number, by: number, scale: number): Point {
   const r = Math.hypot(x, y);
   const d = Math.tanh(r * scale * 0.5);
   const zx = r > 1e-6 ? x / r * d : 0;
@@ -361,26 +477,26 @@ function projectHyp(x, y, bx, by, scale) {
   ];
 }
 
-function classify(tiles, family, mode, colorCount) {
-  const spec = FAMILY[family] ?? FAMILY[0];
+function classify(tiles: Tile[], family: number, mode: number, colorCount: number): TileClasses {
+  const spec = familySpec(family);
   const bucket = new Uint8Array(tiles.length);
   if (mode === 0) {
     const n = Math.max(1, spec.typeBuckets);
-    for (let i = 0; i < tiles.length; i++) bucket[i] = tiles[i].type % n;
+    for (let i = 0; i < tiles.length; i++) bucket[i] = tiles[i]!.type % n;
     return { bucket, numBuckets: n };
   }
   if (mode === 1) {
     const n = Math.max(1, spec.orientBuckets);
     if (spec.orientFromType) {
-      for (let i = 0; i < tiles.length; i++) bucket[i] = tiles[i].type % n;
+      for (let i = 0; i < tiles.length; i++) bucket[i] = tiles[i]!.type % n;
       return { bucket, numBuckets: n };
     }
     const span = spec.orientHalfTurn ? Math.PI : Math.PI * 2;
     const denom = span / n;
     for (let i = 0; i < tiles.length; i++) {
-      const tile = tiles[i];
-      const a = tile.verts[Math.min(spec.angA, tile.verts.length - 1)];
-      const b = tile.verts[Math.min(spec.angB, tile.verts.length - 1)];
+      const tile = tiles[i]!;
+      const a = tile.verts[Math.min(spec.angA, tile.verts.length - 1)]!;
+      const b = tile.verts[Math.min(spec.angB, tile.verts.length - 1)]!;
       let angle = Math.atan2(b[1] - a[1], b[0] - a[0]);
       if (angle < 0) angle += Math.PI * 2;
       if (spec.orientHalfTurn && angle >= Math.PI) angle -= Math.PI;
@@ -390,17 +506,17 @@ function classify(tiles, family, mode, colorCount) {
   }
   const rings = tileRings(tiles, spec);
   const n = Math.max(1, colorCount);
-  for (let i = 0; i < tiles.length; i++) bucket[i] = Math.max(0, Math.min(n - 1, Math.floor(rings[i] * n)));
+  for (let i = 0; i < tiles.length; i++) bucket[i] = Math.max(0, Math.min(n - 1, Math.floor((rings[i] ?? 0) * n)));
   return { bucket, numBuckets: n };
 }
 
-function bucketToPaletteIdx(bucket, numBuckets, colorCount) {
+function bucketToPaletteIdx(bucket: number, numBuckets: number, colorCount: number): number {
   if (colorCount <= 1) return 0;
   if (numBuckets > colorCount) return Math.min(colorCount - 1, Math.floor(bucket / (numBuckets / colorCount)));
   return bucket % colorCount;
 }
 
-function tileRings(tiles, spec) {
+function tileRings(tiles: Tile[], spec: FamilySpec): number[] {
   const c = tiles.map(tile => centroid(tile.verts));
   let maxX = 0;
   let maxY = 0;
@@ -411,14 +527,14 @@ function tileRings(tiles, spec) {
     maxR = Math.max(maxR, Math.hypot(x, y));
   }
   return c.map(([x, y]) => {
-    if (spec?.ringChebyshev) {
+    if (spec.ringChebyshev) {
       return Math.max(maxX > 0 ? Math.abs(x) / maxX : 0, maxY > 0 ? Math.abs(y) / maxY : 0);
     }
     return maxR > 0 ? Math.hypot(x, y) / maxR : 0;
   });
 }
 
-function averageTileRadius(tiles) {
+function averageTileRadius(tiles: Tile[]): number {
   let sum = 0;
   let count = 0;
   for (const tile of tiles) {
@@ -431,7 +547,7 @@ function averageTileRadius(tiles) {
   return count > 0 ? sum / count : 1;
 }
 
-function centroid(verts) {
+function centroid(verts: Point[]): Point {
   let x = 0;
   let y = 0;
   for (const v of verts) {
@@ -441,10 +557,10 @@ function centroid(verts) {
   return [x / verts.length, y / verts.length];
 }
 
-function orientation(tile, family) {
-  const spec = FAMILY[family] ?? FAMILY[0];
-  const a = tile.verts[Math.min(spec.angA, tile.verts.length - 1)];
-  const b = tile.verts[Math.min(spec.angB, tile.verts.length - 1)];
+function orientation(tile: Tile, family: number): Point {
+  const spec = familySpec(family);
+  const a = tile.verts[Math.min(spec.angA, tile.verts.length - 1)]!;
+  const b = tile.verts[Math.min(spec.angB, tile.verts.length - 1)]!;
   const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
   return [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
 }

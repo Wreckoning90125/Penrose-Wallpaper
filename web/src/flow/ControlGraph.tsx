@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { Dispatch, MouseEvent, ReactNode, SetStateAction } from 'react';
 import {
   Background,
   Controls,
@@ -7,14 +8,19 @@ import {
   Position,
   ReactFlow,
   addEdge,
+  reconnectEdge,
   useEdgesState,
+  useNodesInitialized,
   useNodesState,
   useReactFlow,
 } from '@xyflow/react';
+import type { Connection, Edge, Node } from '@xyflow/react';
 import { Clock, Mic, Pause, Play, RotateCcw, SkipBack, Square, Upload } from 'lucide-react';
-import { FAMILIES, familyByValue, seedLabel } from '../tiling/families.js';
-import { MAX_COLORS, oklchCss, oklchToLinearSrgb } from '../color/palette.js';
-import { intSetting } from '../settings/androidSettings.js';
+import { FAMILIES, familyByValue, seedLabel } from '../tiling/families';
+import { MAX_COLORS, oklchCss, oklchToLinearSrgb } from '../color/palette';
+import type { Oklch, Palette } from '../color/palette';
+import { intSetting, type SettingKey, type SettingValue, type Settings } from '../settings/androidSettings';
+import type { AtlasCategory, AtlasManifest, Gains, WebAudioGraph } from '../types';
 
 const PALETTE_NAMES = [
   'B&W',
@@ -31,7 +37,11 @@ const PALETTE_NAMES = [
   'Custom',
 ];
 
-const MATERIAL_CONTROLS = [
+type ControlSpec = readonly [SettingKey, string, number, number, number];
+type GainKey = keyof Gains;
+type GainSpec = readonly [GainKey, string];
+
+const MATERIAL_CONTROLS: ControlSpec[] = [
   ['mat_relief', 'Relief', 0, 200, 1],
   ['mat_roughness', 'Roughness', 0, 100, 1],
   ['mat_rough_mod', 'Worn edges', 0, 100, 1],
@@ -44,7 +54,7 @@ const MATERIAL_CONTROLS = [
   ['mat_emissive', 'Emissive glow', 0, 200, 1],
 ];
 
-const LIGHT_CONTROLS = [
+const LIGHT_CONTROLS: ControlSpec[] = [
   ['light_angle', 'Angle', 0, 360, 1],
   ['light_elevation', 'Elevation', 0, 90, 1],
   ['light_intensity', 'Intensity', 0, 200, 1],
@@ -52,7 +62,7 @@ const LIGHT_CONTROLS = [
   ['light_ambient', 'Ambient', 0, 100, 1],
 ];
 
-const PROJECTION_CONTROLS = [
+const PROJECTION_CONTROLS: ControlSpec[] = [
   ['hyp_scale', 'Scale', 0, 100, 1],
   ['hyp_boost_x', 'Boost X', 0, 100, 1],
   ['hyp_boost_y', 'Boost Y', 0, 100, 1],
@@ -60,35 +70,78 @@ const PROJECTION_CONTROLS = [
   ['hyp_border_subdiv', 'Edge subdiv', 1, 32, 1],
 ];
 
-const CLOCK_CONTROLS = [
+const CLOCK_CONTROLS: ControlSpec[] = [
   ['clock_rate', 'Rate', 0, 240, 1],
 ];
 
-const POSTFX_CONTROLS = [
+const POSTFX_CONTROLS: ControlSpec[] = [
   ['brightness', 'Brightness', 40, 180, 1],
   ['depth_amount', 'Depth drive', 0, 100, 1],
   ['ripple_amount', 'Ripple', 0, 100, 1],
   ['ripple_speed', 'Ripple speed', 0, 200, 1],
 ];
 
-const GAIN_CONTROLS = [
+const GAIN_CONTROLS: GainSpec[] = [
   ['relief', 'Relief'],
   ['emissive', 'Glow'],
   ['film', 'Film'],
   ['metal', 'Metal'],
 ];
 
-function Inlet({ id = 'in' }) {
+type ControlGraphProps = {
+  manifest: AtlasManifest | null;
+  activeCategory: AtlasCategory | null;
+  categoryId: string;
+  targetId: string;
+  currentValue: string;
+  settings: Settings;
+  palette: Palette;
+  colorCount: number;
+  selectedColor: number;
+  selectedColorValue: Oklch;
+  seedOptions: { value: string; label: string }[];
+  maxGeneration: number;
+  audio: WebAudioGraph;
+  gains: Gains;
+  tiles: number;
+  loading: string;
+  gamut: string;
+  onCategory: (categoryId: string) => void;
+  onTarget: (targetId: string) => void;
+  onFamily: (family: string) => void;
+  onSetting: (key: SettingKey, value: SettingValue) => void;
+  onPalette: (palette: string) => void;
+  onSelectedColor: (index: number) => void;
+  onCustomColor: (updater: (color: Oklch) => Oklch) => void;
+  onGain: (key: GainKey, value: number) => void;
+  onResetBoost: () => void;
+  onResetClock: () => void;
+  onResetView: () => void;
+};
+
+type HandleProps = {
+  id?: string;
+};
+
+function Inlet({ id = 'in' }: HandleProps) {
   return <Handle id={id} type="target" position={Position.Left} />;
 }
 
-function Outlet({ id = 'out' }) {
+function Outlet({ id = 'out' }: HandleProps) {
   return <Handle id={id} type="source" position={Position.Right} />;
 }
 
-function NodeFrame({ children, kind, title, wide = false }) {
+type NodeFrameProps = {
+  children: ReactNode;
+  kind: string;
+  title: string;
+  wide?: boolean;
+  variant?: number;
+};
+
+function NodeFrame({ children, kind, title, wide = false, variant = 0 }: NodeFrameProps) {
   return (
-    <div className={`flow-node control-node node-kind-${kind}${wide ? ' wide-node' : ''}`}>
+    <div className={`flow-node control-node node-kind-${kind} node-variant-${variant}${wide ? ' wide-node' : ''}`}>
       <div className="flow-node-title">
         <strong>{title}</strong>
       </div>
@@ -97,7 +150,17 @@ function NodeFrame({ children, kind, title, wide = false }) {
   );
 }
 
-function RangeControl({ label, value, min, max, step, digits = 0, onChange }) {
+type RangeControlProps = {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  digits?: number;
+  onChange: (value: number) => void;
+};
+
+function RangeControl({ label, value, min, max, step, digits = 0, onChange }: RangeControlProps) {
   const display = digits > 0 ? Number(value).toFixed(digits) : String(Math.round(Number(value)));
   return (
     <label className="range-row nodrag nowheel">
@@ -115,7 +178,7 @@ function RangeControl({ label, value, min, max, step, digits = 0, onChange }) {
   );
 }
 
-function Meter({ label, value }) {
+function Meter({ label, value }: { label: string; value: number }) {
   return (
     <div className="meter-row">
       <span>{label}</span>
@@ -126,7 +189,7 @@ function Meter({ label, value }) {
   );
 }
 
-function formatTime(seconds) {
+function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return '0:00';
   const whole = Math.floor(seconds);
   const minutes = Math.floor(whole / 60);
@@ -134,9 +197,122 @@ function formatTime(seconds) {
   return `${minutes}:${rest}`;
 }
 
-const AtlasNode = memo(function AtlasNode({ data }) {
+type AtlasNodeData = {
+  categories: AtlasCategory[];
+  items: AtlasCategory['items'];
+  categoryId: string;
+  targetId: string;
+  currentValue: string;
+  onCategory: (categoryId: string) => void;
+  onTarget: (targetId: string) => void;
+};
+
+type TilingNodeData = {
+  settings: Settings;
+  seedOptions: { value: string; label: string }[];
+  maxGeneration: number;
+  onFamily: (family: string) => void;
+  onSetting: (key: SettingKey, value: SettingValue) => void;
+};
+
+type PaletteNodeData = {
+  settings: Settings;
+  palette: Palette;
+  colorCount: number;
+  selectedColor: number;
+  selectedColorValue: Oklch;
+  gamut: string;
+  onPalette: (palette: string) => void;
+  onSetting: (key: SettingKey, value: SettingValue) => void;
+  onSelectedColor: (index: number) => void;
+  onCustomColor: (updater: (color: Oklch) => Oklch) => void;
+};
+
+type SettingsNodeData = {
+  settings: Settings;
+  onSetting: (key: SettingKey, value: SettingValue) => void;
+};
+
+type ProjectionNodeData = SettingsNodeData & {
+  onResetBoost: () => void;
+  onResetView: () => void;
+};
+
+type ClockNodeData = SettingsNodeData & {
+  onResetClock: () => void;
+};
+
+type AudioNodeData = {
+  audio: WebAudioGraph;
+};
+
+type ModulationNodeData = {
+  audio: WebAudioGraph;
+  gains: Gains;
+  onGain: (key: GainKey, value: number) => void;
+};
+
+type RendererNodeData = {
+  tiles: number;
+  loading: string;
+};
+
+type NodeComponentProps<TData> = {
+  data: TData;
+};
+
+type FlowSelection = {
+  nodes: Node[];
+  edges: Edge[];
+};
+
+type MiddleZoomState = {
+  y: number;
+  zoom: number;
+} | null;
+
+type WheelPointer = {
+  clientX: number;
+  clientY: number;
+};
+
+const GRID_SIZE = 24;
+const NODE_GAP = 72;
+const MIN_FLOW_ZOOM = 0.42;
+const MAX_FLOW_ZOOM = 1.25;
+const LAYOUT_COLUMNS = [
+  { x: 0, ids: ['atlas', 'audio', 'clock'] },
+  { x: 384, ids: ['tiling', 'projection', 'modulation'] },
+  { x: 816, ids: ['palette', 'material', 'lighting', 'postfx'] },
+  { x: 1248, ids: ['renderer'] },
+];
+
+function snapValue(value: number): number {
+  return Math.round(value / GRID_SIZE) * GRID_SIZE;
+}
+
+function clampFlowZoom(value: number): number {
+  return Math.max(MIN_FLOW_ZOOM, Math.min(MAX_FLOW_ZOOM, value));
+}
+
+function sameSelection(a: FlowSelection, b: FlowSelection): boolean {
+  if (a.nodes.length !== b.nodes.length || a.edges.length !== b.edges.length) return false;
+  for (let i = 0; i < a.nodes.length; i++) {
+    if (a.nodes[i]?.id !== b.nodes[i]?.id) return false;
+  }
+  for (let i = 0; i < a.edges.length; i++) {
+    if (a.edges[i]?.id !== b.edges[i]?.id) return false;
+  }
+  return true;
+}
+
+function oklch(l: number, c: number, h: number): Oklch {
+  return [l, c, h];
+}
+
+const AtlasNode = memo(function AtlasNode({ data }: NodeComponentProps<AtlasNodeData>) {
   return (
-    <NodeFrame title="Curated renders" kind="source" wide>
+    <NodeFrame title="Curated renders" kind="source" wide variant={0}>
       <Outlet />
       <div className="control-grid">
         <label className="nodrag nowheel">
@@ -161,10 +337,10 @@ const AtlasNode = memo(function AtlasNode({ data }) {
   );
 });
 
-const TilingNode = memo(function TilingNode({ data }) {
+const TilingNode = memo(function TilingNode({ data }: NodeComponentProps<TilingNodeData>) {
   const family = familyByValue(data.settings.family);
   return (
-    <NodeFrame title="Tiling source" kind="source" wide>
+    <NodeFrame title="Tiling source" kind="source" wide variant={1}>
       <Inlet />
       <Outlet />
       <div className="node-subtitle">{family.label} / {seedLabel(data.settings.family, data.settings.seed)}</div>
@@ -198,15 +374,15 @@ const TilingNode = memo(function TilingNode({ data }) {
   );
 });
 
-const PaletteNode = memo(function PaletteNode({ data }) {
-  const wheelRef = useRef(null);
+const PaletteNode = memo(function PaletteNode({ data }: NodeComponentProps<PaletteNodeData>) {
+  const wheelRef = useRef<HTMLCanvasElement | null>(null);
   const selected = data.selectedColorValue;
 
   useEffect(() => {
     drawWheel(wheelRef.current, selected);
   }, [selected]);
 
-  const applyWheel = event => {
+  const applyWheel = (event: WheelPointer) => {
     const canvas = wheelRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -214,11 +390,11 @@ const PaletteNode = memo(function PaletteNode({ data }) {
     const y = (event.clientY - rect.top) / rect.height * 2 - 1;
     const radius = Math.min(1, Math.hypot(x, y));
     const hue = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
-    data.onCustomColor(color => [color[0], radius * 0.37, hue]);
+    data.onCustomColor(color => oklch(color[0], radius * 0.37, hue));
   };
 
   return (
-    <NodeFrame title="Color mapper" kind="color" wide>
+    <NodeFrame title="Color mapper" kind="color" wide variant={0}>
       <Inlet />
       <Outlet />
       <div className="control-grid two-col">
@@ -285,7 +461,7 @@ const PaletteNode = memo(function PaletteNode({ data }) {
           max={1}
           step={0.001}
           digits={3}
-          onChange={value => data.onCustomColor(color => [value, color[1], color[2]])}
+          onChange={value => data.onCustomColor(color => oklch(value, color[1], color[2]))}
         />
         <div className="gamut">{data.gamut}</div>
       </div>
@@ -293,9 +469,9 @@ const PaletteNode = memo(function PaletteNode({ data }) {
   );
 });
 
-const MaterialNode = memo(function MaterialNode({ data }) {
+const MaterialNode = memo(function MaterialNode({ data }: NodeComponentProps<SettingsNodeData>) {
   return (
-    <NodeFrame title="Material" kind="surface" wide>
+    <NodeFrame title="Material" kind="surface" wide variant={0}>
       <Inlet />
       <Outlet />
       <div className="control-grid two-col">
@@ -315,9 +491,9 @@ const MaterialNode = memo(function MaterialNode({ data }) {
   );
 });
 
-const LightingNode = memo(function LightingNode({ data }) {
+const LightingNode = memo(function LightingNode({ data }: NodeComponentProps<SettingsNodeData>) {
   return (
-    <NodeFrame title="Lighting" kind="surface" wide>
+    <NodeFrame title="Lighting" kind="surface" wide variant={1}>
       <Inlet />
       <Outlet />
       <div className="control-grid two-col">
@@ -337,9 +513,9 @@ const LightingNode = memo(function LightingNode({ data }) {
   );
 });
 
-const ProjectionNode = memo(function ProjectionNode({ data }) {
+const ProjectionNode = memo(function ProjectionNode({ data }: NodeComponentProps<ProjectionNodeData>) {
   return (
-    <NodeFrame title="Projection" kind="geometry" wide>
+    <NodeFrame title="Projection" kind="geometry" wide variant={0}>
       <Inlet />
       <Outlet />
       <div className="segmented two nodrag nowheel">
@@ -379,10 +555,10 @@ const ProjectionNode = memo(function ProjectionNode({ data }) {
   );
 });
 
-const ClockNode = memo(function ClockNode({ data }) {
+const ClockNode = memo(function ClockNode({ data }: NodeComponentProps<ClockNodeData>) {
   const enabled = String(data.settings.clock_enabled ?? '1') !== '0';
   return (
-    <NodeFrame title="Clock source" kind="signal">
+    <NodeFrame title="Clock source" kind="signal" variant={0}>
       <Outlet />
       <div className="button-row audio-source-row nodrag nowheel">
         <button type="button" className={enabled ? 'active' : ''} onClick={() => data.onSetting('clock_enabled', enabled ? '0' : '1')}>
@@ -409,11 +585,11 @@ const ClockNode = memo(function ClockNode({ data }) {
   );
 });
 
-const AudioNode = memo(function AudioNode({ data }) {
+const AudioNode = memo(function AudioNode({ data }: NodeComponentProps<AudioNodeData>) {
   const transport = data.audio.transport;
   const hasFile = data.audio.status === 'file';
   return (
-    <NodeFrame title="Audio transport" kind="signal" wide>
+    <NodeFrame title="Audio transport" kind="signal" wide variant={1}>
       <Outlet />
       <div className="button-row audio-source-row nodrag nowheel">
         <label className="file-button">
@@ -461,9 +637,9 @@ const AudioNode = memo(function AudioNode({ data }) {
   );
 });
 
-const ModulationNode = memo(function ModulationNode({ data }) {
+const ModulationNode = memo(function ModulationNode({ data }: NodeComponentProps<ModulationNodeData>) {
   return (
-    <NodeFrame title="Audio modulation" kind="signal" wide>
+    <NodeFrame title="Audio modulation" kind="signal" wide variant={2}>
       <Inlet />
       <Outlet />
       <div className="control-grid two-col">
@@ -488,9 +664,9 @@ const ModulationNode = memo(function ModulationNode({ data }) {
   );
 });
 
-const PostFxNode = memo(function PostFxNode({ data }) {
+const PostFxNode = memo(function PostFxNode({ data }: NodeComponentProps<SettingsNodeData>) {
   return (
-    <NodeFrame title="Post-FX" kind="surface" wide>
+    <NodeFrame title="Post-FX" kind="surface" wide variant={2}>
       <Inlet id="clock" />
       <Outlet />
       <div className="control-grid two-col">
@@ -522,9 +698,9 @@ const PostFxNode = memo(function PostFxNode({ data }) {
   );
 });
 
-const RendererNode = memo(function RendererNode({ data }) {
+const RendererNode = memo(function RendererNode({ data }: NodeComponentProps<RendererNodeData>) {
   return (
-    <NodeFrame title="Renderer sink" kind="output">
+    <NodeFrame title="Renderer sink" kind="output" variant={0}>
       <Inlet id="geometry" />
       <Inlet id="color" />
       <Inlet id="material" />
@@ -553,9 +729,12 @@ const nodeTypes = {
   renderer: RendererNode,
 };
 
-export function ControlGraph(props) {
+export function ControlGraph(props: ControlGraphProps) {
   const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 0.62 });
-  const baseNodes = useMemo(() => [
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [measuredLayoutDone, setMeasuredLayoutDone] = useState(false);
+  const [middleZoom, setMiddleZoom] = useState<MiddleZoomState>(null);
+  const baseNodes = useMemo<Node[]>(() => [
     {
       id: 'atlas',
       type: 'atlas',
@@ -674,7 +853,7 @@ export function ControlGraph(props) {
         loading: props.loading,
       },
     },
-  ], [
+  ].map(node => ({ ...node, dragHandle: '.flow-node-title' })), [
     props.activeCategory,
     props.audio,
     props.categoryId,
@@ -705,7 +884,7 @@ export function ControlGraph(props) {
     props.tiles,
   ]);
 
-  const initialEdges = useMemo(() => [
+  const initialEdges = useMemo<Edge[]>(() => [
     { id: 'atlas-tiling', source: 'atlas', target: 'tiling', animated: true },
     { id: 'tiling-palette', source: 'tiling', target: 'palette', animated: true },
     { id: 'tiling-projection', source: 'tiling', target: 'projection' },
@@ -719,8 +898,9 @@ export function ControlGraph(props) {
     { id: 'audio-modulation', source: 'audio', target: 'modulation', animated: true },
     { id: 'modulation-material', source: 'modulation', target: 'material', animated: true },
   ], []);
-  const [nodes, setNodes, onNodesChange] = useNodesState(baseNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(baseNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialEdges);
+  const [selection, setSelection] = useState<FlowSelection>({ nodes: [], edges: [] });
 
   useEffect(() => {
     setNodes(current => baseNodes.map(node => {
@@ -733,51 +913,174 @@ export function ControlGraph(props) {
     }));
   }, [baseNodes, setNodes]);
 
-  const onConnect = useCallback(connection => {
+  const onConnect = useCallback((connection: Connection) => {
     setEdges(current => addEdge({ ...connection, animated: true }, current));
   }, [setEdges]);
+
+  const onReconnect = useCallback((oldEdge: Edge, connection: Connection) => {
+    setEdges(current => reconnectEdge(oldEdge, connection, current));
+  }, [setEdges]);
+
+  const restoreLinks = useCallback(() => {
+    setEdges(initialEdges);
+    setSelection(current => ({ ...current, edges: [] }));
+  }, [initialEdges, setEdges]);
+
+  const deleteSelectedLinks = useCallback(() => {
+    const selectedIds = new Set(selection.edges.map(edge => edge.id));
+    if (selectedIds.size === 0) return;
+    setEdges(current => current.filter(edge => !selectedIds.has(edge.id)));
+    setSelection(current => ({ ...current, edges: [] }));
+  }, [selection.edges, setEdges]);
+
+  const snapCurrentLayout = useCallback(() => {
+    setNodes(current => current.map(node => ({
+      ...node,
+      position: {
+        x: snapValue(node.position.x),
+        y: snapValue(node.position.y),
+      },
+    })));
+  }, [setNodes]);
 
   const resetLayout = useCallback(() => {
     setNodes(baseNodes);
     setEdges(initialEdges);
     setViewport({ x: 0, y: 0, zoom: 0.62 });
+    setSelection({ nodes: [], edges: [] });
+    setMeasuredLayoutDone(false);
   }, [baseNodes, initialEdges, setEdges, setNodes]);
 
+  const onSelectionChange = useCallback((params: FlowSelection) => {
+    setSelection(current => sameSelection(current, params) ? current : params);
+  }, []);
+
+  const startMiddleZoom = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setMiddleZoom({ y: event.clientY, zoom: viewport.zoom });
+  }, [viewport.zoom]);
+
+  useEffect(() => {
+    if (!middleZoom) return;
+    const move = (event: globalThis.MouseEvent) => {
+      event.preventDefault();
+      const delta = (middleZoom.y - event.clientY) * 0.004;
+      const zoom = clampFlowZoom(middleZoom.zoom * Math.exp(delta));
+      setViewport(current => ({ ...current, zoom }));
+    };
+    const end = () => setMiddleZoom(null);
+    window.addEventListener('mousemove', move, { passive: false });
+    window.addEventListener('mouseup', end);
+    return () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', end);
+    };
+  }, [middleZoom]);
+
   return (
-    <div className="control-flow-shell">
+    <div className="control-flow-shell" onMouseDownCapture={startMiddleZoom} onAuxClick={startMiddleZoom}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
         onConnect={onConnect}
+        onReconnect={onReconnect}
         onEdgesChange={onEdgesChange}
         onNodesChange={onNodesChange}
+        onSelectionChange={onSelectionChange}
         viewport={viewport}
         onViewportChange={setViewport}
         nodesDraggable
         nodesConnectable
+        connectOnClick
+        edgesReconnectable
         elementsSelectable
-        panOnDrag={[1, 2]}
-        panOnScroll
-        panOnScrollMode="free"
-        selectionOnDrag
+        nodeDragThreshold={2}
+        paneClickDistance={4}
+        panOnDrag
+        panOnScroll={false}
+        selectionOnDrag={false}
+        zoomOnScroll
+        zoomOnPinch
         deleteKeyCode={['Backspace', 'Delete']}
         multiSelectionKeyCode={['Meta', 'Control']}
         selectionKeyCode="Shift"
         zoomActivationKeyCode={null}
-        minZoom={0.42}
-        maxZoom={1.25}
+        snapToGrid={snapEnabled}
+        snapGrid={[GRID_SIZE, GRID_SIZE]}
+        minZoom={MIN_FLOW_ZOOM}
+        maxZoom={MAX_FLOW_ZOOM}
         proOptions={{ hideAttribution: true }}
       >
         <FitOnce />
+        <MeasuredLayout
+          enabled={!measuredLayoutDone}
+          onDone={() => setMeasuredLayoutDone(true)}
+          setNodes={setNodes}
+        />
         <Panel position="top-left" className="flow-panel">
           <button type="button" onClick={resetLayout}>Reset graph</button>
+          <FlowFitButton />
+          <button type="button" className={snapEnabled ? 'active' : ''} onClick={() => setSnapEnabled(value => !value)}>
+            Snap {snapEnabled ? 'on' : 'off'}
+          </button>
+          <button type="button" onClick={snapCurrentLayout}>Snap now</button>
+          <button type="button" onClick={restoreLinks}>Restore links</button>
+          <button type="button" onClick={deleteSelectedLinks} disabled={selection.edges.length === 0}>Delete link</button>
         </Panel>
         <Background gap={22} size={1} />
         <Controls showInteractive />
       </ReactFlow>
     </div>
   );
+}
+
+type MeasuredLayoutProps = {
+  enabled: boolean;
+  onDone: () => void;
+  setNodes: Dispatch<SetStateAction<Node[]>>;
+};
+
+function MeasuredLayout({ enabled, onDone, setNodes }: MeasuredLayoutProps) {
+  const nodesReady = useNodesInitialized();
+  const flow = useReactFlow();
+  const applied = useRef(false);
+
+  useEffect(() => {
+    if (!enabled) applied.current = false;
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled || !nodesReady || applied.current) return;
+    applied.current = true;
+    onDone();
+    const currentNodes = flow.getNodes();
+    const byId = new Map(currentNodes.map(node => [node.id, node]));
+    setNodes(nodes => {
+      const nextPositions = new Map<string, { x: number; y: number }>();
+      for (const column of LAYOUT_COLUMNS) {
+        let y = 0;
+        for (const id of column.ids) {
+          const node = byId.get(id);
+          if (!node) continue;
+          const height = node.measured?.height ?? node.height ?? 280;
+          nextPositions.set(id, { x: snapValue(column.x), y: snapValue(y) });
+          y += snapValue(height + NODE_GAP);
+        }
+      }
+      return nodes.map(node => ({
+        ...node,
+        position: nextPositions.get(node.id) ?? node.position,
+      }));
+    });
+    window.requestAnimationFrame(() => {
+      flow.fitView({ padding: 0.08, duration: 160 });
+    });
+  }, [enabled, flow, nodesReady, onDone, setNodes]);
+
+  return null;
 }
 
 function FitOnce() {
@@ -793,9 +1096,18 @@ function FitOnce() {
   return null;
 }
 
-function drawWheel(canvas, selected) {
+function FlowFitButton() {
+  const flow = useReactFlow();
+  const fit = useCallback(() => {
+    flow.fitView({ padding: 0.08, duration: 180 });
+  }, [flow]);
+  return <button type="button" onClick={fit}>Fit</button>;
+}
+
+function drawWheel(canvas: HTMLCanvasElement | null, selected: Oklch) {
   if (!canvas || !selected) return;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return;
   const size = canvas.width;
   const image = ctx.createImageData(size, size);
   for (let y = 0; y < size; y++) {
@@ -832,10 +1144,13 @@ function drawWheel(canvas, selected) {
   ctx.stroke();
 }
 
-function oklchToRgbBytes(color) {
-  return oklchToLinearSrgb(color).map(channel => {
+function encodeSrgbByte(channel: number): number {
     const v = Math.max(0, Math.min(1, channel));
     const encoded = v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
     return Math.round(encoded * 255);
-  });
+}
+
+function oklchToRgbBytes(color: Oklch): [number, number, number] {
+  const rgb = oklchToLinearSrgb(color);
+  return [encodeSrgbByte(rgb[0]), encodeSrgbByte(rgb[1]), encodeSrgbByte(rgb[2])];
 }

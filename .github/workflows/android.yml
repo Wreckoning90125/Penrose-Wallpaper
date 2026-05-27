@@ -324,9 +324,9 @@ jobs:
             --clang-tidy-log build/static-analysis/clang-tidy.log
 
   web:
-    name: webgpu build
+    name: repo quality gates
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -341,8 +341,11 @@ jobs:
       - name: Install web dependencies
         run: npm ci
 
-      - name: Build WebGPU app
-        run: npm run web:build
+      - name: Install native quality tools
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy glslang-tools spirv-tools
+
+      - name: Run local quality gate
+        run: npm run quality:local
 
   # On pull requests: fail the PR if it introduces a critical dependency issue.
   dependency-review:

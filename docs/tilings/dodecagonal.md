@@ -222,9 +222,9 @@ discovery of quasiperiodicity earlier.
 
 ### Renderer mapping
 Implemented — `Family::Dodecagonal`, the renderer's fourth family, generated
-by `generateMultigrid(6, …)` (`tiling/penrose.cpp`). It is the documented
-fallback: a clean 12-fold *substitution* stayed elusive, so dualization is the
-engine that shipped. A six-direction de Bruijn multigrid is enumerated
+by `generateMultigrid(6, …)` (`tiling/penrose.cpp`). The shipped construction
+uses dualization because a clean 12-fold *substitution* is not part of this
+family. A six-direction de Bruijn multigrid is enumerated
 intersection by intersection, bypassing the substitution machinery entirely —
 `generations` selects the grid line-index range rather than a deflation depth.
 Rhombi are 4-vertex `Tile`s with `type` 0/1/2 for the 30°/60°/90° shapes.

@@ -309,8 +309,8 @@ internal class Settings(
                 hypScale      = 0.05f + safeInt(prefs, KEY_HYP_SCALE, 50) / 100f * 2.95f,
                 hypBoostX       = (safeInt(prefs, KEY_HYP_BOOST_X, 50) - 50) / 50f * 0.9f,
                 hypBoostY       = (safeInt(prefs, KEY_HYP_BOOST_Y, 50) - 50) / 50f * 0.9f,
-                hypBorderSubdiv = safeInt(prefs, KEY_HYP_BORDER_SUBDIV, 1).coerceIn(1, 32),
-                hypFillSubdiv   = safeInt(prefs, KEY_HYP_FILL_SUBDIV, 1).coerceIn(1, 8),
+                hypBorderSubdiv = safeInt(prefs, KEY_HYP_BORDER_SUBDIV, 16).coerceIn(1, 32),
+                hypFillSubdiv   = safeInt(prefs, KEY_HYP_FILL_SUBDIV, 4).coerceIn(1, 8),
                 customOklch  = custom,
             )
         }

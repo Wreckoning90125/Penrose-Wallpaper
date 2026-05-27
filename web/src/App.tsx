@@ -1,14 +1,25 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { ChevronLeft, ChevronRight, GripVertical } from 'lucide-react';
-import { loadAtlasManifest, firstTarget, targetSettings } from './atlas/loadAtlas.js';
-import { familyByValue, maxGenerationForFamily, seedLabel, seedOptionsForFamily } from './tiling/families.js';
-import { buildPalette, displayGamutLabel, MAX_COLORS } from './color/palette.js';
-import { DEFAULT_SETTINGS, intSetting, normalizeSettings } from './settings/androidSettings.js';
-import { useWebAudioGraph } from './audio/useWebAudioGraph.js';
+import type { BufferGeometry } from 'three/webgpu';
+import { loadAtlasManifest, firstTarget, targetSettings } from './atlas/loadAtlas';
+import { familyByValue, maxGenerationForFamily, seedLabel, seedOptionsForFamily } from './tiling/families';
+import { buildPalette, displayGamutLabel, MAX_COLORS, type Oklch } from './color/palette';
+import {
+  DEFAULT_SETTINGS,
+  intSetting,
+  normalizeSettings,
+  type SettingKey,
+  type SettingValue,
+  type Settings,
+} from './settings/androidSettings';
+import { useWebAudioGraph } from './audio/useWebAudioGraph';
+import type { AtlasCategory, AtlasItem, AtlasManifest, Gains, Patch } from './types';
+import type { WallpaperRenderer } from './render/webgpuRenderer';
 
 const CURRENT_CONTROLS = '__current_controls__';
-const ControlGraph = lazy(() => import('./flow/ControlGraph.jsx').then(module => ({ default: module.ControlGraph })));
-const GEOMETRY_SETTINGS = [
+const ControlGraph = lazy(() => import('./flow/ControlGraph').then(module => ({ default: module.ControlGraph })));
+const GEOMETRY_SETTINGS: SettingKey[] = [
   'border_a',
   'border_c',
   'border_h',
@@ -27,7 +38,17 @@ const GEOMETRY_SETTINGS = [
   'projection',
 ];
 
-function clampGeneration(settings) {
+type SettingsMutator = (current: Settings) => Settings;
+type BoostPosition = {
+  x: number;
+  y: number;
+};
+
+function errorMessage(error: Error | string): string {
+  return error instanceof Error ? error.stack ?? error.message : error;
+}
+
+function clampGeneration(settings: Settings): Settings {
   const family = String(settings.family ?? DEFAULT_SETTINGS.family);
   const maxGeneration = maxGenerationForFamily(family);
   return {
@@ -36,25 +57,35 @@ function clampGeneration(settings) {
   };
 }
 
-function atlasItemById(manifest, categoryId, itemId) {
+function atlasItemById(
+  manifest: AtlasManifest | null,
+  categoryId: string,
+  itemId: string,
+): { category: AtlasCategory | null; item: AtlasItem | null } {
   const category = manifest?.categories?.find(item => item.id === categoryId);
   const item = category?.items?.find(target => target.id === itemId);
-  return { category, item };
+  return { category: category ?? null, item: item ?? null };
 }
 
-function settingsKey(settings, keys) {
+function settingsKey(settings: Settings, keys: SettingKey[]): string {
   return keys.map(key => `${key}:${String(settings[key] ?? '')}`).join('|');
 }
 
+function copyOklch(color: Oklch): Oklch {
+  return [color[0], color[1], color[2]];
+}
+
 export function App() {
-  const viewportRef = useRef(null);
-  const rendererRef = useRef(null);
-  const [manifest, setManifest] = useState(null);
+  const viewportRef = useRef<HTMLElement | null>(null);
+  const rendererRef = useRef<WallpaperRenderer | null>(null);
+  const boostFrameRef = useRef(0);
+  const boostRef = useRef<BoostPosition | null>(null);
+  const [manifest, setManifest] = useState<AtlasManifest | null>(null);
   const [categoryId, setCategoryId] = useState('');
   const [targetId, setTargetId] = useState(CURRENT_CONTROLS);
   const [settings, setSettings] = useState(() => normalizeSettings(DEFAULT_SETTINGS));
-  const [patch, setPatch] = useState(null);
-  const [customColors, setCustomColors] = useState(null);
+  const [patch, setPatch] = useState<Patch | null>(null);
+  const [customColors, setCustomColors] = useState<Oklch[] | null>(null);
   const [selectedColor, setSelectedColor] = useState(0);
   const [rendererReady, setRendererReady] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(true);
@@ -81,14 +112,18 @@ export function App() {
     buildPalette(intSetting(settings, 'preset', 0, 11), colorCount, customColors)
   ), [colorCount, customColors, settings]);
   const geometrySettingsKey = useMemo(() => settingsKey(settings, GEOMETRY_SETTINGS), [settings]);
-  const selectedColorValue = palette.colors[Math.min(selectedColor, colorCount - 1)] ?? palette.colors[0];
+  const selectedColorValue: Oklch =
+    palette.colors[Math.min(selectedColor, colorCount - 1)] ?? palette.colors[0] ?? [0.78, 0.13, 80];
+  const drawerStyle: CSSProperties & Record<'--drawer-width', string> = {
+    '--drawer-width': `${drawerWidth}px`,
+  };
 
-  const updateSettings = useCallback(mutator => {
+  const updateSettings = useCallback((mutator: SettingsMutator) => {
     setTargetId(CURRENT_CONTROLS);
     setSettings(current => clampGeneration(normalizeSettings(mutator({ ...current }))));
   }, []);
 
-  const setSetting = useCallback((key, value) => {
+  const setSetting = useCallback((key: SettingKey, value: SettingValue) => {
     updateSettings(current => {
       current[key] = value;
       return current;
@@ -108,12 +143,13 @@ export function App() {
         setSettings(targetSettings(first.item));
         setLoading('');
       } catch (caught) {
-        if (!cancelled) setError(caught.stack || caught.message);
+        if (!cancelled) setError(caught instanceof Error ? errorMessage(caught) : String(caught));
       }
     }
     void boot();
     return () => {
       cancelled = true;
+      if (boostFrameRef.current) cancelAnimationFrame(boostFrameRef.current);
       rendererRef.current?.dispose();
       rendererRef.current = null;
     };
@@ -124,14 +160,14 @@ export function App() {
     let cancelled = false;
     async function initRenderer() {
       try {
-        const { WallpaperRenderer } = await import('./render/webgpuRenderer.js');
+        const { WallpaperRenderer } = await import('./render/webgpuRenderer');
         if (cancelled || !viewportRef.current) return;
         const renderer = new WallpaperRenderer(viewportRef.current);
         rendererRef.current = renderer;
         await renderer.init();
         if (!cancelled) setRendererReady(true);
       } catch (caught) {
-        if (!cancelled) setError(caught.stack || caught.message);
+        if (!cancelled) setError(caught instanceof Error ? errorMessage(caught) : String(caught));
       }
     }
     void initRenderer();
@@ -146,13 +182,13 @@ export function App() {
     setLoading('Generating geometry');
     async function loadPatch() {
       try {
-        const { loadPatchForSettings } = await import('./tiling/geometry.js');
+        const { loadPatchForSettings } = await import('./tiling/geometry');
         const nextPatch = await loadPatchForSettings(settings, activeItem);
         if (cancelled) return;
         setPatch(nextPatch);
         setLoading('');
       } catch (caught) {
-        if (!cancelled) setError(caught.stack || caught.message);
+        if (!cancelled) setError(caught instanceof Error ? errorMessage(caught) : String(caught));
       }
     }
     void loadPatch();
@@ -163,13 +199,14 @@ export function App() {
 
   useEffect(() => {
     if (!patch || !rendererReady || !rendererRef.current) return;
+    const currentPatch = patch;
     let cancelled = false;
-    let activeGeometry = null;
-    let activeEdgeGeometry = null;
+    let activeGeometry: BufferGeometry | null = null;
+    let activeEdgeGeometry: BufferGeometry | null = null;
     async function buildGeometry() {
-      const { buildMeshGeometry } = await import('./tiling/geometry.js');
+      const { buildMeshGeometry } = await import('./tiling/geometry');
       if (cancelled || !rendererRef.current) return;
-      const { geometry, edgeGeometry, palette: builtPalette } = buildMeshGeometry(patch, settings, customColors);
+      const { geometry, edgeGeometry, palette: builtPalette } = buildMeshGeometry(currentPatch, settings, customColors);
       activeGeometry = geometry;
       activeEdgeGeometry = edgeGeometry;
       rendererRef.current.setSettings(settings, builtPalette);
@@ -178,7 +215,7 @@ export function App() {
       activeEdgeGeometry = null;
     }
     void buildGeometry().catch(caught => {
-      if (!cancelled) setError(caught.stack || caught.message);
+      if (!cancelled) setError(caught instanceof Error ? errorMessage(caught) : String(caught));
     });
     return () => {
       cancelled = true;
@@ -199,18 +236,25 @@ export function App() {
   useEffect(() => {
     rendererRef.current?.setProjectionGesture({
       settings,
-      onBoost: (x, y) => {
-        updateSettings(current => {
-          current.projection = '1';
-          current.hyp_boost_x = x;
-          current.hyp_boost_y = y;
-          return current;
+      onBoost: (x: number, y: number) => {
+        boostRef.current = { x, y };
+        if (boostFrameRef.current) return;
+        boostFrameRef.current = requestAnimationFrame(() => {
+          boostFrameRef.current = 0;
+          const next = boostRef.current;
+          if (!next) return;
+          updateSettings(current => {
+            current.projection = '1';
+            current.hyp_boost_x = next.x;
+            current.hyp_boost_y = next.y;
+            return current;
+          });
         });
       },
     });
   }, [settings, updateSettings]);
 
-  const applyTarget = useCallback((nextCategoryId, nextTargetId) => {
+  const applyTarget = useCallback((nextCategoryId: string, nextTargetId: string) => {
     const { category, item } = atlasItemById(manifest, nextCategoryId, nextTargetId);
     if (!category || !item) return;
     setCategoryId(category.id);
@@ -220,43 +264,43 @@ export function App() {
     setSelectedColor(0);
   }, [manifest]);
 
-  const setFamily = useCallback(value => {
+  const setFamily = useCallback((value: string) => {
     const nextFamily = familyByValue(value);
     updateSettings(current => {
       current.family = nextFamily.value;
       if (!nextFamily.seeds.some(seed => seed.value === String(current.seed))) {
-        current.seed = nextFamily.seeds[0].value;
+        current.seed = nextFamily.seeds[0]!.value;
       }
       current.generation = Math.min(Number(current.generation ?? 0), nextFamily.maxGeneration);
       return current;
     });
   }, [updateSettings]);
 
-  const ensureCustomColors = useCallback(() => {
-    if (customColors) return customColors.map(color => color.slice());
+  const ensureCustomColors = useCallback((): Oklch[] => {
+    if (customColors) return customColors.map(copyOklch);
     const source = buildPalette(intSetting(settings, 'preset', 0, 11), colorCount).colors;
-    return source.map(color => color.slice());
+    return source.map(copyOklch);
   }, [colorCount, customColors, settings]);
 
-  const updateCustomColor = useCallback(updater => {
+  const updateCustomColor = useCallback((updater: (color: Oklch) => Oklch) => {
     const nextColors = ensureCustomColors();
     const idx = Math.min(selectedColor, colorCount - 1);
-    nextColors[idx] = updater(nextColors[idx].slice());
+    nextColors[idx] = updater(copyOklch(nextColors[idx]!));
     setCustomColors(nextColors);
     setSetting('preset', '11');
   }, [colorCount, ensureCustomColors, selectedColor, setSetting]);
 
-  const onPalette = useCallback(value => {
+  const onPalette = useCallback((value: string) => {
     setCustomColors(null);
     setSetting('preset', value);
   }, [setSetting]);
 
-  const onCategory = useCallback(nextCategoryId => {
+  const onCategory = useCallback((nextCategoryId: string) => {
     const category = manifest?.categories?.find(item => item.id === nextCategoryId);
     if (category?.items?.[0]) applyTarget(category.id, category.items[0].id);
   }, [applyTarget, manifest]);
 
-  const onTarget = useCallback(nextTargetId => {
+  const onTarget = useCallback((nextTargetId: string) => {
     if (nextTargetId === CURRENT_CONTROLS) {
       setTargetId(CURRENT_CONTROLS);
       return;
@@ -264,7 +308,7 @@ export function App() {
     applyTarget(categoryId, nextTargetId);
   }, [applyTarget, categoryId]);
 
-  const onGain = useCallback((key, value) => {
+  const onGain = useCallback((key: keyof Gains, value: number) => {
     setGains(current => ({ ...current, [key]: value }));
   }, []);
 
@@ -285,11 +329,11 @@ export function App() {
     rendererRef.current?.resetClock();
   }, []);
 
-  const startDrawerResize = useCallback(event => {
+  const startDrawerResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = drawerWidth;
-    const onMove = moveEvent => {
+    const onMove = (moveEvent: PointerEvent) => {
       const next = Math.max(420, Math.min(window.innerWidth - 24, startWidth + startX - moveEvent.clientX));
       setDrawerWidth(next);
     };
@@ -311,7 +355,7 @@ export function App() {
       <aside
         id="controls"
         className={drawerOpen ? 'open' : 'collapsed'}
-        style={{ '--drawer-width': `${drawerWidth}px` }}
+        style={drawerStyle}
         aria-label="Control graph"
       >
         <button

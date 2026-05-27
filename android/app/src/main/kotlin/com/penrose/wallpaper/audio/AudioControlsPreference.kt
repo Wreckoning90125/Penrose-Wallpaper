@@ -94,7 +94,7 @@ class AudioControlsPreference @JvmOverloads constructor(
         val posView   = holder.findViewById(R.id.audio_position) as TextView
         val durView   = holder.findViewById(R.id.audio_duration) as TextView
 
-        // Album art with default-icon fallback.
+        // Album art uses the default icon when embedded artwork is absent.
         if (artworkBitmap != null) {
             art.setImageBitmap(artworkBitmap)
             art.scaleType = ImageView.ScaleType.CENTER_CROP

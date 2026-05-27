@@ -41,6 +41,7 @@ button,
 select,
 .file-button {
   min-height: 34px;
+  min-width: 0;
   color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -54,6 +55,9 @@ button,
   justify-content: center;
   gap: 6px;
   cursor: pointer;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
 }
 
 select {
@@ -202,6 +206,7 @@ h1 {
 .react-flow__node {
   background: transparent;
   border: 0;
+  touch-action: none;
 }
 
 .react-flow__handle {
@@ -274,13 +279,26 @@ h1 {
   --node-accent-2: oklch(0.52 0.12 205);
 }
 
+.node-variant-1 {
+  --node-accent-2: color-mix(in oklch, var(--node-accent) 50%, oklch(0.70 0.14 145));
+}
+
+.node-variant-2 {
+  --node-accent-2: color-mix(in oklch, var(--node-accent) 46%, oklch(0.68 0.15 28));
+}
+
 .flow-node-title {
   display: block;
   margin: 0 -12px 10px;
   padding: 9px 12px;
   border-bottom: 1px solid color-mix(in oklch, white 18%, transparent);
   color: white;
-  background: linear-gradient(90deg, color-mix(in oklch, var(--node-accent) 68%, black), color-mix(in oklch, var(--node-accent-2) 58%, black));
+  cursor: grab;
+  background: linear-gradient(90deg, color-mix(in oklch, var(--node-accent) 72%, black), color-mix(in oklch, var(--node-accent-2) 62%, black));
+}
+
+.react-flow__node.dragging .flow-node-title {
+  cursor: grabbing;
 }
 
 .flow-node-title strong {
@@ -306,6 +324,7 @@ h1 {
 
 .control-grid.two-col {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 12px;
 }
 
 label {
@@ -316,12 +335,13 @@ label {
 
 .range-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-columns: minmax(0, 1fr) minmax(3.25rem, 4.75rem);
   grid-template-areas:
     "label value"
     "slider slider";
   align-items: center;
-  gap: 4px 8px;
+  gap: 4px 10px;
+  padding-inline-end: 4px;
 }
 
 .range-row span {
@@ -335,10 +355,15 @@ label {
 
 output {
   grid-area: value;
-  min-width: 4ch;
+  justify-self: end;
+  min-width: 3.25rem;
+  max-width: 4.75rem;
+  overflow: hidden;
+  padding-inline-end: 3px;
   color: var(--ink);
   font-size: 12px;
   text-align: right;
+  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
 
@@ -416,6 +441,12 @@ input[type="range"] {
 }
 
 .button-row button.active {
+  color: #171109;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.flow-panel button.active {
   color: #171109;
   border-color: var(--accent);
   background: var(--accent);
@@ -525,13 +556,20 @@ input[type="range"] {
 
 .flow-panel {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 6px;
+  max-width: min(34rem, calc(100vw - 2rem));
 }
 
 .flow-panel button {
   min-height: 30px;
   padding: 0 10px;
   font-size: 12px;
+}
+
+.flow-panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .fatal {

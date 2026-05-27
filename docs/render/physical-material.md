@@ -1,17 +1,10 @@
-# Physical material — architecture reference
+# Physical material architecture
 
-The renderer turns flat tilings into lit, beveled, physical surfaces. The
-technique is lifted from a studied reference — a TSL/WebGPU
-hyperbolic-audio visualiser that renders a flat unit disk as a real
-physical material. What that reference does with three.js
-`MeshPhysicalNodeMaterial` we do by hand in GLSL because the Vulkan
-renderer has no node-material engine. The reference's lesson is
-**architectural, not its 50-slider UI**: a scalar field plus its
-screen-space gradient plus a real BRDF is a physical surface.
-
-Open work tracks in `todo.md` (Phase E HDR + bloom + AgX, Phase F border
-merge); the parallel tiling-families track lives in
-`docs/tilings/ROADMAP.md`.
+The renderer turns flat tilings into lit, beveled, physical surfaces. Android
+does this in Vulkan GLSL; the web preview uses Three WebGPU r184 TSL and
+`MeshPhysicalNodeMaterial`. Both paths share the same intent: a tiling-local
+scalar field, coherent border geometry, analytic or node-defined normals, and
+a real BRDF.
 
 ---
 
@@ -86,8 +79,7 @@ that array + bump `vertexAttributeDescriptionCount`.
 
 **Swapchain formats**: preferred is `A2B10G10R10_UNORM_PACK32` on the
 Display-P3 colour space (10-bit). sRGB swapchains write linear colour and let
-hardware encode on store. No depth buffer, no offscreen/HDR target; the HDR
-composite pass that owns AgX tonemap is tracked in `todo.md`.
+hardware encode on store. No depth buffer and no offscreen/HDR target.
 
 **Already present, ready to exploit:**
 
@@ -111,7 +103,7 @@ composite pass that owns AgX tonemap is tracked in `todo.md`.
 
 ## The technique
 
-Stripped of its framework, the reference renderer is:
+Stripped to shader structure, the WebGPU/TSL material pattern is:
 
 - A **flat** surface, geometric normal `(0,0,1)`, orthographic view.
 - A scalar field `H(x,y)` treated as a **height field**.
@@ -120,8 +112,8 @@ Stripped of its framework, the reference renderer is:
 - That normal driving a **full principled BRDF** (Disney / MaterialX standard
   surface): base colour, roughness, metalness, clearcoat, sheen, thin-film
   iridescence, emissive, IOR.
-- Real lights (directional key + point fill + ambient), OKLab colour, a filmic
-  tonemap (the reference uses ACES) on output.
+- Real lights (directional key + point fill + ambient), OKLab colour, and a
+  filmic tonemap on output.
 - **The same scalar field also modulates the physical channels** —
   `roughness = base + mod·f(H)`, likewise metalness, emission, sheen. The field
   is not just geometry; it is the material's spatial variation.
@@ -141,14 +133,14 @@ WGSL; every node maps one-to-one to GLSL we compile with `glslc`:
 - Directional, point, and ambient lights: light vectors plus colours in the UBO.
 - `uniform()` param registry: `PaletteUbo` fields plus the existing node graph.
 
-**A tiling beats the reference's single disk in two structural ways.**
+**A tiling beats a single flat scalar field in two structural ways.**
 
-1. *Clean normals.* The reference must use `dFdx` of `H` because its field has
+1. *Clean normals.* A generic scalar field must use `dFdx` of `H` when it has
    no closed-form gradient, and `dFdx` across a discontinuity smears garbage. We
    assemble `H` from terms with **analytic** gradients — the bevel
    (piecewise-linear `inBary`), the parallax bulge (linear `inDepth`), and the
    already-analytic `waveGradient` — so the normal is exact and seam-clean.
-2. *Per-tile material identity.* The reference has one field, so one material
+2. *Per-tile material identity.* A single scalar field gives one material
    varying continuously. We have **discrete tiles**, each carrying type,
    orientation, and ring distance. Different physical channels can key to
    different structural fields: metalness by tile type, anisotropy along tile
@@ -160,8 +152,9 @@ WGSL; every node maps one-to-one to GLSL we compile with `glslc`:
 
 ## Material architecture
 
-The reference exposes ~50 sliders. We do **not**. The architecture is kept; the
-UI is replaced by structure + audio + a curated handful of controls.
+The material model is deliberately smaller than a free-form shader lab. The
+architecture is kept; the UI is structure + audio + a curated handful of
+controls.
 
 **Channel-modulation pattern.** Every modulatable BRDF channel `X` is
 
@@ -260,7 +253,7 @@ controls: angle, elevation, intensity, warmth, ambient.
 There is **no in-shader tonemap**. AgX needs a linear working space, and
 `fill.frag` writes directly to a swapchain that is either hardware-sRGB
 or already-encoded P3 — an in-shader tonemap would be wrong on the P3
-path. It belongs in the HDR composite pass tracked in `todo.md`.
+path. AgX belongs in an HDR composite pass.
 
 ---
 
@@ -272,10 +265,8 @@ path. It belongs in the HDR composite pass tracked in `todo.md`.
 - There is no depth buffer and none is added — the normal is a
   *shading* normal; this is not a Z-test.
 - Mobile cost: GGX + clearcoat + sheen + iridescence + three lights is
-  comfortably real-time on any Vulkan-capable mobile GPU (the
-  reference runs a per-fragment zero-loop *and* the full physical
-  material and holds frame rate). If a low-end tier is ever needed,
-  gate the heavier lobes behind a preset flag.
+  comfortably real-time on Vulkan-capable mobile GPUs. Preset flags own lobe
+  selection for lower-cost material modes.
 - `tools/verify_tilings.cpp` is unaffected — tiling topology never
   changes; the material attributes are pure shading data.
 

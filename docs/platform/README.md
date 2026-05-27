@@ -7,3 +7,4 @@ they exist so version-sensitive platform decisions are easy to refresh.
 | File | Scope |
 |------|-------|
 | [`android-vulkan.md`](android-vulkan.md) | Android/AGP/NDK/Kotlin/Vulkan version pins, official update sources, and repo-specific build notes |
+| [`dev-build.md`](dev-build.md) | Web dev server, local quality gate, WSL2 validation, and Android build/signing commands |

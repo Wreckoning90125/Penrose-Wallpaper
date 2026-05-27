@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AudioFeatures, AudioStatus, AudioTransport, WebAudioGraph } from '../types';
 
-const EMPTY_FEATURES = {
+const EMPTY_FEATURES: AudioFeatures = {
   level: 0,
   bass: 0,
   mid: 0,
@@ -8,34 +9,34 @@ const EMPTY_FEATURES = {
   beat: 0,
 };
 
-const EMPTY_TRANSPORT = {
+const EMPTY_TRANSPORT: AudioTransport = {
   duration: 0,
   currentTime: 0,
   playing: false,
   loop: true,
 };
 
-function bandAverage(data, start, end) {
+function bandAverage(data: Uint8Array, start: number, end: number): number {
   let sum = 0;
   let count = 0;
   for (let i = start; i < end && i < data.length; i++) {
-    sum += data[i] / 255;
+    sum += (data[i] ?? 0) / 255;
     count += 1;
   }
   return count > 0 ? sum / count : 0;
 }
 
-export function useWebAudioGraph() {
-  const contextRef = useRef(null);
-  const analyserRef = useRef(null);
-  const sourceRef = useRef(null);
-  const audioElRef = useRef(null);
-  const streamRef = useRef(null);
-  const objectUrlRef = useRef(null);
+export function useWebAudioGraph(): WebAudioGraph {
+  const contextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const sourceRef = useRef<AudioNode | null>(null);
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
   const rafRef = useRef(0);
   const lastBeatRef = useRef(0);
   const [features, setFeatures] = useState(EMPTY_FEATURES);
-  const [status, setStatus] = useState('idle');
+  const [status, setStatus] = useState<AudioStatus>('idle');
   const [transport, setTransport] = useState(EMPTY_TRANSPORT);
 
   const ensureContext = useCallback(async () => {
@@ -50,7 +51,10 @@ export function useWebAudioGraph() {
     if (contextRef.current.state !== 'running') {
       await contextRef.current.resume();
     }
-    return { context: contextRef.current, analyser: analyserRef.current };
+    const context = contextRef.current;
+    const analyser = analyserRef.current;
+    if (!context || !analyser) throw new Error('audio graph unavailable');
+    return { context, analyser };
   }, []);
 
   const disconnectSource = useCallback(() => {
@@ -61,7 +65,7 @@ export function useWebAudioGraph() {
       audioElRef.current.src = '';
       audioElRef.current = null;
     }
-    streamRef.current?.getTracks().forEach(track => track.stop());
+    streamRef.current?.getTracks().forEach((track: MediaStreamTrack) => track.stop());
     streamRef.current = null;
     if (objectUrlRef.current) {
       URL.revokeObjectURL(objectUrlRef.current);
@@ -75,7 +79,7 @@ export function useWebAudioGraph() {
     if (!analyser) return;
     const freq = new Uint8Array(analyser.frequencyBinCount);
 
-    const tick = time => {
+    const tick = (time: number) => {
       analyser.getByteFrequencyData(freq);
       const bass = bandAverage(freq, 2, 12);
       const mid = bandAverage(freq, 12, 72);
@@ -112,7 +116,7 @@ export function useWebAudioGraph() {
     startLoop();
   }, [disconnectSource, ensureContext, startLoop]);
 
-  const loadFile = useCallback(async file => {
+  const loadFile = useCallback(async (file: File | undefined) => {
     if (!file) return;
     const { context, analyser } = await ensureContext();
     disconnectSource();
@@ -152,14 +156,14 @@ export function useWebAudioGraph() {
     setTransport(current => ({ ...current, playing: false }));
   }, []);
 
-  const seek = useCallback(time => {
+  const seek = useCallback((time: number) => {
     const audio = audioElRef.current;
     if (!audio) return;
     audio.currentTime = Math.max(0, Math.min(time, audio.duration || 0));
     setTransport(current => ({ ...current, currentTime: audio.currentTime }));
   }, []);
 
-  const setLoop = useCallback(loop => {
+  const setLoop = useCallback((loop: boolean) => {
     const audio = audioElRef.current;
     if (audio) audio.loop = loop;
     setTransport(current => ({ ...current, loop }));

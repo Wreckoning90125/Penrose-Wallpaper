@@ -1,4 +1,16 @@
-export const FAMILIES = [
+export type SeedOption = {
+  value: string;
+  label: string;
+};
+
+export type FamilyOption = {
+  value: string;
+  label: string;
+  maxGeneration: number;
+  seeds: SeedOption[];
+};
+
+export const FAMILIES: FamilyOption[] = [
   {
     value: '0',
     label: 'P3 rhombi',
@@ -133,19 +145,19 @@ export const FAMILIES = [
 
 const FAMILY_BY_VALUE = new Map(FAMILIES.map(family => [family.value, family]));
 
-export function familyByValue(value) {
-  return FAMILY_BY_VALUE.get(String(value)) ?? FAMILIES[0];
+export function familyByValue(value: string | number | boolean): FamilyOption {
+  return FAMILY_BY_VALUE.get(String(value)) ?? FAMILIES[0]!;
 }
 
-export function seedOptionsForFamily(value) {
+export function seedOptionsForFamily(value: string | number | boolean): SeedOption[] {
   return familyByValue(value).seeds;
 }
 
-export function maxGenerationForFamily(value) {
+export function maxGenerationForFamily(value: string | number | boolean): number {
   return familyByValue(value).maxGeneration;
 }
 
-export function seedLabel(familyValue, seedValue) {
+export function seedLabel(familyValue: string | number | boolean, seedValue: string | number | boolean): string {
   const seed = seedOptionsForFamily(familyValue).find(item => item.value === String(seedValue));
   return seed?.label ?? `Seed ${seedValue}`;
 }

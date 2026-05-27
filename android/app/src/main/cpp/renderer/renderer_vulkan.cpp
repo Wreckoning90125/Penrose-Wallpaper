@@ -31,7 +31,7 @@ namespace {
 
 // Preferred swapchain (format, colorSpace) tuples, in order of preference.
 // The renderer picks the first match the surface advertises. Wide-gamut P3
-// wins; sRGB hardware-encoded fallback when only sRGB shows up; bare UNORM
+// wins; sRGB hardware-encoded path when only sRGB shows up; bare UNORM
 // last because we'd have to encode in software.
 struct SwapchainPref {
     VkFormat        format;

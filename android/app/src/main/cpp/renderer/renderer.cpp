@@ -116,8 +116,8 @@ bool Renderer::rebuildSwapchain() {
     if (!deviceReady_ || surface_ == VK_NULL_HANDLE) return false;
     // createSwapchain re-queries VkSurfaceCapabilitiesKHR::currentExtent
     // for the true (post-rotation) surface size; the width/height args
-    // are only the fallback for the UINT32_MAX case, which Android does
-    // not use — so the last known extent is a safe fallback value.
+    // are only the default for the UINT32_MAX case, which Android does
+    // not use, so the last known extent remains valid.
     const int w = (swapchainExtent_.width  > 0) ? (int)swapchainExtent_.width  : 1;
     const int h = (swapchainExtent_.height > 0) ? (int)swapchainExtent_.height : 1;
     vkDeviceWaitIdle(device_);

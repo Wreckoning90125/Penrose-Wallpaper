@@ -58,6 +58,7 @@ function createRendererUniforms() {
     anisotropy: uniform(0.28),
     iridescence: uniform(0.44),
     emissive: uniform(0),
+    shadeFloor: uniform(0.04),
     sheen: uniform(0.12),
     brightness: uniform(1),
     rippleAmp: uniform(0),
@@ -212,7 +213,7 @@ export class WallpaperRenderer {
     material.iridescenceNode = clamp(this.uniforms.iridescence.mul(float(0.7).add(tileRing.mul(0.3))), 0.0, 1.0);
     material.sheenNode = this.uniforms.sheen;
     material.sheenRoughnessNode = float(0.44);
-    material.emissiveNode = vertexColor().mul(this.uniforms.emissive);
+    material.emissiveNode = vertexColor().mul(this.uniforms.emissive.add(this.uniforms.shadeFloor));
     return material;
   }
 
@@ -248,6 +249,7 @@ export class WallpaperRenderer {
     this.uniforms.anisotropy.value = mat.anisotropy;
     this.uniforms.iridescence.value = mat.iridescence;
     this.uniforms.emissive.value = mat.emissive;
+    this.uniforms.shadeFloor.value = 0.036 + Math.min(0.028, mat.sheen * 0.018 + mat.clearcoat * 0.012);
     this.uniforms.sheen.value = mat.sheen;
     this.uniforms.brightness.value = intSetting(settings, 'brightness', 0, 200) / 100;
     this.baseRippleAmp = intSetting(settings, 'ripple_amount', 0, 100) / 100

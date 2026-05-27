@@ -4,6 +4,7 @@ import {
   Background,
   Controls,
   Handle,
+  MiniMap,
   Panel,
   Position,
   ReactFlow,
@@ -15,7 +16,7 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import type { Connection, Edge, Node } from '@xyflow/react';
-import { Clock, Mic, Pause, Play, RotateCcw, SkipBack, Square, Upload } from 'lucide-react';
+import { Clock, Mic, Pause, Play, Plus, RotateCcw, SkipBack, Square, Trash2, Upload } from 'lucide-react';
 import { FAMILIES, familyByValue, seedLabel } from '../tiling/families';
 import { MAX_COLORS, oklchCss, oklchToLinearSrgb } from '../color/palette';
 import type { Oklch, Palette } from '../color/palette';
@@ -40,6 +41,14 @@ const PALETTE_NAMES = [
 type ControlSpec = readonly [SettingKey, string, number, number, number];
 type GainKey = keyof Gains;
 type GainSpec = readonly [GainKey, string];
+type OperatorKind = 'gain' | 'bias' | 'clamp' | 'smooth' | 'mix' | 'multiply' | 'add' | 'map' | 'envelope' | 'lag' | 'threshold' | 'invert';
+type OperatorSpec = {
+  kind: OperatorKind;
+  label: string;
+  inputs: string[];
+  outputs: string[];
+  controls: readonly [string, string, number, number, number, number][];
+};
 
 const MATERIAL_CONTROLS: ControlSpec[] = [
   ['mat_relief', 'Relief', 0, 200, 1],
@@ -88,6 +97,21 @@ const GAIN_CONTROLS: GainSpec[] = [
   ['metal', 'Metal'],
 ];
 
+const OPERATOR_LIBRARY: OperatorSpec[] = [
+  { kind: 'gain', label: 'Gain', inputs: ['signal'], outputs: ['signal'], controls: [['gain', 'Gain', 0, 4, 0.01, 2]] },
+  { kind: 'bias', label: 'Bias', inputs: ['signal'], outputs: ['signal'], controls: [['bias', 'Bias', -2, 2, 0.01, 2]] },
+  { kind: 'clamp', label: 'Clamp', inputs: ['signal'], outputs: ['signal'], controls: [['min', 'Min', 0, 1, 0.01, 2], ['max', 'Max', 0, 1, 0.01, 2]] },
+  { kind: 'smooth', label: 'Smooth', inputs: ['signal'], outputs: ['signal'], controls: [['amount', 'Amount', 0, 1, 0.01, 2]] },
+  { kind: 'mix', label: 'Mix', inputs: ['a', 'b', 'mix'], outputs: ['signal'], controls: [['blend', 'Blend', 0, 1, 0.01, 2]] },
+  { kind: 'multiply', label: 'Multiply', inputs: ['a', 'b'], outputs: ['signal'], controls: [['scale', 'Scale', 0, 4, 0.01, 2]] },
+  { kind: 'add', label: 'Add', inputs: ['a', 'b'], outputs: ['signal'], controls: [['offset', 'Offset', -2, 2, 0.01, 2]] },
+  { kind: 'map', label: 'Map range', inputs: ['signal'], outputs: ['signal'], controls: [['inMin', 'In min', 0, 1, 0.01, 2], ['inMax', 'In max', 0, 1, 0.01, 2], ['outMin', 'Out min', 0, 1, 0.01, 2], ['outMax', 'Out max', 0, 1, 0.01, 2]] },
+  { kind: 'envelope', label: 'Envelope', inputs: ['gate'], outputs: ['signal'], controls: [['attack', 'Attack', 0, 2, 0.01, 2], ['release', 'Release', 0, 4, 0.01, 2]] },
+  { kind: 'lag', label: 'Lag', inputs: ['signal'], outputs: ['signal'], controls: [['time', 'Time', 0, 2, 0.01, 2]] },
+  { kind: 'threshold', label: 'Threshold', inputs: ['signal'], outputs: ['gate'], controls: [['level', 'Level', 0, 1, 0.01, 2]] },
+  { kind: 'invert', label: 'Invert', inputs: ['signal'], outputs: ['signal'], controls: [['pivot', 'Pivot', 0, 1, 0.01, 2]] },
+];
+
 type ControlGraphProps = {
   manifest: AtlasManifest | null;
   activeCategory: AtlasCategory | null;
@@ -121,14 +145,20 @@ type ControlGraphProps = {
 
 type HandleProps = {
   id?: string;
+  offset?: number;
 };
 
-function Inlet({ id = 'in' }: HandleProps) {
-  return <Handle id={id} type="target" position={Position.Left} />;
+function Inlet({ id = 'in', offset }: HandleProps) {
+  return <Handle id={id} type="target" position={Position.Left} style={offset === undefined ? undefined : { top: `${offset}%` }} />;
 }
 
-function Outlet({ id = 'out' }: HandleProps) {
-  return <Handle id={id} type="source" position={Position.Right} />;
+function Outlet({ id = 'out', offset }: HandleProps) {
+  return <Handle id={id} type="source" position={Position.Right} style={offset === undefined ? undefined : { top: `${offset}%` }} />;
+}
+
+function portOffset(index: number, total: number): number {
+  if (total <= 1) return 50;
+  return 22 + index * (56 / Math.max(1, total - 1));
 }
 
 type NodeFrameProps = {
@@ -157,13 +187,37 @@ type RangeControlProps = {
   max: number;
   step: number;
   digits?: number;
+  handleId?: string;
   onChange: (value: number) => void;
 };
 
-function RangeControl({ label, value, min, max, step, digits = 0, onChange }: RangeControlProps) {
-  const display = digits > 0 ? Number(value).toFixed(digits) : String(Math.round(Number(value)));
+function formatNumber(value: number, digits: number): string {
+  return digits > 0 ? Number(value).toFixed(digits) : String(Math.round(Number(value)));
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, value));
+}
+
+function RangeControl({ label, value, min, max, step, digits = 0, handleId, onChange }: RangeControlProps) {
+  const display = formatNumber(value, digits);
+  const [draft, setDraft] = useState(display);
+
+  useEffect(() => {
+    setDraft(display);
+  }, [display]);
+
+  const commit = useCallback(() => {
+    const parsed = Number(draft);
+    const next = clampNumber(parsed, min, max);
+    setDraft(formatNumber(next, digits));
+    onChange(next);
+  }, [digits, draft, max, min, onChange]);
+
   return (
     <label className="range-row nodrag nowheel">
+      {handleId ? <Handle className="row-handle" id={handleId} type="target" position={Position.Left} /> : null}
       <span>{label}</span>
       <input
         type="range"
@@ -173,7 +227,20 @@ function RangeControl({ label, value, min, max, step, digits = 0, onChange }: Ra
         value={value}
         onChange={event => onChange(Number(event.target.value))}
       />
-      <output>{display}</output>
+      <input
+        className="number-field"
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={draft}
+        onChange={event => setDraft(event.target.value)}
+        onBlur={commit}
+        onFocus={event => event.currentTarget.select()}
+        onKeyDown={event => {
+          if (event.key === 'Enter') commit();
+        }}
+      />
     </label>
   );
 }
@@ -242,7 +309,11 @@ type ClockNodeData = SettingsNodeData & {
   onResetClock: () => void;
 };
 
-type AudioNodeData = {
+type AudioTransportNodeData = {
+  audio: WebAudioGraph;
+};
+
+type AudioAnalysisNodeData = {
   audio: WebAudioGraph;
 };
 
@@ -250,6 +321,12 @@ type ModulationNodeData = {
   audio: WebAudioGraph;
   gains: Gains;
   onGain: (key: GainKey, value: number) => void;
+};
+
+type OperatorNodeData = {
+  id: string;
+  spec: OperatorSpec;
+  values: Record<string, number>;
 };
 
 type RendererNodeData = {
@@ -277,15 +354,29 @@ type WheelPointer = {
 };
 
 const GRID_SIZE = 24;
-const NODE_GAP = 72;
-const MIN_FLOW_ZOOM = 0.42;
+const LAYOUT_COLUMN_GAP = 96;
+const LAYOUT_ROW_GAP = 84;
+const MIN_FLOW_ZOOM = 0.18;
 const MAX_FLOW_ZOOM = 1.25;
-const LAYOUT_COLUMNS = [
-  { x: 0, ids: ['atlas', 'audio', 'clock'] },
-  { x: 384, ids: ['tiling', 'projection', 'modulation'] },
-  { x: 816, ids: ['palette', 'material', 'lighting', 'postfx'] },
-  { x: 1248, ids: ['renderer'] },
+const LAYOUT_ROWS: readonly string[][] = [
+  ['atlas', 'tiling', 'palette', 'renderer'],
+  ['transport', 'analysis', 'projection', 'material'],
+  ['clock', 'operator-invert-1', 'drive', 'lighting', 'postfx'],
 ];
+const PROTECTED_NODE_IDS = new Set([
+  'atlas',
+  'tiling',
+  'palette',
+  'projection',
+  'material',
+  'lighting',
+  'transport',
+  'analysis',
+  'drive',
+  'clock',
+  'postfx',
+  'renderer',
+]);
 
 function snapValue(value: number): number {
   return Math.round(value / GRID_SIZE) * GRID_SIZE;
@@ -293,6 +384,72 @@ function snapValue(value: number): number {
 
 function clampFlowZoom(value: number): number {
   return Math.max(MIN_FLOW_ZOOM, Math.min(MAX_FLOW_ZOOM, value));
+}
+
+function measuredWidth(node: Node): number {
+  return node.measured?.width ?? node.width ?? 320;
+}
+
+function measuredHeight(node: Node): number {
+  return node.measured?.height ?? node.height ?? 240;
+}
+
+function layoutRowsForNodes(nodes: readonly Node[]): string[][] {
+  const nodeIds = new Set(nodes.map(node => node.id));
+  const rows = LAYOUT_ROWS.map(row => row.filter(id => nodeIds.has(id))).filter(row => row.length > 0);
+  const placed = new Set(rows.flat());
+  const pending = nodes.map(node => node.id).filter(id => !placed.has(id));
+  for (let i = 0; i < pending.length; i += 4) {
+    rows.push(pending.slice(i, i + 4));
+  }
+  return rows;
+}
+
+function measuredLayoutPositions(nodes: readonly Node[]): Map<string, { x: number; y: number }> {
+  const rows = layoutRowsForNodes(nodes);
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const columnCount = rows.reduce((count, row) => Math.max(count, row.length), 0);
+  const columnWidths: number[] = Array.from({ length: columnCount }, () => 0);
+  const rowHeights: number[] = Array.from({ length: rows.length }, () => 0);
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex] ?? [];
+    for (let columnIndex = 0; columnIndex < row.length; columnIndex += 1) {
+      const id = row[columnIndex];
+      const node = id ? byId.get(id) : undefined;
+      if (!node) continue;
+      columnWidths[columnIndex] = Math.max(columnWidths[columnIndex] ?? 0, measuredWidth(node));
+      rowHeights[rowIndex] = Math.max(rowHeights[rowIndex] ?? 0, measuredHeight(node));
+    }
+  }
+
+  const columnX: number[] = [];
+  let x = 0;
+  for (const width of columnWidths) {
+    columnX.push(snapValue(x));
+    x += snapValue(width + LAYOUT_COLUMN_GAP);
+  }
+
+  const rowY: number[] = [];
+  let y = 0;
+  for (const height of rowHeights) {
+    rowY.push(snapValue(y));
+    y += snapValue(height + LAYOUT_ROW_GAP);
+  }
+
+  const positions = new Map<string, { x: number; y: number }>();
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex] ?? [];
+    for (let columnIndex = 0; columnIndex < row.length; columnIndex += 1) {
+      const id = row[columnIndex];
+      if (!id) continue;
+      positions.set(id, {
+        x: columnX[columnIndex] ?? 0,
+        y: rowY[rowIndex] ?? 0,
+      });
+    }
+  }
+  return positions;
 }
 
 function sameSelection(a: FlowSelection, b: FlowSelection): boolean {
@@ -367,6 +524,7 @@ const TilingNode = memo(function TilingNode({ data }: NodeComponentProps<TilingN
           min={0}
           max={data.maxGeneration}
           step={1}
+          handleId="generation"
           onChange={value => data.onSetting('generation', value)}
         />
       </div>
@@ -412,6 +570,7 @@ const PaletteNode = memo(function PaletteNode({ data }: NodeComponentProps<Palet
           min={2}
           max={MAX_COLORS}
           step={1}
+          handleId="color_count"
           onChange={value => data.onSetting('color_count', value)}
         />
       </div>
@@ -461,6 +620,7 @@ const PaletteNode = memo(function PaletteNode({ data }: NodeComponentProps<Palet
           max={1}
           step={0.001}
           digits={3}
+          handleId="luminance"
           onChange={value => data.onCustomColor(color => oklch(value, color[1], color[2]))}
         />
         <div className="gamut">{data.gamut}</div>
@@ -483,6 +643,7 @@ const MaterialNode = memo(function MaterialNode({ data }: NodeComponentProps<Set
             min={min}
             max={max}
             step={step}
+            handleId={key}
             onChange={value => data.onSetting(key, value)}
           />
         ))}
@@ -505,6 +666,7 @@ const LightingNode = memo(function LightingNode({ data }: NodeComponentProps<Set
             min={min}
             max={max}
             step={step}
+            handleId={key}
             onChange={value => data.onSetting(key, value)}
           />
         ))}
@@ -543,6 +705,7 @@ const ProjectionNode = memo(function ProjectionNode({ data }: NodeComponentProps
             min={min}
             max={max}
             step={step}
+            handleId={key}
             onChange={value => data.onSetting(key, value)}
           />
         ))}
@@ -578,6 +741,7 @@ const ClockNode = memo(function ClockNode({ data }: NodeComponentProps<ClockNode
           min={min}
           max={max}
           step={step}
+          handleId={key}
           onChange={value => data.onSetting(key, value)}
         />
       ))}
@@ -585,7 +749,7 @@ const ClockNode = memo(function ClockNode({ data }: NodeComponentProps<ClockNode
   );
 });
 
-const AudioNode = memo(function AudioNode({ data }: NodeComponentProps<AudioNodeData>) {
+const AudioTransportNode = memo(function AudioTransportNode({ data }: NodeComponentProps<AudioTransportNodeData>) {
   const transport = data.audio.transport;
   const hasFile = data.audio.status === 'file';
   return (
@@ -629,19 +793,35 @@ const AudioNode = memo(function AudioNode({ data }: NodeComponentProps<AudioNode
         <span>{formatTime(transport.duration)}</span>
       </div>
       <div className="audio-status">Source: {data.audio.status}</div>
-      <Meter label="Bass" value={data.audio.features.bass} />
-      <Meter label="Mid" value={data.audio.features.mid} />
-      <Meter label="Treble" value={data.audio.features.treble} />
-      <Meter label="Level" value={data.audio.features.level} />
     </NodeFrame>
   );
 });
 
-const ModulationNode = memo(function ModulationNode({ data }: NodeComponentProps<ModulationNodeData>) {
+const AudioAnalysisNode = memo(function AudioAnalysisNode({ data }: NodeComponentProps<AudioAnalysisNodeData>) {
   return (
-    <NodeFrame title="Audio modulation" kind="signal" wide variant={2}>
-      <Inlet />
-      <Outlet />
+    <NodeFrame title="Audio analysis" kind="signal" wide variant={2}>
+      <Inlet id="transport" />
+      {['level', 'bass', 'mid', 'treble', 'beat'].map((id, index, ports) => (
+        <Outlet key={id} id={id} offset={portOffset(index, ports.length)} />
+      ))}
+      <Meter label="Bass" value={data.audio.features.bass} />
+      <Meter label="Mid" value={data.audio.features.mid} />
+      <Meter label="Treble" value={data.audio.features.treble} />
+      <Meter label="Level" value={data.audio.features.level} />
+      <Meter label="Beat" value={data.audio.features.beat} />
+    </NodeFrame>
+  );
+});
+
+const TargetDriveNode = memo(function TargetDriveNode({ data }: NodeComponentProps<ModulationNodeData>) {
+  return (
+    <NodeFrame title="Target drives" kind="operator" wide variant={1}>
+      {['level', 'bass', 'mid', 'treble'].map((id, index, ports) => (
+        <Inlet key={id} id={id} offset={portOffset(index, ports.length)} />
+      ))}
+      {['relief', 'glow', 'film', 'metal'].map((id, index, ports) => (
+        <Outlet key={id} id={id} offset={portOffset(index, ports.length)} />
+      ))}
       <div className="control-grid two-col">
         {GAIN_CONTROLS.map(([key, label]) => (
           <RangeControl
@@ -652,6 +832,7 @@ const ModulationNode = memo(function ModulationNode({ data }: NodeComponentProps
             max={1.5}
             step={0.01}
             digits={2}
+            handleId={key}
             onChange={value => data.onGain(key, value)}
           />
         ))}
@@ -660,6 +841,44 @@ const ModulationNode = memo(function ModulationNode({ data }: NodeComponentProps
       <Meter label="Glow out" value={data.audio.features.bass * data.gains.emissive} />
       <Meter label="Film out" value={data.audio.features.treble * data.gains.film} />
       <Meter label="Metal out" value={data.audio.features.mid * data.gains.metal} />
+    </NodeFrame>
+  );
+});
+
+const OperatorNode = memo(function OperatorNode({ data }: NodeComponentProps<OperatorNodeData>) {
+  const [values, setValues] = useState(data.values);
+
+  useEffect(() => {
+    setValues(data.values);
+  }, [data.values]);
+
+  return (
+    <NodeFrame title={data.spec.label} kind="operator" variant={0}>
+      {data.spec.inputs.map((input, index, ports) => (
+        <Inlet key={input} id={input} offset={portOffset(index, ports.length)} />
+      ))}
+      {data.spec.outputs.map((output, index, ports) => (
+        <Outlet key={output} id={output} offset={portOffset(index, ports.length)} />
+      ))}
+      <div className="operator-port-list">
+        <span>In: {data.spec.inputs.join(', ')}</span>
+        <span>Out: {data.spec.outputs.join(', ')}</span>
+      </div>
+      <div className="control-grid">
+        {data.spec.controls.map(([key, label, min, max, step, digits]) => (
+          <RangeControl
+            key={key}
+            label={label}
+            value={values[key] ?? min}
+            min={min}
+            max={max}
+            step={step}
+            digits={digits}
+            handleId={key}
+            onChange={value => setValues(current => ({ ...current, [key]: value }))}
+          />
+        ))}
+      </div>
     </NodeFrame>
   );
 });
@@ -678,6 +897,7 @@ const PostFxNode = memo(function PostFxNode({ data }: NodeComponentProps<Setting
             min={min}
             max={max}
             step={step}
+            handleId={key}
             onChange={value => data.onSetting(key, value)}
           />
         ))}
@@ -701,11 +921,9 @@ const PostFxNode = memo(function PostFxNode({ data }: NodeComponentProps<Setting
 const RendererNode = memo(function RendererNode({ data }: NodeComponentProps<RendererNodeData>) {
   return (
     <NodeFrame title="Renderer sink" kind="output" variant={0}>
-      <Inlet id="geometry" />
-      <Inlet id="color" />
-      <Inlet id="material" />
-      <Inlet id="lighting" />
-      <Inlet id="postfx" />
+      {['geometry', 'color', 'material', 'lighting', 'postfx'].map((id, index, ports) => (
+        <Inlet key={id} id={id} offset={portOffset(index, ports.length)} />
+      ))}
       <div className="render-readout">
         <span>{data.tiles}</span>
         <em>tiles</em>
@@ -723,17 +941,68 @@ const nodeTypes = {
   lighting: LightingNode,
   projection: ProjectionNode,
   clock: ClockNode,
-  audio: AudioNode,
-  modulation: ModulationNode,
+  transport: AudioTransportNode,
+  analysis: AudioAnalysisNode,
+  drive: TargetDriveNode,
+  operator: OperatorNode,
   postfx: PostFxNode,
   renderer: RendererNode,
 };
+
+function operatorSpec(kind: OperatorKind): OperatorSpec {
+  const found = OPERATOR_LIBRARY.find(item => item.kind === kind);
+  if (found) return found;
+  const first = OPERATOR_LIBRARY.find(() => true);
+  if (!first) throw new Error('operator library is empty');
+  return first;
+}
+
+function initialOperatorValues(spec: OperatorSpec): Record<string, number> {
+  const values: Record<string, number> = {};
+  for (const [key, _label, min, max] of spec.controls) {
+    values[key] = key === 'pivot' || key === 'blend' || key === 'level' ? (min + max) / 2 : min;
+  }
+  return values;
+}
+
+function createOperatorNode(id: string, kind: OperatorKind, position: { x: number; y: number }): Node {
+  const spec = operatorSpec(kind);
+  return {
+    id,
+    type: 'operator',
+    position,
+    data: {
+      id,
+      spec,
+      values: initialOperatorValues(spec),
+    },
+    dragHandle: '.flow-node-title',
+  };
+}
+
+function readOperatorKind(value: string): OperatorKind {
+  const spec = OPERATOR_LIBRARY.find(item => item.kind === value);
+  return spec?.kind ?? 'invert';
+}
+
+function miniMapColor(type: string): string {
+  if (type === 'atlas' || type === 'tiling') return '#b99228';
+  if (type === 'palette') return '#c7682e';
+  if (type === 'projection') return '#3e83a8';
+  if (type === 'material' || type === 'lighting' || type === 'postfx') return '#a66f35';
+  if (type === 'transport' || type === 'analysis' || type === 'clock') return '#3a9d75';
+  if (type === 'operator' || type === 'drive') return '#7a73c7';
+  if (type === 'renderer') return '#8764bc';
+  return '#69717e';
+}
 
 export function ControlGraph(props: ControlGraphProps) {
   const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 0.62 });
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [measuredLayoutDone, setMeasuredLayoutDone] = useState(false);
   const [middleZoom, setMiddleZoom] = useState<MiddleZoomState>(null);
+  const [operatorKind, setOperatorKind] = useState<OperatorKind>('invert');
+  const operatorIdRef = useRef(2);
   const baseNodes = useMemo<Node[]>(() => [
     {
       id: 'atlas',
@@ -808,9 +1077,17 @@ export function ControlGraph(props: ControlGraphProps) {
       },
     },
     {
-      id: 'audio',
-      type: 'audio',
+      id: 'transport',
+      type: 'transport',
       position: { x: 0, y: 620 },
+      data: {
+        audio: props.audio,
+      },
+    },
+    {
+      id: 'analysis',
+      type: 'analysis',
+      position: { x: 360, y: 620 },
       data: {
         audio: props.audio,
       },
@@ -826,15 +1103,16 @@ export function ControlGraph(props: ControlGraphProps) {
       },
     },
     {
-      id: 'modulation',
-      type: 'modulation',
-      position: { x: 360, y: 700 },
+      id: 'drive',
+      type: 'drive',
+      position: { x: 720, y: 1000 },
       data: {
         audio: props.audio,
         gains: props.gains,
         onGain: props.onGain,
       },
     },
+    createOperatorNode('operator-invert-1', 'invert', { x: 360, y: 1000 }),
     {
       id: 'postfx',
       type: 'postfx',
@@ -895,22 +1173,32 @@ export function ControlGraph(props: ControlGraphProps) {
     { id: 'lighting-renderer', source: 'lighting', target: 'renderer', targetHandle: 'lighting' },
     { id: 'clock-postfx', source: 'clock', target: 'postfx', targetHandle: 'clock', animated: true },
     { id: 'postfx-renderer', source: 'postfx', target: 'renderer', targetHandle: 'postfx' },
-    { id: 'audio-modulation', source: 'audio', target: 'modulation', animated: true },
-    { id: 'modulation-material', source: 'modulation', target: 'material', animated: true },
+    { id: 'transport-analysis', source: 'transport', target: 'analysis', targetHandle: 'transport', animated: true },
+    { id: 'analysis-invert', source: 'analysis', sourceHandle: 'level', target: 'operator-invert-1', targetHandle: 'signal', animated: true },
+    { id: 'analysis-drive', source: 'analysis', sourceHandle: 'level', target: 'drive', targetHandle: 'level', animated: true },
+    { id: 'invert-postfx', source: 'operator-invert-1', sourceHandle: 'signal', target: 'postfx', targetHandle: 'ripple_amount', animated: true },
+    { id: 'drive-emissive', source: 'drive', sourceHandle: 'glow', target: 'material', targetHandle: 'mat_emissive', animated: true },
+    { id: 'drive-metal', source: 'drive', sourceHandle: 'metal', target: 'material', targetHandle: 'mat_metalness', animated: true },
+    { id: 'drive-depth', source: 'drive', sourceHandle: 'relief', target: 'postfx', targetHandle: 'depth_amount', animated: true },
   ], []);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(baseNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialEdges);
   const [selection, setSelection] = useState<FlowSelection>({ nodes: [], edges: [] });
 
   useEffect(() => {
-    setNodes(current => baseNodes.map(node => {
-      const existing = current.find(item => item.id === node.id);
-      return {
-        ...node,
-        position: existing?.position ?? node.position,
-        selected: existing?.selected ?? false,
-      };
-    }));
+    const baseIds = new Set(baseNodes.map(node => node.id));
+    setNodes(current => {
+      const updatedBase = baseNodes.map(node => {
+        const existing = current.find(item => item.id === node.id);
+        return {
+          ...node,
+          position: existing?.position ?? node.position,
+          selected: existing?.selected ?? false,
+        };
+      });
+      const extra = current.filter(node => !baseIds.has(node.id));
+      return [...updatedBase, ...extra];
+    });
   }, [baseNodes, setNodes]);
 
   const onConnect = useCallback((connection: Connection) => {
@@ -922,9 +1210,10 @@ export function ControlGraph(props: ControlGraphProps) {
   }, [setEdges]);
 
   const restoreLinks = useCallback(() => {
-    setEdges(initialEdges);
+    const nodeIds = new Set(nodes.map(node => node.id));
+    setEdges(initialEdges.filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target)));
     setSelection(current => ({ ...current, edges: [] }));
-  }, [initialEdges, setEdges]);
+  }, [initialEdges, nodes, setEdges]);
 
   const deleteSelectedLinks = useCallback(() => {
     const selectedIds = new Set(selection.edges.map(edge => edge.id));
@@ -932,6 +1221,28 @@ export function ControlGraph(props: ControlGraphProps) {
     setEdges(current => current.filter(edge => !selectedIds.has(edge.id)));
     setSelection(current => ({ ...current, edges: [] }));
   }, [selection.edges, setEdges]);
+
+  const addOperatorNode = useCallback(() => {
+    const id = `operator-${operatorKind}-${operatorIdRef.current}`;
+    operatorIdRef.current += 1;
+    const position = {
+      x: snapValue((120 - viewport.x) / Math.max(viewport.zoom, MIN_FLOW_ZOOM)),
+      y: snapValue((180 - viewport.y) / Math.max(viewport.zoom, MIN_FLOW_ZOOM)),
+    };
+    setNodes(current => [...current, createOperatorNode(id, operatorKind, position)]);
+  }, [operatorKind, setNodes, viewport.x, viewport.y, viewport.zoom]);
+
+  const deleteSelectedNodes = useCallback(() => {
+    const selectedIds = new Set(
+      selection.nodes
+        .filter(node => !PROTECTED_NODE_IDS.has(node.id))
+        .map(node => node.id),
+    );
+    if (selectedIds.size === 0) return;
+    setNodes(current => current.filter(node => !selectedIds.has(node.id)));
+    setEdges(current => current.filter(edge => !selectedIds.has(edge.source) && !selectedIds.has(edge.target)));
+    setSelection({ nodes: [], edges: [] });
+  }, [selection.nodes, setEdges, setNodes]);
 
   const snapCurrentLayout = useCallback(() => {
     setNodes(current => current.map(node => ({
@@ -944,15 +1255,29 @@ export function ControlGraph(props: ControlGraphProps) {
   }, [setNodes]);
 
   const resetLayout = useCallback(() => {
-    setNodes(baseNodes);
-    setEdges(initialEdges);
+    setNodes(current => {
+      const baseIds = new Set(baseNodes.map(node => node.id));
+      const extra = current.filter(node => !baseIds.has(node.id));
+      return [...baseNodes, ...extra].map(node => ({ ...node, selected: false }));
+    });
+    setEdges(current => {
+      const nodeIds = new Set(nodes.map(node => node.id));
+      for (const node of baseNodes) nodeIds.add(node.id);
+      return initialEdges
+        .filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target))
+        .concat(current.filter(edge => !initialEdges.some(item => item.id === edge.id)));
+    });
     setViewport({ x: 0, y: 0, zoom: 0.62 });
     setSelection({ nodes: [], edges: [] });
     setMeasuredLayoutDone(false);
-  }, [baseNodes, initialEdges, setEdges, setNodes]);
+  }, [baseNodes, initialEdges, nodes, setEdges, setNodes]);
 
   const onSelectionChange = useCallback((params: FlowSelection) => {
     setSelection(current => sameSelection(current, params) ? current : params);
+  }, []);
+
+  const markMeasuredLayoutDone = useCallback(() => {
+    setMeasuredLayoutDone(true);
   }, []);
 
   const startMiddleZoom = useCallback((event: MouseEvent<HTMLDivElement>) => {
@@ -980,7 +1305,7 @@ export function ControlGraph(props: ControlGraphProps) {
   }, [middleZoom]);
 
   return (
-    <div className="control-flow-shell" onMouseDownCapture={startMiddleZoom} onAuxClick={startMiddleZoom}>
+    <div className="control-flow-shell" onMouseDownCapture={startMiddleZoom} onAuxClickCapture={startMiddleZoom}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -1017,7 +1342,7 @@ export function ControlGraph(props: ControlGraphProps) {
         <FitOnce />
         <MeasuredLayout
           enabled={!measuredLayoutDone}
-          onDone={() => setMeasuredLayoutDone(true)}
+          onDone={markMeasuredLayoutDone}
           setNodes={setNodes}
         />
         <Panel position="top-left" className="flow-panel">
@@ -1029,9 +1354,22 @@ export function ControlGraph(props: ControlGraphProps) {
           <button type="button" onClick={snapCurrentLayout}>Snap now</button>
           <button type="button" onClick={restoreLinks}>Restore links</button>
           <button type="button" onClick={deleteSelectedLinks} disabled={selection.edges.length === 0}>Delete link</button>
+          <label className="operator-picker nodrag nowheel">
+            <span>Node</span>
+            <select value={operatorKind} onChange={event => setOperatorKind(readOperatorKind(event.target.value))}>
+              {OPERATOR_LIBRARY.map(item => (
+                <option key={item.kind} value={item.kind}>{item.label}</option>
+              ))}
+            </select>
+          </label>
+          <button type="button" onClick={addOperatorNode}><Plus size={14} />Add</button>
+          <button type="button" onClick={deleteSelectedNodes} disabled={selection.nodes.every(node => PROTECTED_NODE_IDS.has(node.id))}>
+            <Trash2 size={14} />Delete node
+          </button>
         </Panel>
         <Background gap={22} size={1} />
         <Controls showInteractive />
+        <MiniMap pannable zoomable nodeColor={node => miniMapColor(String(node.type ?? ''))} />
       </ReactFlow>
     </div>
   );
@@ -1057,19 +1395,8 @@ function MeasuredLayout({ enabled, onDone, setNodes }: MeasuredLayoutProps) {
     applied.current = true;
     onDone();
     const currentNodes = flow.getNodes();
-    const byId = new Map(currentNodes.map(node => [node.id, node]));
+    const nextPositions = measuredLayoutPositions(currentNodes);
     setNodes(nodes => {
-      const nextPositions = new Map<string, { x: number; y: number }>();
-      for (const column of LAYOUT_COLUMNS) {
-        let y = 0;
-        for (const id of column.ids) {
-          const node = byId.get(id);
-          if (!node) continue;
-          const height = node.measured?.height ?? node.height ?? 280;
-          nextPositions.set(id, { x: snapValue(column.x), y: snapValue(y) });
-          y += snapValue(height + NODE_GAP);
-        }
-      }
       return nodes.map(node => ({
         ...node,
         position: nextPositions.get(node.id) ?? node.position,

@@ -23,10 +23,11 @@ const activePort = readPort(
 );
 const devHost = process.env['PENROSE_DEV_HOST'] ?? '0.0.0.0';
 const previewHost = process.env['PENROSE_PREVIEW_HOST'] ?? '0.0.0.0';
+const reactDevtoolsEnabled = process.env['PENROSE_REACT_DEVTOOLS'] === '1';
 
-function readPort(raw: string | undefined, fallback: number): number {
-  const parsed = Number(raw ?? fallback);
-  return Number.isInteger(parsed) && parsed > 0 && parsed < 65536 ? parsed : fallback;
+function readPort(raw: string | undefined, defaultValue: number): number {
+  const parsed = Number(raw ?? defaultValue);
+  return Number.isInteger(parsed) && parsed > 0 && parsed < 65536 ? parsed : defaultValue;
 }
 
 function hostForMode(mode: Mode): string {
@@ -107,11 +108,22 @@ function liveGeometryPlugin(): Plugin {
   };
 }
 
+function reactDevtoolsPlugin(): Plugin {
+  return {
+    name: 'penrose-react-devtools',
+    apply: 'serve',
+    transformIndexHtml(html: string) {
+      if (!reactDevtoolsEnabled || html.includes('localhost:8097')) return html;
+      return html.replace('<head>', '<head>\n    <script src="http://localhost:8097"></script>');
+    },
+  };
+}
+
 export default defineConfig({
   root: 'web',
   publicDir: 'public',
   cacheDir: path.join(repoRoot, 'node_modules', '.vite', `penrose-${activeMode}-${activePort}`),
-  plugins: [serverIdentityPlugin(), liveGeometryPlugin()],
+  plugins: [serverIdentityPlugin(), liveGeometryPlugin(), reactDevtoolsPlugin()],
   build: {
     outDir: '../dist/web',
     emptyOutDir: true,

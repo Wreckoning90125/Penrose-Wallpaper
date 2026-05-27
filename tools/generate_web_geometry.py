@@ -83,7 +83,32 @@ def write_geometry(target_id: str, settings: dict[str, Any]) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--live",
+        nargs=4,
+        metavar=("FAMILY", "SEED", "GENERATION", "OUTPUT"),
+        help="Export one live-control geometry file and exit.",
+    )
     args = parser.parse_args()
+
+    if args.live:
+        family, seed, generation, output = args.live
+        build_exporter()
+        out = Path(output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                str(EXPORTER_BIN),
+                str(int(family)),
+                str(int(seed)),
+                str(int(generation)),
+                str(out),
+            ],
+            cwd=ROOT,
+            check=True,
+        )
+        print(f"web geometry live: {out}")
+        return
 
     atlas = json.loads(ATLAS.read_text(encoding="utf-8"))
     categories = atlas.get("categories", [])

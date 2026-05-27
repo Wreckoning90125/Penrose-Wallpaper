@@ -251,7 +251,7 @@ internal class Settings(
             return Settings(
                 family       = safeStr(prefs, KEY_FAMILY, "0").toIntOrNull() ?: 0,
                 seedIdx      = safeStr(prefs, KEY_SEED, "0").toIntOrNull() ?: 0,
-                generation   = safeInt(prefs, KEY_GENERATION, 6),
+                generation   = safeInt(prefs, KEY_GENERATION, 4),
                 preset       = safeStr(prefs, KEY_PRESET, "4").toIntOrNull() ?: 4,
                 colorCount   = safeInt(prefs, KEY_COLOR_COUNT, 2),
                 colorMode    = safeStr(prefs, KEY_COLOR_MODE, "0").toIntOrNull() ?: 0,

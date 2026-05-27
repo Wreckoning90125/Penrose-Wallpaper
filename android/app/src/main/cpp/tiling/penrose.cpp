@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -336,30 +337,30 @@ std::array<HatPtr, 4> initialHatMetatiles() {
 }
 
 struct HatRule {
-    uint8_t kind;
     int a, b, c, d;
-    uint8_t label;
     int edge;
+    uint8_t kind;
+    uint8_t label;
 };
 
 HatPtr constructHatPatch(const std::array<HatPtr, 4>& metatiles) {
     static constexpr uint8_t H = 0, T = 1, P = 2, F = 3;
     static const HatRule rules[] = {
-        {1, 0, 0, 0, 0, H, 0},
-        {4, 0, 0, 0, 0, P, 2}, {4, 1, 0, 0, 0, H, 2},
-        {4, 2, 0, 0, 0, P, 2}, {4, 3, 0, 0, 0, H, 2},
-        {4, 4, 4, 0, 0, P, 2}, {4, 0, 4, 0, 0, F, 3},
-        {4, 2, 4, 0, 0, F, 3}, {6, 4, 1, 3, 2, F, 0},
-        {4, 8, 3, 0, 0, H, 0}, {4, 9, 2, 0, 0, P, 0},
-        {4,10, 2, 0, 0, H, 0}, {4,11, 4, 0, 0, P, 2},
-        {4,12, 0, 0, 0, H, 2}, {4,13, 0, 0, 0, F, 3},
-        {4,14, 2, 0, 0, F, 1}, {4,15, 3, 0, 0, H, 4},
-        {4, 8, 2, 0, 0, F, 1}, {4,17, 3, 0, 0, H, 0},
-        {4,18, 2, 0, 0, P, 0}, {4,19, 2, 0, 0, H, 2},
-        {4,20, 4, 0, 0, F, 3}, {4,20, 0, 0, 0, P, 2},
-        {4,22, 0, 0, 0, H, 2}, {4,23, 4, 0, 0, F, 3},
-        {4,23, 0, 0, 0, F, 3}, {4,16, 0, 0, 0, P, 2},
-        {6, 9, 4, 0, 2, T, 2}, {4, 4, 0, 0, 0, F, 3},
+        { 0, 0, 0, 0, 0, 1, H },
+        { 0, 0, 0, 0, 2, 4, P }, { 1, 0, 0, 0, 2, 4, H },
+        { 2, 0, 0, 0, 2, 4, P }, { 3, 0, 0, 0, 2, 4, H },
+        { 4, 4, 0, 0, 2, 4, P }, { 0, 4, 0, 0, 3, 4, F },
+        { 2, 4, 0, 0, 3, 4, F }, { 4, 1, 3, 2, 0, 6, F },
+        { 8, 3, 0, 0, 0, 4, H }, { 9, 2, 0, 0, 0, 4, P },
+        {10, 2, 0, 0, 0, 4, H }, {11, 4, 0, 0, 2, 4, P },
+        {12, 0, 0, 0, 2, 4, H }, {13, 0, 0, 0, 3, 4, F },
+        {14, 2, 0, 0, 1, 4, F }, {15, 3, 0, 0, 4, 4, H },
+        { 8, 2, 0, 0, 1, 4, F }, {17, 3, 0, 0, 0, 4, H },
+        {18, 2, 0, 0, 0, 4, P }, {19, 2, 0, 0, 2, 4, H },
+        {20, 4, 0, 0, 3, 4, F }, {20, 0, 0, 0, 2, 4, P },
+        {22, 0, 0, 0, 2, 4, H }, {23, 4, 0, 0, 3, 4, F },
+        {23, 0, 0, 0, 3, 4, F }, {16, 0, 0, 0, 2, 4, P },
+        { 9, 4, 0, 2, 2, 6, T }, { 4, 0, 0, 0, 3, 4, F },
     };
 
     HatPtr ret = makeHatMeta({}, metatiles[0]->width);
@@ -730,8 +731,9 @@ std::vector<Tile> subdivideDanzer(const std::vector<Tile>& in) {
         for (const DanzerChild& c : rule[t.type & 3]) {
             float p[6];
             for (int r = 0; r < 3; ++r) {
-                p[2 * r]     = static_cast<float>(ox + c.s[r] * ux + c.d[r] * wx);
-                p[2 * r + 1] = static_cast<float>(oy + c.s[r] * uy + c.d[r] * wy);
+                const std::ptrdiff_t i = static_cast<std::ptrdiff_t>(2) * r;
+                p[i]     = static_cast<float>(ox + c.s[r] * ux + c.d[r] * wx);
+                p[i + 1] = static_cast<float>(oy + c.s[r] * uy + c.d[r] * wy);
             }
             out.push_back(mkTri(c.type, p[0], p[1], p[2], p[3], p[4], p[5]));
         }
@@ -1173,8 +1175,9 @@ std::vector<Tile> subdividePinwheel(const std::vector<Tile>& in) {
             for (int k = 0; k < 3; ++k) {
                 const float a = corner[k][0] + 2.0f;
                 const float b = corner[k][1] - 1.0f;
-                p[2 * k]     = sx + a * c1x + b * c2x;
-                p[2 * k + 1] = sy + a * c1y + b * c2y;
+                const std::ptrdiff_t i = static_cast<std::ptrdiff_t>(2) * k;
+                p[i]     = sx + a * c1x + b * c2x;
+                p[i + 1] = sy + a * c1y + b * c2y;
             }
             out.push_back(mkPin(p[0], p[1], p[2], p[3], p[4], p[5]));
         }
@@ -1387,7 +1390,7 @@ const double kFatx  = 0.5 * std::sqrt(3.0 - kPhi);
 const double kS1    = 1.0 / kPhi;
 const double kS2    = 1.0 / (1.0 + kPhi);
 
-enum { P1_ENTRY, P1_FAT_PAIR, P1_THIN_SUB, P1_FAT_SUB, P1_THIN_LEAF, P1_FAT_LEAF };
+enum P1Rule : std::uint8_t { P1_ENTRY, P1_FAT_PAIR, P1_THIN_SUB, P1_FAT_SUB, P1_THIN_LEAF, P1_FAT_LEAF };
 
 void p1EmitPentagon(const P1Xf& m, std::vector<Tile>& out) {
     Tile pe{};
@@ -1416,7 +1419,7 @@ void p1EmitPentagon(const P1Xf& m, std::vector<Tile>& out) {
 // Walk the substitution rules, composing each child's transform onto the
 // parent's; emit a pentagon at every fat-triangle leaf. A *_sub rule that
 // exceeds the depth budget `md` switches to its leaf successor.
-void p1Recurse(int rule, const P1Xf& mat, int depth, int md, std::vector<Tile>& out) {
+void p1Recurse(P1Rule rule, const P1Xf& mat, int depth, int md, std::vector<Tile>& out) {
     if ((rule == P1_THIN_SUB || rule == P1_FAT_SUB) && depth > md) {
         p1Recurse(rule == P1_THIN_SUB ? P1_THIN_LEAF : P1_FAT_LEAF, mat, 0, md, out);
         return;

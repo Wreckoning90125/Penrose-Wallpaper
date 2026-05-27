@@ -36,7 +36,7 @@
             android:key="generation"
             android:title="Generation"
             android:summary="More generations = more tiles"
-            android:min="0" android:max="8" android:defaultValue="6"
+            android:min="0" android:max="8" android:defaultValue="4"
             app:showSeekBarValue="true" />
         <ListPreference
             android:key="pan_mode"

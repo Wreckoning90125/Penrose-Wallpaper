@@ -4,12 +4,17 @@
 from __future__ import annotations
 
 import json
+import struct
+import subprocess
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ATLAS = ROOT / "atlas" / "tiling_atlas.json"
 ANDROID_BUILD = ROOT / "android" / "app" / "build.gradle.kts"
+COUNT_DIR = ROOT / ".cache" / "atlas-count-check"
+EXPORTER = ROOT / "tools" / "generate_web_geometry.py"
+MAX_INITIAL_TILES = 600
 
 FAMILY_MAX_SEED = {
     0: 3,
@@ -175,6 +180,34 @@ def check_settings_shape(settings: dict[str, object], context: str) -> None:
             raise SystemExit(f"{context}: setting {key}={value} not in {sorted(allowed)}")
 
 
+def exported_tile_count(item_id: str, family: int, seed: int, generation: int) -> int:
+    COUNT_DIR.mkdir(parents=True, exist_ok=True)
+    path = COUNT_DIR / f"{item_id}.ptg"
+    subprocess.run(
+        [
+            "python3",
+            str(EXPORTER),
+            "--live",
+            str(family),
+            str(seed),
+            str(generation),
+            str(path),
+        ],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    magic, exported_family, exported_seed, exported_generation, tile_count = struct.unpack(
+        "<4sIIII",
+        path.read_bytes()[:20],
+    )
+    if magic != b"PTG1":
+        raise SystemExit(f"{item_id}: generated geometry has bad magic")
+    if (exported_family, exported_seed, exported_generation) != (family, seed, generation):
+        raise SystemExit(f"{item_id}: generated geometry header does not match atlas settings")
+    return tile_count
+
+
 def main() -> None:
     atlas = json.loads(ATLAS.read_text(encoding="utf-8"))
     categories = atlas.get("categories", [])
@@ -207,6 +240,12 @@ def main() -> None:
             max_gen = FAMILY_MAX_GEN.get(family, 8)
             if generation < 0 or generation > max_gen:
                 raise SystemExit(f"{item_id}: generation {generation} exceeds {max_gen}")
+            tile_count = exported_tile_count(item_id, family, seed, generation)
+            if tile_count > MAX_INITIAL_TILES:
+                raise SystemExit(
+                    f"{item_id}: initial generation exports {tile_count} tiles; "
+                    f"limit is {MAX_INITIAL_TILES}"
+                )
             total_items += 1
 
     build_text = ANDROID_BUILD.read_text(encoding="utf-8")

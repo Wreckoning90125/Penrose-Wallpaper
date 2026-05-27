@@ -40,7 +40,7 @@ enum class Projection : int {
 struct Settings {
     Family family       = Family::P3;
     int    seedIdx      = 0;
-    int    generation   = 6;
+    int    generation   = 4;
 
     Preset preset       = Preset::Gold;
     int    colorCount   = 2;

@@ -4,14 +4,24 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "atlas:verify": "python3 tools/verify_atlas.py",
+    "cpp:tidy": "bash tools/run_clang_tidy.sh",
+    "quality:local": "npm run atlas:verify && npm run tilings:verify && npm run shaders:validate && npm run cpp:tidy && npm run web:build",
+    "shaders:validate": "bash tools/validate_shaders.sh",
+    "tilings:verify": "g++ -std=c++20 -O2 -Wall -Wextra -I android/app/src/main/cpp tools/verify_tilings.cpp android/app/src/main/cpp/tiling/penrose.cpp -o .cache/verify_tilings && .cache/verify_tilings",
     "web:generate": "python3 tools/generate_web_geometry.py",
     "preweb:dev": "npm run web:generate",
-    "web:dev": "vite --host 0.0.0.0",
+    "dev": "npm run web:dev",
+    "web:dev": "vite --host 0.0.0.0 --port 5174 --strictPort",
     "preweb:build": "npm run web:generate",
     "web:build": "vite build",
-    "web:preview": "vite preview --host 0.0.0.0"
+    "web:preview": "vite preview --host 0.0.0.0 --port 4174 --strictPort"
   },
   "dependencies": {
+    "@xyflow/react": "^12.10.2",
+    "lucide-react": "^1.16.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
     "three": "0.184.0"
   },
   "devDependencies": {

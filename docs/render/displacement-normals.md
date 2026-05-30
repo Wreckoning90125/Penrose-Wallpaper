@@ -1,60 +1,84 @@
 # Displacement shading: smoothness is the NORMAL, not the geometry
 
-## The rule
+## The model
 
-When a displaced surface "looks like relief / facets / bumps" and you expected a
-smooth bend, **check the normal computation first.** Shading smoothness is a
-property of the surface normal, not of polygon count or wave frequency.
+A height-field displacement `z = f(x, y)` has an exact surface normal at every
+point:
 
-- `normalFlat` (three's default flat normal) is the **polygon face normal**:
-  `positionView.dFdx().cross(positionView.dFdy())`. It is constant across a
-  triangle, so **any** displacement on low‑poly geometry shades faceted — at
-  every frequency. Subdividing only hides it by adding faces.
-- The fix is to derive the normal **analytically from the displacement function**
-  (finite‑difference the displacement, transform to view). Then a flat, low‑poly
-  sheet shades as a smooth undulation at any frequency and any tessellation, with
-  no subdivision. See `surfaceNormalNode` in `web/src/render/webgpuRenderer.ts`.
+```
+N = normalize( -∂f/∂x , -∂f/∂y , 1 )
+```
 
-Undulating a flat sheet is a **1‑D plane wave displacing z (up)** — `sin(x·f +
-y·0.73f)`. It is a smooth surface and does not inherently facet. Frequency sets
-the *scale* of the bend; it does **not** determine whether it facets. The
-facets came entirely from face‑normal shading.
+That normal is a continuous function of position. Smoothness of the *shading* is
+entirely whether the renderer uses this normal. It has **nothing to do with how
+many triangles the geometry has or how high the wave frequency is.**
 
-## The misconception (why this cost ~3 hours)
+The renderer was using `normalFlat`, three's flat normal:
 
-A flat atlas undulated and "relief reappeared" even with all relief set to zero.
-The wrong diagnosis, repeated and doubled‑down on:
+```
+normalFlat = positionView.dFdx().cross( positionView.dFdy() )
+```
 
-1. "High wave frequency creates faceted relief." — False. A sine z‑displacement
-   is a smooth surface at any frequency.
-2. "It's the low‑poly flat‑quad tiles faceting when displaced." — Also not the
-   root cause: at a low decoupled frequency the *same* geometry undulated as
-   smooth flat paper. Same polys, different result → geometry density was not the
-   determinant.
-3. Lowering the frequency / increasing fill subdivision "fixed" it — both are
-   workarounds that mask the real cause (subdivision adds faces so each face
-   normal turns less; low frequency makes adjacent faces turn similarly).
+That is the **face normal** of the rasterized triangle — one constant value per
+triangle. So the surface is shaded as a set of flat plates. Displace the vertices
+and each plate just tilts to a new constant orientation; adjacent plates meet at
+an angle ⇒ visible creases. This happens for *any* displacement, including a
+perfectly smooth sine, because the face normal throws away the within-triangle
+gradient and replaces it with a single plane.
 
-The actual cause was that the material used `normalFlat`, so the shading normal
-was the polygon face the whole time. None of frequency, amplitude, or poly count
-was the root cause.
+## Why frequency and subdivision *looked* like the cause (the trap)
 
-## The process lesson (do not repeat)
+They both change the **visibility** of the faceting, not its mechanism. The error
+between a triangle's face normal and the true normal scales with how much the
+true normal turns across that triangle, i.e. with
 
-- The user is the pixel oracle; this agent renders black (swiftshader). When the
-  user — a domain expert — says "that is not the cause," **stop theorizing and go
-  read the actual code path** (here: the `normalNode`). Do not restate a theory
-  more confidently to win the argument; that is gaslighting and it wasted hours.
-- For any "looks wrong" displacement/shading bug, enumerate the real inputs
-  (position node, **normal node**, lighting) and inspect them before blaming
-  frequency, amplitude, or tessellation.
-- Empirical contradictions (same geometry, two outcomes) falsify a hypothesis —
-  honour them immediately instead of explaining them away.
+```
+(triangle edge length) × (gradient curvature) ≈ Δx · f
+```
 
-## Current trade‑off (known, intentional)
+- **Frequency `f` ↑** → the normal turns more across a fixed triangle span → the
+  face normal is a worse approximation → facets become obvious. Lowering `f` makes
+  adjacent face normals nearly equal, so the plates look continuous. The faceting
+  was always there; low frequency just shrank it below notice.
+- **Subdivision** (smaller `Δx`) → each triangle spans less surface → the normal
+  turns less across it → same masking. It's a sampling-rate fix: enough triangles
+  relative to `f` and face normals approximate the true normal.
 
-`surfaceNormalNode` finite‑differences the *procedural* displacement
-(undulate / displace / relief‑wave). The baked per‑tile relief (`positionLocal.z`)
+So both "fixes" are the **same** workaround — make `Δx · f` small — and neither
+touches the cause. The decisive tell was empirical: the *same* low-poly geometry
+undulated as smooth paper at low `f` and faceted at high `f`. Same polys, two
+outcomes ⇒ poly count is not the determinant; the per-triangle gradient is, which
+means the normal is.
+
+## The fix
+
+Compute `N` directly from the displacement and shade with it (`surfaceNormalNode`
+in `web/src/render/webgpuRenderer.ts`): finite-difference the displacement in the
+boosted plane and `transformNormalToView`:
+
+```
+N_local = normalize( vec3( (f(x,y) - f(x+ε,y))/ε , (f(x,y) - f(x,y+ε))/ε , 1 ) )
+N_view  = transformNormalToView( N_local )
+```
+
+Evaluated per fragment, this is the true surface normal regardless of triangle
+size or frequency. The geometry can stay coarse — its silhouette/intersection is
+still faceted, but on a near-flat sheet the shading normal dominates perceived
+smoothness, so the sheet undulates smoothly. Geometry sampling (vertex positions)
+and the shading normal are independent; the bug conflated them.
+
+## Process lesson
+
+Same-geometry-two-outcomes falsified the poly-count hypothesis on the first
+observation. Honour an empirical contradiction the moment it appears instead of
+re-explaining it. For any "displacement looks faceted / like relief" report, read
+the `normalNode` before considering frequency, amplitude, or tessellation — those
+are the variables that *mask* the bug, which is why they mislead.
+
+## Known trade-off (intentional)
+
+`surfaceNormalNode` finite-differences the *procedural* displacement
+(undulate / displace / relief-wave). The baked per-tile relief (`positionLocal.z`)
 is constant under that finite difference, so at high `mat_relief` the static
-relief shades flatter than the old face normal showed. Revisit (fold in the
-relief's geometric normal) only if that becomes a problem.
+relief shades flatter than the old face normal showed. Fold in the relief's
+geometric normal only if that becomes a problem.

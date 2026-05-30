@@ -19,36 +19,28 @@ The renderer was using `normalFlat`, three's flat normal:
 normalFlat = positionView.dFdx().cross( positionView.dFdy() )
 ```
 
-That is the **face normal** of the rasterized triangle — one constant value per
-triangle. So the surface is shaded as a set of flat plates. Displace the vertices
-and each plate just tilts to a new constant orientation; adjacent plates meet at
-an angle ⇒ visible creases. This happens for *any* displacement, including a
-perfectly smooth sine, because the face normal throws away the within-triangle
-gradient and replaces it with a single plane.
+That is the **face normal of the rasterized triangle** — one constant value per
+triangle. So `normalFlat` does not shade the *surface*, it shades the **mesh**:
+every triangle is lit as a flat plate. And our mesh *is* the subdivided relief
+tiles. So the facets that "looked like relief reappearing" were not an artifact —
+they were the relief-tile polygons themselves, lit up. When the surface is flat,
+those polygons are coplanar and you can't see them. Displace it (undulate) and
+each polygon tilts to its own orientation, so the tile mesh we built becomes
+visible. That's the whole bug: we shaded the geometry we made instead of the
+surface it represents.
 
-## Why frequency and subdivision *looked* like the cause (the trap)
+## Why it looked frequency-dependent
 
-They both change the **visibility** of the faceting, not its mechanism. The error
-between a triangle's face normal and the true normal scales with how much the
-true normal turns across that triangle, i.e. with
-
-```
-(triangle edge length) × (gradient curvature) ≈ Δx · f
-```
-
-- **Frequency `f` ↑** → the normal turns more across a fixed triangle span → the
-  face normal is a worse approximation → facets become obvious. Lowering `f` makes
-  adjacent face normals nearly equal, so the plates look continuous. The faceting
-  was always there; low frequency just shrank it below notice.
-- **Subdivision** (smaller `Δx`) → each triangle spans less surface → the normal
-  turns less across it → same masking. It's a sampling-rate fix: enough triangles
-  relative to `f` and face normals approximate the true normal.
-
-So both "fixes" are the **same** workaround — make `Δx · f` small — and neither
-touches the cause. The decisive tell was empirical: the *same* low-poly geometry
-undulated as smooth paper at low `f` and faceted at high `f`. Same polys, two
-outcomes ⇒ poly count is not the determinant; the per-triangle gradient is, which
-means the normal is.
+Frequency doesn't create or hide facets — it just sets how far apart neighbouring
+tile-polygons tilt. A gentle (low-frequency) undulation tilts adjacent polygons by
+nearly the same amount, so their face normals are nearly equal and the mesh stays
+invisible (it reads as smooth paper). A tight (high-frequency) undulation tilts
+neighbours apart, so the relief-tile mesh shows. Subdividing further is the same
+masking from the other side (more, smaller polygons tilt less relative to each
+other). Both are workarounds; neither touches the cause, which is that the shading
+normal is the polygon, not the surface. The tell was empirical and immediate: the
+*same* geometry was smooth paper at low frequency and faceted at high frequency —
+so the geometry isn't the cause, the normal is.
 
 ## The fix
 

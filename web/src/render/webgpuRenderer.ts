@@ -87,7 +87,6 @@ function createFieldSlots() {
     speed: uniform(0),
     relief: uniform(0),
     undulate: uniform(0),
-    undulateFreq: uniform(2.5),
     color: uniform(0),
   }));
 }
@@ -121,7 +120,6 @@ function createRendererUniforms() {
     rippleColorAmp: uniform(0),
     undulateAmp: uniform(0),
     rippleFreq: uniform(4),
-    undulateFreq: uniform(2.5),
     fieldSpeed: uniform(0.8),
     depthScale: uniform(0.42),
     reliefScale: uniform(0.55),
@@ -601,12 +599,10 @@ export class WallpaperRenderer {
     const displaceField = this.surfaceDepthNode(boostedX, boostedY, tileRing, tileOrient, tileCenter);
     const wave = this.rippleWaveNode(boostedX, boostedY, this.uniforms.rippleFreq, this.uniforms.fieldSpeed);
     const reliefField = reliefZ.mul(wave).mul(this.uniforms.rippleAmp);
-    // Undulate is the whole-sheet 3D wave. Its spatial frequency is its OWN driven
-    // control (undulateFreq), independent of the relief/colour frequency, so it can
-    // be a broad sheet bend or tighter at the user's choice. No relief term — any
-    // real relief just rides the bent sheet (z heights add).
-    const undulateWave = this.rippleWaveNode(boostedX, boostedY, this.uniforms.undulateFreq, this.uniforms.fieldSpeed);
-    const undulateField = undulateWave.mul(this.uniforms.undulateAmp);
+    // Undulate is the same plane wave displacing z (the whole flat sheet bends up/
+    // down). It shares the field frequency; it carries no relief term, so any real
+    // relief just rides the bent sheet (z heights add).
+    const undulateField = wave.mul(this.uniforms.undulateAmp);
     let z = reliefZ
       .add(displaceField.mul(this.uniforms.displaceMix))
       .add(reliefField.mul(this.uniforms.reliefMix))
@@ -614,8 +610,7 @@ export class WallpaperRenderer {
     // Extra independent field sources: each adds its own wave's relief + undulate.
     for (const slot of this.uniforms.fieldSlots) {
       const slotWave = this.rippleWaveNode(boostedX, boostedY, slot.freq, slot.speed);
-      const slotUndulate = this.rippleWaveNode(boostedX, boostedY, slot.undulateFreq, slot.speed);
-      z = z.add(reliefZ.mul(slotWave).mul(slot.relief)).add(slotUndulate.mul(slot.undulate));
+      z = z.add(reliefZ.mul(slotWave).mul(slot.relief)).add(slotWave.mul(slot.undulate));
     }
     return z;
   }
@@ -788,18 +783,17 @@ export class WallpaperRenderer {
     let changed = false;
     this.uniforms.fieldSlots.forEach((target, index) => {
       const input = slots[index];
-      const next = input ?? { freq: 4, speed: 0, relief: 0, undulate: 0, undulateFreq: 2.5, color: 0 };
+      const next = input ?? { freq: 4, speed: 0, relief: 0, undulate: 0, color: 0 };
       if (
         target.freq.value !== next.freq || target.speed.value !== next.speed
         || target.relief.value !== next.relief || target.undulate.value !== next.undulate
-        || target.undulateFreq.value !== next.undulateFreq || target.color.value !== next.color
+        || target.color.value !== next.color
       ) {
         changed = true;
         target.freq.value = next.freq;
         target.speed.value = next.speed;
         target.relief.value = next.relief;
         target.undulate.value = next.undulate;
-        target.undulateFreq.value = next.undulateFreq;
         target.color.value = next.color;
       }
     });
@@ -837,7 +831,6 @@ export class WallpaperRenderer {
     this.uniforms.rippleColorAmp.value = intSetting(settings, 'field_color', 0, 100) / 100 * 0.22;
     this.uniforms.undulateAmp.value = intSetting(settings, 'field_undulate', 0, 100) / 100 * 0.075;
     this.uniforms.rippleFreq.value = intSetting(settings, 'field_freq', 0, 100) / 10;
-    this.uniforms.undulateFreq.value = intSetting(settings, 'field_undulate_freq', 0, 100) / 10;
     this.uniforms.fieldSpeed.value = intSetting(settings, 'field_speed', 0, 200) / 50;
     this.scene.environmentIntensity = 0.8 + mat.clearcoat * 0.9 + mat.metalness * 0.5;
     const border = oklchToLinearSrgb([
@@ -954,7 +947,6 @@ export class WallpaperRenderer {
     this.uniforms.rippleColorAmp.value = modulatedValue('field_color', 0, 100) / 100 * 0.22;
     this.uniforms.undulateAmp.value = modulatedValue('field_undulate', 0, 100) / 100 * 0.075;
     this.uniforms.rippleFreq.value = modulatedValue('field_freq', 0, 100) / 10;
-    this.uniforms.undulateFreq.value = modulatedValue('field_undulate_freq', 0, 100) / 10;
     this.uniforms.fieldSpeed.value = modulatedValue('field_speed', 0, 200) / 50;
     const depthScale = modulatedValue('field_displace', 0, 100) / 100;
     this.uniforms.depthScale.value = Math.min(1.5, depthScale);

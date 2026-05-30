@@ -47,7 +47,6 @@ export const RIPPLE_TARGET_CONTROLS: ControlSpec[] = [
   ['field_color', 'Color', 0, 100, 1],
   ['field_undulate', 'Undulate', 0, 100, 1],
   ['field_freq', 'Freq', 0, 100, 1],
-  ['field_undulate_freq', 'Undul.freq', 0, 100, 1],
   ['field_speed', 'Speed', 0, 200, 1],
 ];
 

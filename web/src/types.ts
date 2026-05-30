@@ -135,7 +135,6 @@ export type FieldSlot = {
   speed: number;
   relief: number;
   undulate: number;
-  undulateFreq: number;
   color: number;
 };
 

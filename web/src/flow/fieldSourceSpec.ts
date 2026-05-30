@@ -17,7 +17,6 @@ export const FIELD_SOURCE_PARAMS: readonly FieldParamSpec[] = [
   ['amp_undulate', 'Undulate', 0, 100, 1, 24],
   ['amp_color', 'Color', 0, 100, 1, 24],
   ['freq', 'Freq', 0, 100, 1, 65],
-  ['undulate_freq', 'Undul.freq', 0, 100, 1, 25],
   ['speed', 'Speed', 0, 200, 1, 40],
 ];
 
@@ -66,7 +65,6 @@ export function deriveFieldSlots(
       speed: paramValue(values, 'speed', 40) / 50,
       relief: reliefWired ? paramValue(values, 'amp_relief', 0) / 100 * 0.075 : 0,
       undulate: undulateWired ? paramValue(values, 'amp_undulate', 0) / 100 * 0.075 : 0,
-      undulateFreq: paramValue(values, 'undulate_freq', 25) / 10,
       color: colorWired ? paramValue(values, 'amp_color', 0) / 100 * 0.22 : 0,
     });
   }

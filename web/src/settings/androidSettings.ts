@@ -26,7 +26,6 @@ export type Settings = {
   field_color: SettingValue;
   field_undulate: SettingValue;
   field_freq: SettingValue;
-  field_undulate_freq: SettingValue;
   field_speed: SettingValue;
   brightness: SettingValue;
   field_displace: SettingValue;
@@ -95,7 +94,6 @@ export const DEFAULT_SETTINGS: Settings = {
   field_color: 24,
   field_undulate: 24,
   field_freq: 65,
-  field_undulate_freq: 25,
   field_speed: 40,
   brightness: 100,
   field_displace: 42,

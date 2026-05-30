@@ -132,9 +132,12 @@ export type RenderInputs = {
   color: boolean;
   material: boolean;
   projection: boolean;
-  // The surface displacement field (ripple/depth) source -> renderer. Cut it and
-  // the surface stops rippling/displacing (flat, modulo the scalar relief).
-  field: boolean;
+  // Three field-source outlets -> renderer inlets, one per field: displacement
+  // bulge, relief wave, colour wave. Cut one and only that field stops; cut all
+  // three and the surface is flat (modulo the scalar relief).
+  fieldDisplace: boolean;
+  fieldRelief: boolean;
+  fieldColor: boolean;
 };
 
 export type GamutLabel = string;

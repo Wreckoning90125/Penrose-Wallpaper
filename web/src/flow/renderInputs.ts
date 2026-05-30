@@ -40,8 +40,10 @@ export function renderInputsFromEdges(nodes: readonly Node[], edges: readonly Ed
   const color = link('palette', 'color', 'material', 'color');
   const material = link('material', 'surface', 'renderer', 'surface');
   const projection = link('projection', 'out', 'palette', 'in');
-  // The ripple/depth node is a displacement-field source; its field outlet wires
-  // into the renderer. Cut it and the surface stops rippling/displacing.
-  const field = link('postfx', 'field', 'renderer', 'field');
-  return { geometry: renderChainConnected(nodes, edges), lighting, color, material, projection, field };
+  // The field-source node emits three fields on three outlets; each wires into
+  // its own renderer inlet. Cut one and only that field stops at the surface.
+  const fieldDisplace = link('postfx', 'displace', 'renderer', 'displace');
+  const fieldRelief = link('postfx', 'relief', 'renderer', 'relief');
+  const fieldColor = link('postfx', 'color', 'renderer', 'color');
+  return { geometry: renderChainConnected(nodes, edges), lighting, color, material, projection, fieldDisplace, fieldRelief, fieldColor };
 }

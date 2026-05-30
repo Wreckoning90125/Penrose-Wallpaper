@@ -112,11 +112,13 @@ const canonicalWires = {
   materialRenderer: wire('w5', 'material', 'surface', 'renderer', 'surface'),
   lightingRenderer: wire('w6', 'lighting', 'out', 'renderer', 'lighting'),
   rendererDisplay: wire('w7', 'renderer', 'frame', 'display', 'frame'),
-  fieldRenderer: wire('w8', 'postfx', 'field', 'renderer', 'field'),
+  displaceRenderer: wire('w8', 'postfx', 'displace', 'renderer', 'displace'),
+  reliefRenderer: wire('w9', 'postfx', 'relief', 'renderer', 'relief'),
+  colorFieldRenderer: wire('w10', 'postfx', 'color', 'renderer', 'color'),
 };
 const allWires: Edge[] = Object.values(canonicalWires);
-type RenderInput = 'geometry' | 'lighting' | 'color' | 'material' | 'projection' | 'field';
-const RENDER_INPUTS: readonly RenderInput[] = ['geometry', 'lighting', 'color', 'material', 'projection', 'field'];
+type RenderInput = 'geometry' | 'lighting' | 'color' | 'material' | 'projection' | 'fieldDisplace' | 'fieldRelief' | 'fieldColor';
+const RENDER_INPUTS: readonly RenderInput[] = ['geometry', 'lighting', 'color', 'material', 'projection', 'fieldDisplace', 'fieldRelief', 'fieldColor'];
 
 const fullyWired = renderInputsFromEdges(contractNodes, allWires);
 for (const key of RENDER_INPUTS) {
@@ -127,7 +129,9 @@ for (const key of RENDER_INPUTS) {
   if (wireless[key]) violations.push(`wire-contract: a wireless graph must render nothing, but '${key}' reports connected`);
 }
 const cutDrops: { wire: keyof typeof canonicalWires; input: RenderInput }[] = [
-  { wire: 'fieldRenderer', input: 'field' },
+  { wire: 'displaceRenderer', input: 'fieldDisplace' },
+  { wire: 'reliefRenderer', input: 'fieldRelief' },
+  { wire: 'colorFieldRenderer', input: 'fieldColor' },
   { wire: 'atlasTiling', input: 'geometry' },
   { wire: 'tilingProjection', input: 'geometry' },
   { wire: 'rendererDisplay', input: 'geometry' },

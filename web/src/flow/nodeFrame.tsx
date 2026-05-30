@@ -298,7 +298,9 @@ export function NodeFrame({
 export const SCENE_PASS_INLETS: PortSpec[] = [
   { id: 'surface', label: 'Surface' },
   { id: 'lighting', label: 'Light' },
-  { id: 'field', label: 'Field' },
+  { id: 'displace', label: 'Displace' },
+  { id: 'relief', label: 'Relief' },
+  { id: 'color', label: 'Color' },
 ];
 
 export const DISPLAY_INLETS: PortSpec[] = [{ id: 'frame', label: 'Frame' }];

@@ -92,7 +92,9 @@ function createRendererUniforms() {
     colorMix: uniform(1),
     materialMix: uniform(1),
     projectionMix: uniform(1),
-    fieldMix: uniform(1),
+    displaceMix: uniform(1),
+    reliefMix: uniform(1),
+    colorFieldMix: uniform(1),
     projBlend: uniform(0),
     projScale: uniform(1.525),
     shadeFloor: uniform(0.04),
@@ -554,10 +556,11 @@ export class WallpaperRenderer {
   }
 
   // The surface z-displacement. The scalar relief (positionLocal.z * reliefScale)
-  // is always present; the displacement FIELD — the per-tile depth plus a ripple
-  // that modulates (relief + depth) — is gated by fieldMix (the §0 field wire) and
-  // contributes nothing when cut. So: cut the field -> static relief; relief 0 AND
-  // depth 0 -> flat; ripple only ever waves displacement that actually exists.
+  // is always present. Two distinct fields ride on top, each on its own §0 wire:
+  // the DISPLACE field (per-tile bulge, gated by displaceMix) and the RELIEF field
+  // (a wave that modulates the baked relief, gated by reliefMix). Cut a field's
+  // wire -> only that field stops; cut both -> static relief; relief 0 AND
+  // displace 0 -> flat. Each wave only ever moves displacement that exists.
   surfaceZNode(
     boostedX: Node<'float'>,
     boostedY: Node<'float'>,
@@ -566,10 +569,12 @@ export class WallpaperRenderer {
     tileCenter: Node<'vec2'>,
   ): Node<'float'> {
     const reliefZ = positionLocal.z.mul(this.uniforms.reliefScale);
-    const depth = this.surfaceDepthNode(boostedX, boostedY, tileRing, tileOrient, tileCenter);
+    const displaceField = this.surfaceDepthNode(boostedX, boostedY, tileRing, tileOrient, tileCenter);
     const wave = this.rippleWaveNode(boostedX, boostedY).mul(this.uniforms.rippleAmp);
-    const field = depth.add(reliefZ.add(depth).mul(wave));
-    return reliefZ.add(field.mul(this.uniforms.fieldMix));
+    const reliefField = reliefZ.mul(wave);
+    return reliefZ
+      .add(displaceField.mul(this.uniforms.displaceMix))
+      .add(reliefField.mul(this.uniforms.reliefMix));
   }
 
   boostedPositionNode() {
@@ -596,7 +601,7 @@ export class WallpaperRenderer {
     const tileType = attribute<'float'>('tileType', 'float');
     const tileRing = attribute<'float'>('tileRing', 'float');
     const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
-    const rippleColor = this.rippleWaveNode(positionLocal.x, positionLocal.y).mul(this.uniforms.rippleColorAmp).mul(this.uniforms.fieldMix);
+    const rippleColor = this.rippleWaveNode(positionLocal.x, positionLocal.y).mul(this.uniforms.rippleColorAmp).mul(this.uniforms.colorFieldMix);
     const material = new MeshPhysicalNodeMaterial({
       side: DoubleSide,
     });
@@ -693,21 +698,27 @@ export class WallpaperRenderer {
     const colorMix = inputs.color ? 1 : 0;
     const materialMix = inputs.material ? 1 : 0;
     const projectionMix = inputs.projection ? 1 : 0;
-    const fieldMix = inputs.field ? 1 : 0;
+    const displaceMix = inputs.fieldDisplace ? 1 : 0;
+    const reliefMix = inputs.fieldRelief ? 1 : 0;
+    const colorFieldMix = inputs.fieldColor ? 1 : 0;
     const changed =
       this.renderConnected !== inputs.geometry ||
       this.lightingConnected !== inputs.lighting ||
       this.uniforms.colorMix.value !== colorMix ||
       this.uniforms.materialMix.value !== materialMix ||
       this.uniforms.projectionMix.value !== projectionMix ||
-      this.uniforms.fieldMix.value !== fieldMix;
+      this.uniforms.displaceMix.value !== displaceMix ||
+      this.uniforms.reliefMix.value !== reliefMix ||
+      this.uniforms.colorFieldMix.value !== colorFieldMix;
     if (!changed) return;
     this.renderConnected = inputs.geometry;
     this.lightingConnected = inputs.lighting;
     this.uniforms.colorMix.value = colorMix;
     this.uniforms.materialMix.value = materialMix;
     this.uniforms.projectionMix.value = projectionMix;
-    this.uniforms.fieldMix.value = fieldMix;
+    this.uniforms.displaceMix.value = displaceMix;
+    this.uniforms.reliefMix.value = reliefMix;
+    this.uniforms.colorFieldMix.value = colorFieldMix;
     this.applyRenderConnected();
     this.applyLights(this.settings);
     this.render();

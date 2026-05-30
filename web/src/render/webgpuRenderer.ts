@@ -95,6 +95,7 @@ function createRendererUniforms() {
     displaceMix: uniform(1),
     reliefMix: uniform(1),
     colorFieldMix: uniform(1),
+    undulateMix: uniform(1),
     projBlend: uniform(0),
     projScale: uniform(1.525),
     shadeFloor: uniform(0.04),
@@ -102,6 +103,7 @@ function createRendererUniforms() {
     brightness: uniform(1),
     rippleAmp: uniform(0),
     rippleColorAmp: uniform(0),
+    undulateAmp: uniform(0),
     rippleFreq: uniform(4),
     depthScale: uniform(0.42),
     reliefScale: uniform(0.55),
@@ -556,11 +558,12 @@ export class WallpaperRenderer {
   }
 
   // The surface z-displacement. The scalar relief (positionLocal.z * reliefScale)
-  // is always present. Two distinct fields ride on top, each on its own §0 wire:
-  // the DISPLACE field (per-tile bulge, gated by displaceMix) and the RELIEF field
-  // (a wave that modulates the baked relief, gated by reliefMix). Cut a field's
-  // wire -> only that field stops; cut both -> static relief; relief 0 AND
-  // displace 0 -> flat. Each wave only ever moves displacement that exists.
+  // is always present. Three distinct fields ride on top, each on its own §0 wire:
+  //  - DISPLACE (per-tile bulge, gated by displaceMix),
+  //  - RELIEF   (a wave that modulates the baked relief, gated by reliefMix),
+  //  - UNDULATE (an ADDITIVE wave across the whole atlas — z += sin*amp — so flat
+  //    regions undulate too; this is the "big wave", gated by undulateMix).
+  // Cut a field's wire -> only that field stops; cut all -> static relief.
   surfaceZNode(
     boostedX: Node<'float'>,
     boostedY: Node<'float'>,
@@ -570,11 +573,13 @@ export class WallpaperRenderer {
   ): Node<'float'> {
     const reliefZ = positionLocal.z.mul(this.uniforms.reliefScale);
     const displaceField = this.surfaceDepthNode(boostedX, boostedY, tileRing, tileOrient, tileCenter);
-    const wave = this.rippleWaveNode(boostedX, boostedY).mul(this.uniforms.rippleAmp);
-    const reliefField = reliefZ.mul(wave);
+    const wave = this.rippleWaveNode(boostedX, boostedY);
+    const reliefField = reliefZ.mul(wave).mul(this.uniforms.rippleAmp);
+    const undulateField = wave.mul(this.uniforms.undulateAmp);
     return reliefZ
       .add(displaceField.mul(this.uniforms.displaceMix))
-      .add(reliefField.mul(this.uniforms.reliefMix));
+      .add(reliefField.mul(this.uniforms.reliefMix))
+      .add(undulateField.mul(this.uniforms.undulateMix));
   }
 
   boostedPositionNode() {
@@ -701,6 +706,7 @@ export class WallpaperRenderer {
     const displaceMix = inputs.fieldDisplace ? 1 : 0;
     const reliefMix = inputs.fieldRelief ? 1 : 0;
     const colorFieldMix = inputs.fieldColor ? 1 : 0;
+    const undulateMix = inputs.fieldUndulate ? 1 : 0;
     const changed =
       this.renderConnected !== inputs.geometry ||
       this.lightingConnected !== inputs.lighting ||
@@ -709,7 +715,8 @@ export class WallpaperRenderer {
       this.uniforms.projectionMix.value !== projectionMix ||
       this.uniforms.displaceMix.value !== displaceMix ||
       this.uniforms.reliefMix.value !== reliefMix ||
-      this.uniforms.colorFieldMix.value !== colorFieldMix;
+      this.uniforms.colorFieldMix.value !== colorFieldMix ||
+      this.uniforms.undulateMix.value !== undulateMix;
     if (!changed) return;
     this.renderConnected = inputs.geometry;
     this.lightingConnected = inputs.lighting;
@@ -719,6 +726,7 @@ export class WallpaperRenderer {
     this.uniforms.displaceMix.value = displaceMix;
     this.uniforms.reliefMix.value = reliefMix;
     this.uniforms.colorFieldMix.value = colorFieldMix;
+    this.uniforms.undulateMix.value = undulateMix;
     this.applyRenderConnected();
     this.applyLights(this.settings);
     this.render();
@@ -753,6 +761,7 @@ export class WallpaperRenderer {
     this.baseRippleAmp = intSetting(settings, 'field_relief', 0, 100) / 100 * 0.075;
     this.uniforms.rippleAmp.value = this.baseRippleAmp;
     this.uniforms.rippleColorAmp.value = intSetting(settings, 'field_color', 0, 100) / 100 * 0.22;
+    this.uniforms.undulateAmp.value = intSetting(settings, 'field_undulate', 0, 100) / 100 * 0.075;
     this.uniforms.rippleFreq.value = intSetting(settings, 'field_freq', 0, 100) / 10;
     this.scene.environmentIntensity = 0.8 + mat.clearcoat * 0.9 + mat.metalness * 0.5;
     const border = oklchToLinearSrgb([
@@ -867,6 +876,7 @@ export class WallpaperRenderer {
     this.uniforms.metalness.value = Math.min(1, mat.metalness);
     this.uniforms.rippleAmp.value = modulatedValue('field_relief', 0, 100) / 100 * 0.075;
     this.uniforms.rippleColorAmp.value = modulatedValue('field_color', 0, 100) / 100 * 0.22;
+    this.uniforms.undulateAmp.value = modulatedValue('field_undulate', 0, 100) / 100 * 0.075;
     this.uniforms.rippleFreq.value = modulatedValue('field_freq', 0, 100) / 10;
     const depthScale = modulatedValue('field_displace', 0, 100) / 100;
     this.uniforms.depthScale.value = Math.min(1.5, depthScale);

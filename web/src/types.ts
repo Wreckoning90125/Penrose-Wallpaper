@@ -138,6 +138,7 @@ export type RenderInputs = {
   fieldDisplace: boolean;
   fieldRelief: boolean;
   fieldColor: boolean;
+  fieldUndulate: boolean;
 };
 
 export type GamutLabel = string;

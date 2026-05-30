@@ -60,6 +60,7 @@ PREF_SCHEMA = {
     "bg_h": int,
     "field_relief": int,
     "field_color": int,
+    "field_undulate": int,
     "field_freq": int,
     "field_speed": int,
     "pan_mode": str,

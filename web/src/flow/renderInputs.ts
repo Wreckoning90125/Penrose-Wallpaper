@@ -45,5 +45,6 @@ export function renderInputsFromEdges(nodes: readonly Node[], edges: readonly Ed
   const fieldDisplace = link('postfx', 'displace', 'renderer', 'displace');
   const fieldRelief = link('postfx', 'relief', 'renderer', 'relief');
   const fieldColor = link('postfx', 'color', 'renderer', 'color');
-  return { geometry: renderChainConnected(nodes, edges), lighting, color, material, projection, fieldDisplace, fieldRelief, fieldColor };
+  const fieldUndulate = link('postfx', 'undulate', 'renderer', 'undulate');
+  return { geometry: renderChainConnected(nodes, edges), lighting, color, material, projection, fieldDisplace, fieldRelief, fieldColor, fieldUndulate };
 }

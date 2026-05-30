@@ -115,10 +115,11 @@ const canonicalWires = {
   displaceRenderer: wire('w8', 'postfx', 'displace', 'renderer', 'displace'),
   reliefRenderer: wire('w9', 'postfx', 'relief', 'renderer', 'relief'),
   colorFieldRenderer: wire('w10', 'postfx', 'color', 'renderer', 'color'),
+  undulateRenderer: wire('w11', 'postfx', 'undulate', 'renderer', 'undulate'),
 };
 const allWires: Edge[] = Object.values(canonicalWires);
-type RenderInput = 'geometry' | 'lighting' | 'color' | 'material' | 'projection' | 'fieldDisplace' | 'fieldRelief' | 'fieldColor';
-const RENDER_INPUTS: readonly RenderInput[] = ['geometry', 'lighting', 'color', 'material', 'projection', 'fieldDisplace', 'fieldRelief', 'fieldColor'];
+type RenderInput = 'geometry' | 'lighting' | 'color' | 'material' | 'projection' | 'fieldDisplace' | 'fieldRelief' | 'fieldColor' | 'fieldUndulate';
+const RENDER_INPUTS: readonly RenderInput[] = ['geometry', 'lighting', 'color', 'material', 'projection', 'fieldDisplace', 'fieldRelief', 'fieldColor', 'fieldUndulate'];
 
 const fullyWired = renderInputsFromEdges(contractNodes, allWires);
 for (const key of RENDER_INPUTS) {
@@ -132,6 +133,7 @@ const cutDrops: { wire: keyof typeof canonicalWires; input: RenderInput }[] = [
   { wire: 'displaceRenderer', input: 'fieldDisplace' },
   { wire: 'reliefRenderer', input: 'fieldRelief' },
   { wire: 'colorFieldRenderer', input: 'fieldColor' },
+  { wire: 'undulateRenderer', input: 'fieldUndulate' },
   { wire: 'atlasTiling', input: 'geometry' },
   { wire: 'tilingProjection', input: 'geometry' },
   { wire: 'rendererDisplay', input: 'geometry' },

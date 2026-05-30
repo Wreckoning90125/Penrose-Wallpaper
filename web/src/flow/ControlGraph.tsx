@@ -784,6 +784,7 @@ export function ControlGraph(props: ControlGraphProps) {
     { id: 'postfx-renderer-displace', source: 'postfx', sourceHandle: 'displace', target: 'renderer', targetHandle: 'displace' },
     { id: 'postfx-renderer-relief', source: 'postfx', sourceHandle: 'relief', target: 'renderer', targetHandle: 'relief' },
     { id: 'postfx-renderer-color', source: 'postfx', sourceHandle: 'color', target: 'renderer', targetHandle: 'color' },
+    { id: 'postfx-renderer-undulate', source: 'postfx', sourceHandle: 'undulate', target: 'renderer', targetHandle: 'undulate' },
     { id: 'renderer-tonemap', source: 'renderer', sourceHandle: 'frame', target: 'tonemap', targetHandle: 'frame' },
     { id: 'tonemap-display', source: 'tonemap', sourceHandle: 'frame', target: 'display', targetHandle: 'frame' },
     { id: 'transport-analysis', source: 'transport', sourceHandle: 'out', target: 'analysis', targetHandle: 'transport', animated: true },

@@ -732,7 +732,7 @@ export const RippleTargetNode = memo(function RippleTargetNode({ data }: NodeCom
       wide
       variant={2}
       inlets={portSpecsFromControls(RIPPLE_TARGET_CONTROLS)}
-      outlets={[{ id: 'displace', label: 'Displace' }, { id: 'relief', label: 'Relief' }, { id: 'color', label: 'Color' }]}
+      outlets={[{ id: 'displace', label: 'Displace' }, { id: 'relief', label: 'Relief' }, { id: 'color', label: 'Color' }, { id: 'undulate', label: 'Undulate' }]}
       activeInputs={data.activeInputs}
       activeOutputs={data.activeOutputs}
     >

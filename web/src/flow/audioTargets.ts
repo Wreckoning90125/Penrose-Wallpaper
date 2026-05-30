@@ -10,6 +10,7 @@ export const AUDIO_TARGET_RANGES: Record<string, readonly [number, number]> = {
   field_displace: [0, 100],
   field_relief: [0, 100],
   field_color: [0, 100],
+  field_undulate: [0, 100],
   field_freq: [0, 100],
   field_speed: [0, 200],
   generation: [0, 8],

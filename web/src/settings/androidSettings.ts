@@ -23,6 +23,7 @@ export type Settings = {
   bg_h: SettingValue;
   field_relief: SettingValue;
   field_color: SettingValue;
+  field_undulate: SettingValue;
   field_freq: SettingValue;
   field_speed: SettingValue;
   brightness: SettingValue;
@@ -89,6 +90,7 @@ export const DEFAULT_SETTINGS: Settings = {
   bg_h: 280,
   field_relief: 24,
   field_color: 24,
+  field_undulate: 24,
   field_freq: 65,
   field_speed: 40,
   brightness: 100,

@@ -362,6 +362,18 @@ export const EdgeProfileNode = memo(function EdgeProfileNode({ data }: NodeCompo
         <button type="button" className={borderOn ? 'active' : ''} onClick={() => data.onSetting('border_on', 'true')}>On</button>
         <button type="button" className={!borderOn ? 'active' : ''} onClick={() => data.onSetting('border_on', 'false')}>Off</button>
       </div>
+      <div className="segmented nodrag nopan">
+        {['Miter', 'Round', 'Bevel'].map((label, idx) => (
+          <button
+            key={label}
+            type="button"
+            className={intSetting(data.settings, 'border_join', 0, 2) === idx ? 'active' : ''}
+            onClick={() => data.onSetting('border_join', String(idx))}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <div className="control-grid two-col">
         {BORDER_CONTROLS.map(([key, label, min, max, step]) => {
           const handlers = settingRangeHandlers(data, key);

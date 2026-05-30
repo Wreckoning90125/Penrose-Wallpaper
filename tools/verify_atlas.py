@@ -49,6 +49,7 @@ PREF_SCHEMA = {
     "color_count": int,
     "color_mode": str,
     "border_on": bool,
+    "border_join": str,
     "border_width": int,
     "border_l": int,
     "border_c": int,
@@ -104,6 +105,7 @@ STRING_VALUES = {
     "preset": {str(v) for v in range(12)},
     "color_mode": {"0", "1", "2"},
     "bg_mode": {"0", "1"},
+    "border_join": {"0", "1", "2"},
     "pan_mode": {"0", "1"},
     "projection": {"0", "1"},
 }

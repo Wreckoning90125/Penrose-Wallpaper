@@ -227,6 +227,7 @@ export class WallpaperRenderer {
       transparent: true,
       opacity: 0.4,
       depthWrite: false,
+      side: DoubleSide,
     });
     this.edgeMaterial.positionNode = this.boostedEdgePositionNode();
     this.mesh = null;

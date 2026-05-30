@@ -366,6 +366,8 @@ function buildEdgeGeometry(
   const width = radius * intSetting(settings, 'border_width', 0, 600) / 600 * 0.16;
   if (!borderOn || borderAlpha <= 0 || width <= 1e-7) return null;
 
+  // border_join: 0 miter (clamped to bevel past the limit) · 1 round · 2 bevel.
+  const joinStyle = intSetting(settings, 'border_join', 0, 2);
   const edges = collectVisibleEdges(patch, projector, snap);
   const sub = projector.enabled ? intSetting(settings, 'hyp_border_subdiv', 1, 32) : 1;
   const halfWidth = width * 0.5;
@@ -375,35 +377,61 @@ function buildEdgeGeometry(
   const tileOrient: number[] = [];
   const tileCenter: number[] = [];
 
+  const pushTri = (p0: Point, p1: Point, p2: Point, ring: number, orient: Point, center: Point): void => {
+    for (const p of [p0, p1, p2]) {
+      positions.push(p[0], p[1], edgeZ);
+      tileRing.push(ring);
+      tileOrient.push(orient[0], orient[1]);
+      tileCenter.push(center[0], center[1]);
+    }
+  };
+
+  // Joinery: each tile-edge endpoint accumulates the incident edge directions so
+  // the vertices where borders meet can be filled (miter/round/bevel) instead of
+  // overlapping square-capped rectangles.
+  type Incident = { dir: Point; ring: number; orient: Point; center: Point };
+  const joints = new Map<string, { x: number; y: number; incident: Incident[] }>();
+  const addIncident = (p: Point, dir: Point, ring: number, orient: Point, center: Point): void => {
+    const key = `${Math.round(p[0] * 2048)}:${Math.round(p[1] * 2048)}`;
+    const joint = joints.get(key) ?? { x: p[0], y: p[1], incident: [] };
+    joint.incident.push({ dir, ring, orient, center });
+    joints.set(key, joint);
+  };
+
   for (const edge of edges) {
+    const pts: Point[] = [];
+    for (let i = 0; i <= sub; i++) {
+      const p = lerp2(edge.a, edge.b, i / sub);
+      pts.push(snap(projector.map(p[0], p[1])));
+    }
+    // The ribbon: one quad per projected segment, offset by its own normal, with
+    // no end-cap extension — the joints fill the gaps at the tile vertices.
     for (let i = 0; i < sub; i++) {
-      const a = i / sub;
-      const b = (i + 1) / sub;
-      const p1 = lerp2(edge.a, edge.b, a);
-      const p2 = lerp2(edge.a, edge.b, b);
-      const [x1, y1] = snap(projector.map(p1[0], p1[1]));
-      const [x2, y2] = snap(projector.map(p2[0], p2[1]));
-      const dx = x2 - x1;
-      const dy = y2 - y1;
+      const p1 = pts[i]!;
+      const p2 = pts[i + 1]!;
+      const dx = p2[0] - p1[0];
+      const dy = p2[1] - p1[1];
       const len = Math.hypot(dx, dy);
       if (len <= 1e-8) continue;
-      const tx = dx / len;
-      const ty = dy / len;
-      const nx = -ty * halfWidth;
-      const ny = tx * halfWidth;
-      const ex = tx * halfWidth;
-      const ey = ty * halfWidth;
-      const ax = x1 - ex;
-      const ay = y1 - ey;
-      const bx = x2 + ex;
-      const by = y2 + ey;
-      pushQuad(positions, [ax + nx, ay + ny, edgeZ], [ax - nx, ay - ny, edgeZ], [bx + nx, by + ny, edgeZ], [bx - nx, by - ny, edgeZ]);
-      for (let vertex = 0; vertex < 6; vertex++) {
-        tileRing.push(edge.ring);
-        tileOrient.push(edge.orient[0], edge.orient[1]);
-        tileCenter.push(edge.center[0], edge.center[1]);
-      }
+      const nx = -dy / len * halfWidth;
+      const ny = dx / len * halfWidth;
+      const a: Point = [p1[0] + nx, p1[1] + ny];
+      const b: Point = [p1[0] - nx, p1[1] - ny];
+      const c: Point = [p2[0] + nx, p2[1] + ny];
+      const d: Point = [p2[0] - nx, p2[1] - ny];
+      pushTri(a, b, c, edge.ring, edge.orient, edge.center);
+      pushTri(b, d, c, edge.ring, edge.orient, edge.center);
     }
+    const start = pts[0]!;
+    const afterStart = pts[1] ?? pts[0]!;
+    addIncident(start, unit2(afterStart[0] - start[0], afterStart[1] - start[1]), edge.ring, edge.orient, edge.center);
+    const end = pts[sub]!;
+    const beforeEnd = pts[sub - 1] ?? pts[sub]!;
+    addIncident(end, unit2(beforeEnd[0] - end[0], beforeEnd[1] - end[1]), edge.ring, edge.orient, edge.center);
+  }
+
+  for (const joint of joints.values()) {
+    fillBorderJoint(joint, joinStyle, halfWidth, pushTri);
   }
 
   if (positions.length === 0) return null;
@@ -416,6 +444,75 @@ function buildEdgeGeometry(
   geometry.setAttribute('tileCenter', new BufferAttribute(new Float32Array(tileCenter), 2));
   geometry.computeBoundingSphere();
   return geometry;
+}
+
+function unit2(x: number, y: number): Point {
+  const len = Math.hypot(x, y);
+  return len <= 1e-9 ? [1, 0] : [x / len, y / len];
+}
+
+function lineIntersect(p: Point, d: Point, q: Point, e: Point): Point | null {
+  const denom = d[0] * e[1] - d[1] * e[0];
+  if (Math.abs(denom) < 1e-9) return null;
+  const s = ((q[0] - p[0]) * e[1] - (q[1] - p[1]) * e[0]) / denom;
+  return [p[0] + s * d[0], p[1] + s * d[1]];
+}
+
+const BORDER_MITER_LIMIT = 4;
+
+// Fill the joint where border ribbons meet at a tile vertex, per join style:
+// round = a disc fan, bevel = a flat chamfer per wedge, miter = extend the two
+// offset edges to their intersection (clamped to a bevel past the miter limit or
+// when the apex would fall inward).
+function fillBorderJoint(
+  joint: { x: number; y: number; incident: { dir: Point; ring: number; orient: Point; center: Point }[] },
+  joinStyle: number,
+  halfWidth: number,
+  pushTri: (p0: Point, p1: Point, p2: Point, ring: number, orient: Point, center: Point) => void,
+): void {
+  const lead = joint.incident[0];
+  if (!lead) return;
+  const center: Point = [joint.x, joint.y];
+
+  if (joinStyle === 1) {
+    const segs = 10;
+    for (let i = 0; i < segs; i++) {
+      const t0 = (i / segs) * Math.PI * 2;
+      const t1 = ((i + 1) / segs) * Math.PI * 2;
+      pushTri(
+        center,
+        [joint.x + Math.cos(t0) * halfWidth, joint.y + Math.sin(t0) * halfWidth],
+        [joint.x + Math.cos(t1) * halfWidth, joint.y + Math.sin(t1) * halfWidth],
+        lead.ring, lead.orient, lead.center,
+      );
+    }
+    return;
+  }
+
+  const sorted = [...joint.incident].sort((p, q) => Math.atan2(p.dir[1], p.dir[0]) - Math.atan2(q.dir[1], q.dir[0]));
+  const n = sorted.length;
+  for (let i = 0; i < n; i++) {
+    const e0 = sorted[i]!;
+    const e1 = sorted[(i + 1) % n]!;
+    const c0: Point = [joint.x - e0.dir[1] * halfWidth, joint.y + e0.dir[0] * halfWidth];
+    const c1: Point = [joint.x + e1.dir[1] * halfWidth, joint.y - e1.dir[0] * halfWidth];
+    if (joinStyle === 0) {
+      const apex = lineIntersect(c0, e0.dir, c1, e1.dir);
+      if (apex) {
+        const ex = c1[0] - c0[0];
+        const ey = c1[1] - c0[1];
+        const sideCenter = ex * (joint.y - c0[1]) - ey * (joint.x - c0[0]);
+        const sideApex = ex * (apex[1] - c0[1]) - ey * (apex[0] - c0[0]);
+        const miterLen = Math.hypot(apex[0] - joint.x, apex[1] - joint.y);
+        if (sideCenter * sideApex < 0 && miterLen <= halfWidth * BORDER_MITER_LIMIT) {
+          pushTri(center, c0, apex, e0.ring, e0.orient, e0.center);
+          pushTri(center, apex, c1, e0.ring, e0.orient, e0.center);
+          continue;
+        }
+      }
+    }
+    pushTri(center, c0, c1, e0.ring, e0.orient, e0.center);
+  }
 }
 
 function buildUv(position: Float32Array): Float32Array {
@@ -492,10 +589,6 @@ function pointKey([x, y]: Point): string {
 
 function lerp2(a: Point, b: Point, t: number): Point {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-}
-
-function pushQuad(out: number[], a: Point3, b: Point3, c: Point3, d: Point3): void {
-  out.push(...a, ...b, ...c, ...b, ...d, ...c);
 }
 
 function createVertexSnapper(epsilon: number): Snapper {

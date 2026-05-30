@@ -30,6 +30,7 @@ const GEOMETRY_SETTINGS: SettingKey[] = [
   'border_a',
   'border_c',
   'border_h',
+  'border_join',
   'border_l',
   'border_on',
   'border_width',

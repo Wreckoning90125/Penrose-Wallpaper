@@ -44,6 +44,7 @@ export const RIPPLE_TARGET_SETTING_KEYS: readonly SettingKey[] = [
 ];
 export const BORDER_SETTING_KEYS: readonly SettingKey[] = [
   'border_on',
+  'border_join',
   'border_width',
   'border_l',
   'border_c',
@@ -59,6 +60,7 @@ export const GRAPH_PRESET_SETTING_KEYS: readonly SettingKey[] = [
   'border_a',
   'border_c',
   'border_h',
+  'border_join',
   'border_l',
   'border_on',
   'border_width',

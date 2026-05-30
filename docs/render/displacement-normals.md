@@ -59,6 +59,13 @@ still faceted, but on a near-flat sheet the shading normal dominates perceived
 smoothness, so the sheet undulates smoothly. Geometry sampling (vertex positions)
 and the shading normal are independent; the bug conflated them.
 
+This does **not** flatten anything you displace. The normal is the slope of the
+displacement `f`, so whatever you dial in — `field_displace` bulge,
+`field_relief` wave, undulation — shows as its real (smooth) shape; relief
+appears exactly when you ask for it. What's removed is only the *spurious* facets:
+tilting the sheet no longer exposes the tile tessellation. (Exception: the static
+baked `mat_relief` is constant under the finite difference — see below.)
+
 ## Process lesson
 
 Same-geometry-two-outcomes falsified the poly-count hypothesis on the first

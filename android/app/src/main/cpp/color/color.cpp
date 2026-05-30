@@ -23,7 +23,7 @@ inline Oklch lerp(Oklch a, Oklch b, float t) {
 }
 
 // Build evenly spaced color stops between two OKLCH endpoints and pad to
-// kMaxColors with hue-wheel fallbacks so unused slots aren't undefined.
+// kMaxColors with generated hue-wheel colors so unused slots stay defined.
 void fillEvenStops(PresetResult& out, Oklch c0, Oklch c1, int k) {
     int n = std::clamp(k, 1, kMaxColors);
     if (n == 1) {

@@ -1,10 +1,10 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { ChevronLeft, ChevronRight, GripVertical } from 'lucide-react';
 import type { BufferGeometry } from 'three/webgpu';
 import { loadAtlasManifest, firstTarget, targetSettings } from './atlas/loadAtlas';
 import { familyByValue, maxGenerationForFamily, seedLabel, seedOptionsForFamily } from './tiling/families';
-import { buildPalette, displayGamutLabel, MAX_COLORS, type Oklch } from './color/palette';
+import { buildPalette, displayGamutLabel, MAX_COLORS, type Oklch, type Palette } from './color/palette';
 import {
   DEFAULT_SETTINGS,
   intSetting,
@@ -14,11 +14,18 @@ import {
   type Settings,
 } from './settings/androidSettings';
 import { useWebAudioGraph } from './audio/useWebAudioGraph';
-import type { AtlasCategory, AtlasItem, AtlasManifest, Gains, Patch } from './types';
+import { ControlGraph } from './flow/ControlGraph';
+import { clampNumber } from './util/clamp';
+import type { AtlasCategory, AtlasItem, AtlasManifest, BoostPosition, DragMode, Gains, GraphPresetAppState, LiveBoostStore, Patch, PostChainSpec, RenderInputs } from './types';
 import type { WallpaperRenderer } from './render/webgpuRenderer';
 
 const CURRENT_CONTROLS = '__current_controls__';
-const ControlGraph = lazy(() => import('./flow/ControlGraph').then(module => ({ default: module.ControlGraph })));
+// Settings that change the baked tiling structure (vertices + the per-vertex
+// paletteSlot index), so changing one must rebuild the mesh. NOT included:
+// `preset`/`customColors` — those change only the colour *values* per slot, which
+// `applyPaletteColors` re-bakes live into the `color` attribute without a rebuild.
+// Adding `preset` here would reintroduce a full mesh rebuild on every palette
+// change (and the Poincaré flatten/re-ball flicker that came with it).
 const GEOMETRY_SETTINGS: SettingKey[] = [
   'border_a',
   'border_c',
@@ -28,21 +35,21 @@ const GEOMETRY_SETTINGS: SettingKey[] = [
   'border_width',
   'color_count',
   'color_mode',
-  'hyp_boost_x',
-  'hyp_boost_y',
   'hyp_border_subdiv',
   'hyp_fill_subdiv',
-  'hyp_scale',
-  'mat_relief',
-  'preset',
   'projection',
+];
+const HYPERBOLIC_GEOMETRY_SETTINGS: SettingKey[] = [...GEOMETRY_SETTINGS, 'hyp_scale'];
+const APP_AUDIO_SETTING_KEYS: readonly SettingKey[] = [
+  'generation',
+  'color_count',
+  'hyp_fill_subdiv',
+  'hyp_border_subdiv',
 ];
 
 type SettingsMutator = (current: Settings) => Settings;
-type BoostPosition = {
-  x: number;
-  y: number;
-};
+type AppAudioSettingBases = Partial<Record<SettingKey, number>>;
+type LuminanceModulationBase = { index: number; value: number };
 
 function errorMessage(error: Error | string): string {
   return error instanceof Error ? error.stack ?? error.message : error;
@@ -75,17 +82,79 @@ function copyOklch(color: Oklch): Oklch {
   return [color[0], color[1], color[2]];
 }
 
+
+function finiteModulation(value: number | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function editIsHeld(
+  dragMode: DragMode,
+  heldParams: Record<string, boolean | undefined>,
+  keys: readonly string[],
+): boolean {
+  return dragMode === 'hold' && keys.some(key => heldParams[key] === true);
+}
+
+function sameAppAudioSettings(a: Partial<Settings>, b: Partial<Settings>): boolean {
+  return APP_AUDIO_SETTING_KEYS.every(key => a[key] === b[key]);
+}
+
+function paletteWithLuminance(palette: Palette, index: number, luminance: number): Palette {
+  return {
+    ...palette,
+    colors: palette.colors.map((color, idx): Oklch => (
+      idx === index ? [luminance, color[1], color[2]] : copyOklch(color)
+    )),
+  };
+}
+
+function createLiveBoostStore(): LiveBoostStore {
+  let snapshot: BoostPosition | null = null;
+  const listeners = new Set<() => void>();
+  return {
+    getSnapshot: () => snapshot,
+    set: (value: BoostPosition | null) => {
+      if (snapshot?.x === value?.x && snapshot?.y === value?.y) return;
+      snapshot = value;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}
+
 export function App() {
   const viewportRef = useRef<HTMLElement | null>(null);
   const rendererRef = useRef<WallpaperRenderer | null>(null);
   const boostFrameRef = useRef(0);
   const boostRef = useRef<BoostPosition | null>(null);
+  const liveBoostStoreRef = useRef<LiveBoostStore | null>(null);
+  const heldParamsRef = useRef<Record<string, boolean | undefined>>({});
+  const previewSettingsRef = useRef<Settings | null>(null);
+  const audioModulationsRef = useRef<Record<string, number | undefined>>({});
+  const postChainRef = useRef<PostChainSpec>([]);
+  const renderInputsRef = useRef<RenderInputs>({ geometry: true, lighting: true, color: true, material: true, projection: true, field: true });
+  const applyAudioDriveRef = useRef<() => void>(() => undefined);
+  const appModulationFrameRef = useRef(0);
+  const appAudioSettingBasesRef = useRef<AppAudioSettingBases>({});
+  const luminanceModBaseRef = useRef<LuminanceModulationBase | null>(null);
+  const luminanceModActiveRef = useRef(false);
+  const gainsRef = useRef<Gains>({ relief: 0.28, emissive: 0.55, film: 0.36, metal: 0.18 });
+  const dragModeRef = useRef<DragMode>('ride');
+  if (!liveBoostStoreRef.current) liveBoostStoreRef.current = createLiveBoostStore();
+  const liveBoostStore = liveBoostStoreRef.current;
   const [manifest, setManifest] = useState<AtlasManifest | null>(null);
   const [categoryId, setCategoryId] = useState('');
   const [targetId, setTargetId] = useState(CURRENT_CONTROLS);
   const [settings, setSettings] = useState(() => normalizeSettings(DEFAULT_SETTINGS));
+  const [appAudioSettings, setAppAudioSettings] = useState<Partial<Settings>>({});
   const [patch, setPatch] = useState<Patch | null>(null);
   const [customColors, setCustomColors] = useState<Oklch[] | null>(null);
+  const customColorsRef = useRef<Oklch[] | null>(null);
   const [selectedColor, setSelectedColor] = useState(0);
   const [rendererReady, setRendererReady] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(true);
@@ -93,6 +162,9 @@ export function App() {
   const [loading, setLoading] = useState('Loading atlas');
   const [error, setError] = useState('');
   const [gains, setGains] = useState({ relief: 0.28, emissive: 0.55, film: 0.36, metal: 0.18 });
+  const [dragMode, setDragMode] = useState<DragMode>('ride');
+  const settingsRef = useRef(settings);
+  const selectedColorRef = useRef(selectedColor);
   const audio = useWebAudioGraph();
 
   const activeCategory = useMemo(() => (
@@ -108,10 +180,33 @@ export function App() {
   const seedOptions = seedOptionsForFamily(settings.family);
   const maxGeneration = maxGenerationForFamily(settings.family);
   const colorCount = intSetting(settings, 'color_count', 2, MAX_COLORS);
+  const palettePreset = intSetting(settings, 'preset', 0, 11);
   const palette = useMemo(() => (
-    buildPalette(intSetting(settings, 'preset', 0, 11), colorCount, customColors)
-  ), [colorCount, customColors, settings]);
-  const geometrySettingsKey = useMemo(() => settingsKey(settings, GEOMETRY_SETTINGS), [settings]);
+    buildPalette(palettePreset, colorCount, customColors)
+  ), [colorCount, customColors, palettePreset]);
+  const renderSettings = useMemo(() => (
+    clampGeneration(normalizeSettings({ ...settings, ...appAudioSettings }))
+  ), [appAudioSettings, settings]);
+  const renderColorCount = intSetting(renderSettings, 'color_count', 2, MAX_COLORS);
+  const renderPalettePreset = intSetting(renderSettings, 'preset', 0, 11);
+  const renderPalette = useMemo(() => (
+    buildPalette(renderPalettePreset, renderColorCount, customColors)
+  ), [customColors, renderColorCount, renderPalettePreset]);
+  const renderColorCountRef = useRef(renderColorCount);
+  const renderPaletteRef = useRef(renderPalette);
+  // Lets previewSetting read the live palette without a dependency on it, so
+  // previewSetting stays referentially stable across color/setting changes. If
+  // it weren't stable, the control-graph's baseNodes (which embeds it) would
+  // recompute every color-wheel move and the graph would rebuild/flash.
+  const paletteRef = useRef(palette);
+  // Lets the geometry-rebuild effect read the latest settings without depending on
+  // renderSettings directly — so it rebuilds the mesh only when a geometry-affecting
+  // setting changes (geometrySettingsKey), not on every param.
+  const renderSettingsRef = useRef(renderSettings);
+  const geometrySettingsKey = useMemo(() => {
+    const keys = String(renderSettings.projection) === '1' ? HYPERBOLIC_GEOMETRY_SETTINGS : GEOMETRY_SETTINGS;
+    return settingsKey(renderSettings, keys);
+  }, [renderSettings]);
   const selectedColorValue: Oklch =
     palette.colors[Math.min(selectedColor, colorCount - 1)] ?? palette.colors[0] ?? [0.78, 0.13, 80];
   const drawerStyle: CSSProperties & Record<'--drawer-width', string> = {
@@ -129,6 +224,159 @@ export function App() {
       return current;
     });
   }, [updateSettings]);
+
+  // Reads everything from refs so it is referentially STABLE (empty deps). It is
+  // embedded in the control-graph baseNodes; an unstable previewSetting made
+  // baseNodes recompute on every color-wheel move, which rebuilt the whole graph
+  // and blacked it out. Keep it dependency-free.
+  const previewSetting = useCallback((key: SettingKey, value: SettingValue) => {
+    const next = {
+      ...(previewSettingsRef.current ?? settingsRef.current),
+      [key]: value,
+    };
+    previewSettingsRef.current = next;
+    const nextPalette = key === 'color_count' || key === 'preset'
+      ? buildPalette(intSetting(next, 'preset', 0, 11), intSetting(next, 'color_count', 2, MAX_COLORS), customColorsRef.current)
+      : paletteRef.current;
+    rendererRef.current?.setSettings(next, nextPalette);
+    // setSettings renders the un-modulated baseline; re-apply the current audio
+    // modulation in the same tick so the preview render already includes it.
+    // Without this, every slider move (and the release frame) flashes one
+    // un-modulated frame before the audio loop re-mods — the ride/hold jitter.
+    applyAudioDriveRef.current();
+  }, []);
+
+  const beginEdit = useCallback((paramKey: string) => {
+    heldParamsRef.current[paramKey] = true;
+  }, []);
+
+  const endEdit = useCallback((paramKey: string) => {
+    delete heldParamsRef.current[paramKey];
+  }, []);
+
+  useEffect(() => {
+    previewSettingsRef.current = settings;
+    settingsRef.current = settings;
+    appAudioSettingBasesRef.current = {};
+  }, [settings]);
+
+  useEffect(() => {
+    customColorsRef.current = customColors;
+  }, [customColors]);
+
+  useEffect(() => {
+    selectedColorRef.current = selectedColor;
+  }, [selectedColor]);
+
+  useEffect(() => {
+    renderColorCountRef.current = renderColorCount;
+  }, [renderColorCount]);
+
+  useEffect(() => {
+    paletteRef.current = palette;
+  }, [palette]);
+
+  useEffect(() => {
+    renderPaletteRef.current = renderPalette;
+  }, [renderPalette]);
+
+  useEffect(() => {
+    renderSettingsRef.current = renderSettings;
+  }, [renderSettings]);
+
+  useEffect(() => {
+    gainsRef.current = gains;
+  }, [gains]);
+
+  useEffect(() => {
+    dragModeRef.current = dragMode;
+  }, [dragMode]);
+
+  const applyAudioDrive = useCallback(() => {
+    rendererRef.current?.setAudioDrive({
+      dragMode: dragModeRef.current,
+      heldParams: heldParamsRef.current,
+    }, audioModulationsRef.current);
+  }, [audio]);
+
+  useEffect(() => {
+    applyAudioDriveRef.current = applyAudioDrive;
+  }, [applyAudioDrive]);
+
+  const applyAppAudioModulations = useCallback(() => {
+    const modulations = audioModulationsRef.current;
+    const heldParams = heldParamsRef.current;
+    const dragMode = dragModeRef.current;
+    const baselineSettings = previewSettingsRef.current ?? settingsRef.current;
+    const persistentSettings = settingsRef.current;
+    const bases = appAudioSettingBasesRef.current;
+    const nextAudioSettings: Partial<Settings> = {};
+
+    const applyIntegerTarget = (key: SettingKey, min: number, max: number): void => {
+      const signal = finiteModulation(modulations[key]);
+      const editing = heldParams[key] === true;
+      if (signal === null || editIsHeld(dragMode, heldParams, [key])) {
+        delete bases[key];
+        return;
+      }
+      const currentBaseline = intSetting(baselineSettings, key, min, max);
+      if (dragMode === 'ride' && editing) bases[key] = currentBaseline;
+      const base = bases[key] ?? currentBaseline;
+      bases[key] = base;
+      const persistentValue = intSetting(persistentSettings, key, min, max);
+      const nextValue = Math.round(clampNumber(base + signal * (max - min), min, max));
+      if (nextValue !== persistentValue) nextAudioSettings[key] = nextValue;
+    };
+
+    const generationMax = maxGenerationForFamily(String(baselineSettings.family ?? DEFAULT_SETTINGS.family));
+    applyIntegerTarget('generation', 0, generationMax);
+    applyIntegerTarget('color_count', 2, MAX_COLORS);
+    applyIntegerTarget('hyp_fill_subdiv', 1, 8);
+    applyIntegerTarget('hyp_border_subdiv', 1, 32);
+
+    setAppAudioSettings(current => (
+      sameAppAudioSettings(current, nextAudioSettings) ? current : nextAudioSettings
+    ));
+
+    const selectedIndex = Math.max(0, Math.min(selectedColorRef.current, renderColorCountRef.current - 1));
+    const luminanceKey = `custom_color_${selectedIndex}_luminance`;
+    const luminanceSignal = finiteModulation(modulations['luminance']);
+    const luminanceHeld = editIsHeld(dragMode, heldParams, ['luminance', luminanceKey]);
+    const renderer = rendererRef.current;
+    if (luminanceSignal === null || luminanceHeld || !renderer) {
+      luminanceModBaseRef.current = null;
+      if (luminanceModActiveRef.current && renderer) {
+        renderer.applyPaletteColors(renderPaletteRef.current);
+        renderer.render();
+      }
+      luminanceModActiveRef.current = false;
+      return;
+    }
+
+    const basePalette = renderPaletteRef.current;
+    const sourceColor = basePalette.colors[selectedIndex] ?? basePalette.colors[0] ?? [0.78, 0.13, 80];
+    const editingLuminance = heldParams[luminanceKey] === true || heldParams['luminance'] === true;
+    if (
+      !luminanceModBaseRef.current
+      || luminanceModBaseRef.current.index !== selectedIndex
+      || (dragMode === 'ride' && editingLuminance)
+    ) {
+      luminanceModBaseRef.current = { index: selectedIndex, value: sourceColor[0] };
+    }
+    const base = luminanceModBaseRef.current;
+    const nextLuminance = clampNumber(base.value + luminanceSignal, 0, 1);
+    renderer.applyPaletteColors(paletteWithLuminance(basePalette, selectedIndex, nextLuminance));
+    renderer.render();
+    luminanceModActiveRef.current = true;
+  }, []);
+
+  const scheduleAppAudioModulations = useCallback(() => {
+    if (appModulationFrameRef.current) return;
+    appModulationFrameRef.current = requestAnimationFrame(() => {
+      appModulationFrameRef.current = 0;
+      applyAppAudioModulations();
+    });
+  }, [applyAppAudioModulations]);
 
   useEffect(() => {
     let cancelled = false;
@@ -150,8 +398,7 @@ export function App() {
     return () => {
       cancelled = true;
       if (boostFrameRef.current) cancelAnimationFrame(boostFrameRef.current);
-      rendererRef.current?.dispose();
-      rendererRef.current = null;
+      if (appModulationFrameRef.current) cancelAnimationFrame(appModulationFrameRef.current);
     };
   }, []);
 
@@ -164,15 +411,27 @@ export function App() {
         if (cancelled || !viewportRef.current) return;
         const renderer = new WallpaperRenderer(viewportRef.current);
         rendererRef.current = renderer;
+        renderer.onDeviceLost = (message) => {
+          if (!cancelled) setError(`WebGPU device lost: ${message}. Reload the page — this should not happen, so investigate the cause rather than masking it.`);
+        };
         await renderer.init();
-        if (!cancelled) setRendererReady(true);
+        if (cancelled) return;
+        renderer.setPostChain(postChainRef.current);
+        renderer.setRenderInputs(renderInputsRef.current);
+        setRendererReady(true);
       } catch (caught) {
         if (!cancelled) setError(caught instanceof Error ? errorMessage(caught) : String(caught));
       }
     }
     void initRenderer();
     return () => {
+      // The creation effect owns the renderer's disposal, so a teardown (incl.
+      // StrictMode's dev mount→unmount→remount) releases the WebGPU instance
+      // before a new one is created — no orphaned/double instance.
       cancelled = true;
+      rendererRef.current?.dispose();
+      rendererRef.current = null;
+      setRendererReady(false);
     };
   }, []);
 
@@ -183,7 +442,7 @@ export function App() {
     async function loadPatch() {
       try {
         const { loadPatchForSettings } = await import('./tiling/geometry');
-        const nextPatch = await loadPatchForSettings(settings, activeItem);
+        const nextPatch = await loadPatchForSettings(renderSettings, activeItem);
         if (cancelled) return;
         setPatch(nextPatch);
         setLoading('');
@@ -195,7 +454,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeItem, manifest, settings.family, settings.generation, settings.seed]);
+  }, [activeItem, manifest, renderSettings.family, renderSettings.generation, renderSettings.seed]);
 
   useEffect(() => {
     if (!patch || !rendererReady || !rendererRef.current) return;
@@ -206,10 +465,18 @@ export function App() {
     async function buildGeometry() {
       const { buildMeshGeometry } = await import('./tiling/geometry');
       if (cancelled || !rendererRef.current) return;
-      const { geometry, edgeGeometry, palette: builtPalette } = buildMeshGeometry(currentPatch, settings, customColors);
+      // Read the latest settings from a ref: this effect intentionally re-runs only
+      // when a geometry-affecting setting changes (geometrySettingsKey) or the patch
+      // does — NOT on every renderSettings change. Listing renderSettings here made
+      // it rebuild and swap the whole mesh on every committed slider/boost change,
+      // which flashed the tiling flat ("unprojected") for a frame before re-applying
+      // the projection. Non-geometry changes now flow only through the uniform-apply
+      // effect below, so the projection never resets.
+      const current = renderSettingsRef.current;
+      const { geometry, edgeGeometry, palette: builtPalette } = buildMeshGeometry(currentPatch, current, customColorsRef.current);
       activeGeometry = geometry;
       activeEdgeGeometry = edgeGeometry;
-      rendererRef.current.setSettings(settings, builtPalette);
+      rendererRef.current.setSettings(current, builtPalette);
       rendererRef.current.setGeometry(geometry, edgeGeometry);
       activeGeometry = null;
       activeEdgeGeometry = null;
@@ -222,37 +489,56 @@ export function App() {
       activeGeometry?.dispose();
       activeEdgeGeometry?.dispose();
     };
-  }, [customColors, geometrySettingsKey, patch, rendererReady]);
+  }, [geometrySettingsKey, patch, rendererReady]);
 
   useEffect(() => {
     if (!rendererReady || !rendererRef.current) return;
-    rendererRef.current.setSettings(settings, palette);
-  }, [palette, rendererReady, settings]);
+    rendererRef.current.setSettings(renderSettings, renderPalette);
+  }, [renderPalette, renderSettings, rendererReady]);
 
   useEffect(() => {
-    rendererRef.current?.setAudioDrive(audio.features, gains);
-  }, [audio.features, gains]);
+    applyAudioDrive();
+    return audio.subscribe(applyAudioDrive);
+  }, [applyAudioDrive, audio]);
+
+  useEffect(() => {
+    applyAudioDrive();
+  }, [applyAudioDrive, dragMode, gains, renderSettings]);
 
   useEffect(() => {
     rendererRef.current?.setProjectionGesture({
       settings,
-      onBoost: (x: number, y: number) => {
+      onBoostPreview: (x: number, y: number) => {
         boostRef.current = { x, y };
         if (boostFrameRef.current) return;
         boostFrameRef.current = requestAnimationFrame(() => {
           boostFrameRef.current = 0;
           const next = boostRef.current;
           if (!next) return;
-          updateSettings(current => {
-            current.projection = '1';
-            current.hyp_boost_x = next.x;
-            current.hyp_boost_y = next.y;
-            return current;
-          });
+          const previous = liveBoostStore.getSnapshot() ?? {
+            x: Number(settings.hyp_boost_x ?? 50),
+            y: Number(settings.hyp_boost_y ?? 50),
+          };
+          if (Math.abs(previous.x - next.x) < 0.2 && Math.abs(previous.y - next.y) < 0.2) return;
+          liveBoostStore.set(next);
+        });
+      },
+      onBoostCommit: (x: number, y: number) => {
+        if (boostFrameRef.current) {
+          cancelAnimationFrame(boostFrameRef.current);
+          boostFrameRef.current = 0;
+        }
+        boostRef.current = null;
+        liveBoostStore.set(null);
+        updateSettings(current => {
+          current.projection = '1';
+          current.hyp_boost_x = x;
+          current.hyp_boost_y = y;
+          return current;
         });
       },
     });
-  }, [settings, updateSettings]);
+  }, [liveBoostStore, settings, updateSettings]);
 
   const applyTarget = useCallback((nextCategoryId: string, nextTargetId: string) => {
     const { category, item } = atlasItemById(manifest, nextCategoryId, nextTargetId);
@@ -278,17 +564,17 @@ export function App() {
 
   const ensureCustomColors = useCallback((): Oklch[] => {
     if (customColors) return customColors.map(copyOklch);
-    const source = buildPalette(intSetting(settings, 'preset', 0, 11), colorCount).colors;
+    const source = buildPalette(palettePreset, colorCount).colors;
     return source.map(copyOklch);
-  }, [colorCount, customColors, settings]);
+  }, [colorCount, customColors, palettePreset]);
 
   const updateCustomColor = useCallback((updater: (color: Oklch) => Oklch) => {
     const nextColors = ensureCustomColors();
     const idx = Math.min(selectedColor, colorCount - 1);
     nextColors[idx] = updater(copyOklch(nextColors[idx]!));
     setCustomColors(nextColors);
-    setSetting('preset', '11');
-  }, [colorCount, ensureCustomColors, selectedColor, setSetting]);
+    if (palettePreset !== 11) setSetting('preset', '11');
+  }, [colorCount, ensureCustomColors, palettePreset, selectedColor, setSetting]);
 
   const onPalette = useCallback((value: string) => {
     setCustomColors(null);
@@ -312,6 +598,32 @@ export function App() {
     setGains(current => ({ ...current, [key]: value }));
   }, []);
 
+  const onAudioModulation = useCallback((values: Record<string, number | undefined>) => {
+    audioModulationsRef.current = values;
+    applyAudioDriveRef.current();
+    scheduleAppAudioModulations();
+  }, [scheduleAppAudioModulations]);
+
+  const onPostChain = useCallback((spec: PostChainSpec) => {
+    postChainRef.current = spec;
+    rendererRef.current?.setPostChain(spec);
+  }, []);
+
+  const onRenderInputs = useCallback((inputs: RenderInputs) => {
+    renderInputsRef.current = inputs;
+    rendererRef.current?.setRenderInputs(inputs);
+  }, []);
+
+  const applyGraphPresetState = useCallback((state: GraphPresetAppState) => {
+    setCategoryId(state.categoryId);
+    setTargetId(state.targetId);
+    setSettings(current => clampGeneration(normalizeSettings({ ...current, ...state.settings })));
+    setCustomColors(state.customColors ? state.customColors.map(copyOklch) : null);
+    setSelectedColor(Math.max(0, state.selectedColor));
+    setGains(current => ({ ...current, ...state.gains }));
+    setDragMode(state.dragMode);
+  }, []);
+
   const resetBoost = useCallback(() => {
     updateSettings(current => {
       current.projection = '1';
@@ -319,7 +631,8 @@ export function App() {
       current.hyp_boost_y = 50;
       return current;
     });
-  }, [updateSettings]);
+    liveBoostStore.set(null);
+  }, [liveBoostStore, updateSettings]);
 
   const resetView = useCallback(() => {
     rendererRef.current?.resetView();
@@ -358,23 +671,6 @@ export function App() {
         style={drawerStyle}
         aria-label="Control graph"
       >
-        <button
-          type="button"
-          className="drawer-toggle"
-          onClick={() => setDrawerOpen(open => !open)}
-          aria-label={drawerOpen ? 'Collapse controls' : 'Expand controls'}
-        >
-          {drawerOpen ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-        </button>
-        <button
-          type="button"
-          className="drawer-resize"
-          onPointerDown={startDrawerResize}
-          aria-label="Resize controls"
-          disabled={!drawerOpen}
-        >
-          <GripVertical size={16} />
-        </button>
         <header>
           <div>
             <p className="eyebrow">Penrose Wallpaper</p>
@@ -385,38 +681,70 @@ export function App() {
             <span>tiles</span>
           </div>
         </header>
-        <Suspense fallback={<div className="control-flow-shell loading-flow">Loading graph</div>}>
-          <ControlGraph
-            manifest={manifest}
-            activeCategory={activeCategory}
-            categoryId={categoryId}
-            targetId={targetId}
-            currentValue={CURRENT_CONTROLS}
-            settings={settings}
-            palette={palette}
-            colorCount={colorCount}
-            selectedColor={selectedColor}
-            selectedColorValue={selectedColorValue}
-            seedOptions={seedOptions}
-            maxGeneration={maxGeneration}
-            audio={audio}
-            gains={gains}
-            tiles={patch?.tiles.length ?? 0}
-            loading={loading}
-            gamut={displayGamutLabel()}
-            onCategory={onCategory}
-            onTarget={onTarget}
-            onFamily={setFamily}
-            onSetting={setSetting}
-            onPalette={onPalette}
-            onSelectedColor={setSelectedColor}
-            onCustomColor={updateCustomColor}
-            onGain={onGain}
-            onResetBoost={resetBoost}
-            onResetClock={resetClock}
-            onResetView={resetView}
-          />
-        </Suspense>
+        <div className="graph-frame">
+          <button
+            type="button"
+            className="drawer-toggle"
+            onClick={() => setDrawerOpen(open => !open)}
+            aria-label={drawerOpen ? 'Collapse controls' : 'Expand controls'}
+          >
+            {drawerOpen ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          </button>
+          <button
+            type="button"
+            className="drawer-resize"
+            onPointerDown={startDrawerResize}
+            aria-label="Resize controls"
+            disabled={!drawerOpen}
+          >
+            <GripVertical size={16} />
+          </button>
+          {manifest && activeCategory ? (
+            <ControlGraph
+              manifest={manifest}
+              activeCategory={activeCategory}
+              categoryId={categoryId}
+              targetId={targetId}
+              currentValue={CURRENT_CONTROLS}
+              settings={settings}
+              liveBoostStore={liveBoostStore}
+              palette={palette}
+              colorCount={colorCount}
+              selectedColor={selectedColor}
+              selectedColorValue={selectedColorValue}
+              seedOptions={seedOptions}
+              maxGeneration={maxGeneration}
+              audio={audio}
+              customColors={customColors}
+              gains={gains}
+              dragMode={dragMode}
+              tiles={patch?.tiles.length ?? 0}
+              loading={loading}
+              gamut={displayGamutLabel()}
+              onCategory={onCategory}
+              onTarget={onTarget}
+              onFamily={setFamily}
+              onSetting={setSetting}
+              onPreviewSetting={previewSetting}
+              onPalette={onPalette}
+              onSelectedColor={setSelectedColor}
+              onCustomColor={updateCustomColor}
+              onGain={onGain}
+              onAudioModulation={onAudioModulation}
+              onPostChain={onPostChain}
+              onRenderInputs={onRenderInputs}
+              onGraphPresetState={applyGraphPresetState}
+              onDragMode={setDragMode}
+              onBeginEdit={beginEdit}
+              onEndEdit={endEdit}
+              onResetBoost={resetBoost}
+              onResetClock={resetClock}
+              onResetView={resetView}
+            />
+          ) : (
+            <div className="control-flow-shell loading-flow">Loading graph</div>
+          )}
+        </div>
       </aside>
     </>
   );

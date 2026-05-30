@@ -96,18 +96,18 @@ hardware encode on store. No depth buffer and no offscreen/HDR target.
 - Geometry is non-indexed: each triangle's 3 vertices are independent,
   so per-triangle attribute values are free to assign.
 - The modulation **node graph** (`graph/`) drives every material +
-  lighting parameter from audio bands, beat, clock, and home-screen
-  page-scroll, layered on top of the slider baselines.
+  lighting parameter from audio bands, beat, clock, only when wired, and home-screen
+  page-scroll (android only), layered on top of the slider baselines.
 
 ---
 
-## The technique
+## The Technique
 
-Stripped to shader structure, the WebGPU/TSL material pattern is:
+Stripped to shader structure, the target material contract is:
 
 - A **flat** surface, geometric normal `(0,0,1)`, orthographic view.
 - A scalar field `H(x,y)` treated as a **height field**.
-- The surface normal reconstructed *per fragment* as
+- The surface normal reconstructed _per fragment_ as
   `normalize(vec3(-dHdx, -dHdy, 1))`. No height geometry, no normal-map texture.
 - That normal driving a **full principled BRDF** (Disney / MaterialX standard
   surface): base colour, roughness, metalness, clearcoat, sheen, thin-film
@@ -128,6 +128,18 @@ WGSL; every node maps one-to-one to GLSL we compile with `glslc`:
 - `dFdx` / `dFdy`: GLSL core derivatives emitted to SPIR-V.
 - `MeshPhysicalNodeMaterial`: hand-written Cook-Torrance GGX plus lobes in
   `fill.frag`.
+
+The current web preview uses generated displaced tile geometry plus Three r184
+TSL `MeshPhysicalNodeMaterial`. Live material relief scales the tile surface
+displacement in the material position node. Depth drive adds a separate
+per-tile bulge field, and ripple has independent color and motion outputs so a
+zero depth slider does not disable color ripple or screen post-FX. Borders
+share the projection/ripple path with an unscaled surface bias. Physical
+controls drive TSL uniforms for roughness, metalness, clearcoat, anisotropy,
+iridescence, sheen, emission, brightness, and ripple. The web path uses
+node-defined flat normals for the displaced surface so relief changes do not
+leave high-relief baked vertex normals behind.
+
 - OKLab to linear-sRGB node: `color.cpp` palette authoring.
 - ACES filmic tonemap: one GLSL function; AgX remains the HDR composite target.
 - Directional, point, and ambient lights: light vectors plus colours in the UBO.
@@ -135,17 +147,17 @@ WGSL; every node maps one-to-one to GLSL we compile with `glslc`:
 
 **A tiling beats a single flat scalar field in two structural ways.**
 
-1. *Clean normals.* A generic scalar field must use `dFdx` of `H` when it has
+1. _Clean normals._ A generic scalar field must use `dFdx` of `H` when it has
    no closed-form gradient, and `dFdx` across a discontinuity smears garbage. We
    assemble `H` from terms with **analytic** gradients — the bevel
    (piecewise-linear `inBary`), the parallax bulge (linear `inDepth`), and the
    already-analytic `waveGradient` — so the normal is exact and seam-clean.
-2. *Per-tile material identity.* A single scalar field gives one material
+2. _Per-tile material identity._ A single scalar field gives one material
    varying continuously. We have **discrete tiles**, each carrying type,
    orientation, and ring distance. Different physical channels can key to
    different structural fields: metalness by tile type, anisotropy along tile
    orientation, iridescence thickness by ring — material variation the tiling
-   *is*, not material variation painted on. A single continuous disk cannot do
+   _is_, not material variation painted on. A single continuous disk cannot do
    this.
 
 ---
@@ -195,7 +207,7 @@ That single decision is what removes ~30 sliders:
 
 **Modulation.** Every per-frame parameter is also a target of the existing
 node graph, which evaluates against audio bands, the beat, a clock, and
-the home-screen page-scroll offset. A target's graphed value *adds onto*
+the home-screen page-scroll offset. A target's graphed value _adds onto_
 its settings base, so modulation rides on top of whatever the user set:
 the wallpaper can sit still, breathe to a clock, sway with home-screen
 panning, or pulse to sound. The channel→field pairings in the table
@@ -227,8 +239,7 @@ Viewer GLSL:
   (`inTileMat.yz`) re-orthogonalised against the shading normal, so
   each tile streaks its highlight along its own classifier edge.
   `at == ab` is exact isotropy, so the term degrades cleanly.
-- **Iridescence.** A thin-film interference Fresnel (Belcour & Barla
-  2017) blended over the plain Schlick Fresnel. Film thickness sweeps
+- **Iridescence.** A thin-film interference Fresnel (Belcour & Barla 2017) blended over the plain Schlick Fresnel. Film thickness sweeps
   with the tile's distance from the origin (`inTileMat.w`) and the
   ripple phase, so an oil-slick drifts across the tiling and pulses
   with the wave. The thickness range is per-material (Pearl 250–400 nm
@@ -263,7 +274,7 @@ path. AgX belongs in an HDR composite pass.
   control flow — satisfied here. The bevel `min()` crease is the one
   non-smooth point; it is the intended bevel ridge, not an artefact.
 - There is no depth buffer and none is added — the normal is a
-  *shading* normal; this is not a Z-test.
+  _shading_ normal; this is not a Z-test.
 - Mobile cost: GGX + clearcoat + sheen + iridescence + three lights is
   comfortably real-time on Vulkan-capable mobile GPUs. Preset flags own lobe
   selection for lower-cost material modes.

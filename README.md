@@ -33,8 +33,13 @@ npm run quality:local
 ```
 
 That gate enforces no owned plain JavaScript files, TypeScript policy,
-typecheck, atlas validation, tiling verification, shader validation,
-clang-tidy, and the WebGPU build.
+typecheck, atlas validation, render health probes, tiling verification,
+shader validation, clang-tidy, and the WebGPU build.
+
+Graph and renderer regression rules live in
+[`docs/platform/control-graph-regressions.md`](docs/platform/control-graph-regressions.md).
+The Three r184 TSL post-FX boundary is documented in
+[`docs/render/tsl-post-fx-model.md`](docs/render/tsl-post-fx-model.md).
 
 ## Android
 

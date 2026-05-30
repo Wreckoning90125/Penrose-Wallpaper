@@ -32,14 +32,20 @@ type Projector = {
 type MeshBuffers = {
   position: Float32Array;
   color: Float32Array;
+  paletteSlot: Float32Array;
   tileType: Float32Array;
   tileRing: Float32Array;
   tileOrient: Float32Array;
+  tileCenter: Float32Array;
+  edgeDistance: Float32Array;
 };
 
 type VisibleEdge = {
   a: Point;
   b: Point;
+  ring: number;
+  orient: Point;
+  center: Point;
 };
 
 type Snapper = (point: Point) => Point;
@@ -47,8 +53,13 @@ type EdgeKind = 'base' | 'leg' | 'edge';
 type EdgeSide = {
   type: number;
   kind: EdgeKind;
+  ring: number;
+  orient: Point;
+  center: Point;
 };
-type EdgeEntry = VisibleEdge & {
+type EdgeEntry = {
+  a: Point;
+  b: Point;
   first: EdgeSide;
   second: EdgeSide | null;
 };
@@ -68,6 +79,8 @@ const FAMILY: FamilySpec[] = [
   { typeBuckets: 5, orientBuckets: 12, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: false, ringChebyshev: false },
   { typeBuckets: 10, orientBuckets: 12, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: false, ringChebyshev: false },
 ];
+const BORDER_RELIEF_LIFT = 0.018;
+const BORDER_SURFACE_BIAS = 0.00035;
 
 export async function loadPatch(item: AtlasItem): Promise<Patch> {
   if (!item.geometry) throw new Error(`atlas target has no geometry: ${item.id}`);
@@ -133,7 +146,7 @@ export function buildMeshGeometry(patch: Patch, settings: Settings, customColors
   const preset = intSetting(settings, 'preset', 0, 11);
   const palette = buildPalette(preset, colorCount, customColors);
   const classes = classify(patch.tiles, patch.family, colorMode, colorCount);
-  const relief = averageTileRadius(patch.tiles) * intSetting(settings, 'mat_relief', 0, 200) / 200 * 0.34;
+  const relief = averageTileRadius(patch.tiles) * 0.34;
   const maxType = Math.max(1, familySpec(patch.family).typeBuckets - 1);
   const rings = tileRings(patch.tiles, familySpec(patch.family));
   const projector = createProjector(settings);
@@ -145,14 +158,18 @@ export function buildMeshGeometry(patch: Patch, settings: Settings, customColors
   const vertexCount = triCount * 3;
   const position = new Float32Array(vertexCount * 3);
   const color = new Float32Array(vertexCount * 3);
+  const paletteSlot = new Float32Array(vertexCount);
   const tileType = new Float32Array(vertexCount);
   const tileRing = new Float32Array(vertexCount);
   const tileOrient = new Float32Array(vertexCount * 2);
+  const tileCenter = new Float32Array(vertexCount * 2);
+  const edgeDistance = new Float32Array(vertexCount);
 
   let cursor = 0;
   for (let tileIndex = 0; tileIndex < patch.tiles.length; tileIndex++) {
     const tile = patch.tiles[tileIndex]!;
     const center = centroid(tile.verts);
+    const projectedCenter = snap(projector.map(center[0], center[1]));
     const orient = orientation(tile, patch.family);
     const typeValue = tile.type / maxType;
     const ringValue = rings[tileIndex] ?? 0;
@@ -164,7 +181,7 @@ export function buildMeshGeometry(patch: Patch, settings: Settings, customColors
       const b = tile.verts[(i + 1) % tile.verts.length]!;
       cursor = emitTriangle(
         cursor,
-        { position, color, tileType, tileRing, tileOrient },
+        { position, color, paletteSlot, tileType, tileRing, tileOrient, tileCenter, edgeDistance },
         projector,
         snap,
         fillSub,
@@ -175,6 +192,8 @@ export function buildMeshGeometry(patch: Patch, settings: Settings, customColors
         typeValue,
         ringValue,
         orient,
+        projectedCenter,
+        paletteIndex,
       );
     }
   }
@@ -182,10 +201,13 @@ export function buildMeshGeometry(patch: Patch, settings: Settings, customColors
   const geometry = new BufferGeometry();
   geometry.setAttribute('position', new BufferAttribute(position, 3));
   geometry.setAttribute('color', new BufferAttribute(color, 3));
+  geometry.setAttribute('paletteSlot', new BufferAttribute(paletteSlot, 1));
   geometry.setAttribute('uv', new BufferAttribute(buildUv(position), 2));
   geometry.setAttribute('tileType', new BufferAttribute(tileType, 1));
   geometry.setAttribute('tileRing', new BufferAttribute(tileRing, 1));
   geometry.setAttribute('tileOrient', new BufferAttribute(tileOrient, 2));
+  geometry.setAttribute('tileCenter', new BufferAttribute(tileCenter, 2));
+  geometry.setAttribute('edgeDistance', new BufferAttribute(edgeDistance, 1));
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   const edgeGeometry = buildEdgeGeometry(patch, settings, projector, snap, relief);
@@ -217,11 +239,13 @@ function emitTriangle(
   typeValue: number,
   ringValue: number,
   orient: Point,
+  center: Point,
+  paletteIndex: number,
 ): number {
   if (fillSub <= 1) {
-    cursor = emitProjectedVertex(cursor, buffers, projector, snap, a, rgb, typeValue, ringValue, orient);
-    cursor = emitProjectedVertex(cursor, buffers, projector, snap, b, rgb, typeValue, ringValue, orient);
-    cursor = emitProjectedVertex(cursor, buffers, projector, snap, c, rgb, typeValue, ringValue, orient);
+    cursor = emitProjectedVertex(cursor, buffers, projector, snap, a, rgb, typeValue, ringValue, orient, center, paletteIndex, 1);
+    cursor = emitProjectedVertex(cursor, buffers, projector, snap, b, rgb, typeValue, ringValue, orient, center, paletteIndex, 0);
+    cursor = emitProjectedVertex(cursor, buffers, projector, snap, c, rgb, typeValue, ringValue, orient, center, paletteIndex, 0);
     return cursor;
   }
   const invN = 1 / fillSub;
@@ -238,13 +262,13 @@ function emitTriangle(
   };
   for (let i = 0; i < fillSub; i++) {
     for (let j = 0; j < fillSub - i; j++) {
-      cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i, j), rgb, typeValue, ringValue, orient);
-      cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i + 1, j), rgb, typeValue, ringValue, orient);
-      cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i, j + 1), rgb, typeValue, ringValue, orient);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i, j), rgb, typeValue, ringValue, orient, center, paletteIndex, i / fillSub);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i + 1, j), rgb, typeValue, ringValue, orient, center, paletteIndex, (i + 1) / fillSub);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i, j + 1), rgb, typeValue, ringValue, orient, center, paletteIndex, i / fillSub);
       if (j < fillSub - i - 1) {
-        cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i + 1, j), rgb, typeValue, ringValue, orient);
-        cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i + 1, j + 1), rgb, typeValue, ringValue, orient);
-        cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i, j + 1), rgb, typeValue, ringValue, orient);
+        cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i + 1, j), rgb, typeValue, ringValue, orient, center, paletteIndex, (i + 1) / fillSub);
+        cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i + 1, j + 1), rgb, typeValue, ringValue, orient, center, paletteIndex, (i + 1) / fillSub);
+        cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i, j + 1), rgb, typeValue, ringValue, orient, center, paletteIndex, i / fillSub);
       }
     }
   }
@@ -261,15 +285,21 @@ function emitProjectedVertex(
   typeValue: number,
   ringValue: number,
   orient: Point,
+  center: Point,
+  paletteIndex: number,
+  edgeDist: number,
 ): number {
   const [x, y] = snap(projector.map(vertex[0], vertex[1]));
   return emitVertex(
     cursor,
     buffers.position,
     buffers.color,
+    buffers.paletteSlot,
     buffers.tileType,
     buffers.tileRing,
     buffers.tileOrient,
+    buffers.tileCenter,
+    buffers.edgeDistance,
     x,
     y,
     vertex[2],
@@ -277,6 +307,9 @@ function emitProjectedVertex(
     typeValue,
     ringValue,
     orient,
+    center,
+    paletteIndex,
+    edgeDist,
   );
 }
 
@@ -284,9 +317,12 @@ function emitVertex(
   cursor: number,
   position: Float32Array,
   color: Float32Array,
+  paletteSlot: Float32Array,
   tileType: Float32Array,
   tileRing: Float32Array,
   tileOrient: Float32Array,
+  tileCenter: Float32Array,
+  edgeDistance: Float32Array,
   x: number,
   y: number,
   z: number,
@@ -294,6 +330,9 @@ function emitVertex(
   typeValue: number,
   ringValue: number,
   orient: Point,
+  center: Point,
+  paletteIndex: number,
+  edgeDist: number,
 ): number {
   const p = cursor * 3;
   position[p] = x;
@@ -302,11 +341,15 @@ function emitVertex(
   color[p] = rgb[0];
   color[p + 1] = rgb[1];
   color[p + 2] = rgb[2];
+  paletteSlot[cursor] = paletteIndex;
+  edgeDistance[cursor] = edgeDist;
   tileType[cursor] = typeValue;
   tileRing[cursor] = ringValue;
   const o = cursor * 2;
   tileOrient[o] = orient[0];
   tileOrient[o + 1] = orient[1];
+  tileCenter[o] = center[0];
+  tileCenter[o + 1] = center[1];
   return cursor + 1;
 }
 
@@ -323,11 +366,14 @@ function buildEdgeGeometry(
   const width = radius * intSetting(settings, 'border_width', 0, 600) / 600 * 0.16;
   if (!borderOn || borderAlpha <= 0 || width <= 1e-7) return null;
 
-  const edges = collectVisibleEdges(patch);
+  const edges = collectVisibleEdges(patch, projector, snap);
   const sub = projector.enabled ? intSetting(settings, 'hyp_border_subdiv', 1, 32) : 1;
   const halfWidth = width * 0.5;
-  const edgeZ = relief * 0.08 + radius * 0.002;
+  const edgeZ = relief * BORDER_RELIEF_LIFT + radius * BORDER_SURFACE_BIAS;
   const positions: number[] = [];
+  const tileRing: number[] = [];
+  const tileOrient: number[] = [];
+  const tileCenter: number[] = [];
 
   for (const edge of edges) {
     for (let i = 0; i < sub; i++) {
@@ -352,6 +398,11 @@ function buildEdgeGeometry(
       const bx = x2 + ex;
       const by = y2 + ey;
       pushQuad(positions, [ax + nx, ay + ny, edgeZ], [ax - nx, ay - ny, edgeZ], [bx + nx, by + ny, edgeZ], [bx - nx, by - ny, edgeZ]);
+      for (let vertex = 0; vertex < 6; vertex++) {
+        tileRing.push(edge.ring);
+        tileOrient.push(edge.orient[0], edge.orient[1]);
+        tileCenter.push(edge.center[0], edge.center[1]);
+      }
     }
   }
 
@@ -360,6 +411,9 @@ function buildEdgeGeometry(
   const position = new Float32Array(positions);
   geometry.setAttribute('position', new BufferAttribute(position, 3));
   geometry.setAttribute('uv', new BufferAttribute(buildUv(position), 2));
+  geometry.setAttribute('tileRing', new BufferAttribute(new Float32Array(tileRing), 1));
+  geometry.setAttribute('tileOrient', new BufferAttribute(new Float32Array(tileOrient), 2));
+  geometry.setAttribute('tileCenter', new BufferAttribute(new Float32Array(tileCenter), 2));
   geometry.computeBoundingSphere();
   return geometry;
 }
@@ -374,9 +428,16 @@ function buildUv(position: Float32Array): Float32Array {
   return uv;
 }
 
-function collectVisibleEdges(patch: Patch): VisibleEdge[] {
+function collectVisibleEdges(patch: Patch, projector: Projector, snap: Snapper): VisibleEdge[] {
   const map = new Map<string, EdgeEntry>();
-  for (const tile of patch.tiles) {
+  const spec = familySpec(patch.family);
+  const rings = tileRings(patch.tiles, spec);
+  for (let tileIndex = 0; tileIndex < patch.tiles.length; tileIndex++) {
+    const tile = patch.tiles[tileIndex]!;
+    const center = centroid(tile.verts);
+    const sideCenter = snap(projector.map(center[0], center[1]));
+    const sideOrient = orientation(tile, patch.family);
+    const sideRing = rings[tileIndex] ?? 0;
     for (let i = 0; i < tile.verts.length; i++) {
       const j = (i + 1) % tile.verts.length;
       const a = tile.verts[i]!;
@@ -384,10 +445,11 @@ function collectVisibleEdges(patch: Patch): VisibleEdge[] {
       const key = edgeKey(a, b);
       const entry = map.get(key);
       const kind = edgeKind(patch.family, tile, i);
+      const side = { type: tile.type, kind, ring: sideRing, orient: sideOrient, center: sideCenter };
       if (entry) {
-        entry.second = { type: tile.type, kind };
+        entry.second = side;
       } else {
-        map.set(key, { a, b, first: { type: tile.type, kind }, second: null });
+        map.set(key, { a, b, first: side, second: null });
       }
     }
   }
@@ -396,7 +458,13 @@ function collectVisibleEdges(patch: Patch): VisibleEdge[] {
     if (edge.second && edge.first.type === edge.second.type && hiddenEdge(patch.family, edge.first.kind, edge.second.kind)) {
       continue;
     }
-    edges.push(edge);
+    edges.push({
+      a: edge.a,
+      b: edge.b,
+      ring: edge.first.ring,
+      orient: edge.first.orient,
+      center: edge.first.center,
+    });
   }
   return edges;
 }
@@ -447,17 +515,9 @@ function createProjector(settings: Settings): Projector {
     return { enabled: false, map: (x: number, y: number) => [x, y] };
   }
   const scale = 0.05 + numberSetting(settings, 'hyp_scale', 0, 100) / 100 * 2.95;
-  let bx = (numberSetting(settings, 'hyp_boost_x', 0, 100) - 50) / 50 * 0.9;
-  let by = (numberSetting(settings, 'hyp_boost_y', 0, 100) - 50) / 50 * 0.9;
-  const bMag = Math.hypot(bx, by);
-  if (bMag > 0.92) {
-    const s = 0.92 / bMag;
-    bx *= s;
-    by *= s;
-  }
   return {
     enabled: true,
-    map: (x: number, y: number) => projectHyp(x, y, bx, by, scale),
+    map: (x: number, y: number) => projectHyp(x, y, 0, 0, scale),
   };
 }
 

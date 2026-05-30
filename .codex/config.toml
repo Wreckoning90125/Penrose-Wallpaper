@@ -1,0 +1,14 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+developer_instructions = """
+# Penrose Wallpaper Codex Notes
+
+## Browser Debug Artifacts
+
+- Write browser-debug screenshots, traces, console logs, and accessibility snapshots under `output/playwright/`.
+- Do not leave `.playwright-cli/` artifacts in the repo root. If a CLI helper creates them, move the files to `output/playwright/` or delete them before reporting completion.
+- Use bundled Playwright browsers from `~/.cache/ms-playwright/`; do not run browser install commands from this repo.
+- For quick layout probes, launch bundled Chromium from Node and write optional JSON/YAML evidence under `output/playwright/`.
+- Keep browser probes deterministic: use the running Vite server at `http://localhost:5174/` when the user already has it open, otherwise run the repo dev server with `npm run web:dev`.
+- Debug snapshots and logs are intentionally gitignored. Regenerate them from the running app when needed instead of committing them.
+"""

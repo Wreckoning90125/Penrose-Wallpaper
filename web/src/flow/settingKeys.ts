@@ -1,0 +1,108 @@
+// Pure setting-key groupings for the control-graph nodes: which Settings keys
+// each node owns (edit-gating + preset round-trip). No React/three — shared by
+// the control graph and reusable by the graph-contract check.
+import type { SettingKey } from '../settings/androidSettings';
+
+export const TILING_SETTING_KEYS: readonly SettingKey[] = ['family', 'seed', 'generation'];
+export const PALETTE_SETTING_KEYS: readonly SettingKey[] = ['preset', 'color_mode', 'color_count'];
+export const PROJECTION_SETTING_KEYS: readonly SettingKey[] = [
+  'projection',
+  'proj_blend',
+  'hyp_scale',
+  'hyp_boost_x',
+  'hyp_boost_y',
+  'hyp_fill_subdiv',
+  'hyp_border_subdiv',
+];
+export const MATERIAL_SETTING_KEYS: readonly SettingKey[] = [
+  'mat_relief',
+  'mat_roughness',
+  'mat_rough_mod',
+  'mat_metalness',
+  'mat_metal_mod',
+  'mat_clearcoat',
+  'mat_iridescence',
+  'mat_sheen',
+  'mat_anisotropy',
+  'mat_emissive',
+];
+export const LIGHT_SETTING_KEYS: readonly SettingKey[] = [
+  'light_angle',
+  'light_elevation',
+  'light_intensity',
+  'light_warmth',
+  'light_ambient',
+];
+export const RIPPLE_TARGET_SETTING_KEYS: readonly SettingKey[] = [
+  'brightness',
+  'depth_amount',
+  'ripple_amount',
+  'ripple_speed',
+  'ripple_kind',
+];
+export const BORDER_SETTING_KEYS: readonly SettingKey[] = [
+  'border_on',
+  'border_width',
+  'border_l',
+  'border_c',
+  'border_h',
+  'border_a',
+];
+export const CLOCK_SETTING_KEYS: readonly SettingKey[] = ['clock_enabled', 'clock_rate'];
+export const GRAPH_PRESET_SETTING_KEYS: readonly SettingKey[] = [
+  'bg_c',
+  'bg_h',
+  'bg_l',
+  'bg_mode',
+  'border_a',
+  'border_c',
+  'border_h',
+  'border_l',
+  'border_on',
+  'border_width',
+  'brightness',
+  'clock_enabled',
+  'clock_rate',
+  'color_count',
+  'color_mode',
+  'depth_amount',
+  'edge_profile_c',
+  'edge_profile_glow',
+  'edge_profile_h',
+  'edge_profile_l',
+  'edge_profile_width',
+  'family',
+  'generation',
+  'hyp_boost_x',
+  'hyp_boost_y',
+  'hyp_border_subdiv',
+  'hyp_fill_subdiv',
+  'hyp_scale',
+  'proj_blend',
+  'light_ambient',
+  'light_angle',
+  'light_elevation',
+  'light_intensity',
+  'light_warmth',
+  'mat_anisotropy',
+  'mat_clearcoat',
+  'mat_emissive',
+  'mat_irid_thick_max',
+  'mat_irid_thick_min',
+  'mat_iridescence',
+  'mat_metal_mod',
+  'mat_metalness',
+  'mat_relief',
+  'mat_rough_mod',
+  'mat_roughness',
+  'mat_sheen',
+  'mat_sheen_color_b',
+  'mat_sheen_color_g',
+  'mat_sheen_color_r',
+  'preset',
+  'projection',
+  'ripple_amount',
+  'ripple_kind',
+  'ripple_speed',
+  'seed',
+];

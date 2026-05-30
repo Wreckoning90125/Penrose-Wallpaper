@@ -65,7 +65,15 @@ function serverIdentityPlugin(): Plugin {
 
 function liveGeometryPlugin(): Plugin {
   const handle: Middleware = async (req, res, next) => {
-    const url = new URL(req.url ?? '/', 'http://localhost');
+    // A malformed request URL (e.g. a stray '//') must not crash the dev/preview
+    // server — fall through to the next middleware instead of throwing.
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', 'http://localhost');
+    } catch {
+      next();
+      return;
+    }
     const match = url.pathname.match(/^\/generated\/live\/(\d+)\/(\d+)\/(\d+)\.ptg$/);
     if (match === null) {
       next();

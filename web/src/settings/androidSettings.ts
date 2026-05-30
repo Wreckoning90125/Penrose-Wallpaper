@@ -12,6 +12,11 @@ export type Settings = {
   border_c: SettingValue;
   border_h: SettingValue;
   border_a: SettingValue;
+  edge_profile_width: SettingValue;
+  edge_profile_glow: SettingValue;
+  edge_profile_l: SettingValue;
+  edge_profile_c: SettingValue;
+  edge_profile_h: SettingValue;
   bg_mode: SettingValue;
   bg_l: SettingValue;
   bg_c: SettingValue;
@@ -43,7 +48,14 @@ export type Settings = {
   mat_irid_thick_max: SettingValue;
   mat_rough_mod: SettingValue;
   mat_metal_mod: SettingValue;
+  fx_pixel_size: SettingValue;
+  fx_posterize: SettingValue;
+  fx_grain: SettingValue;
+  fx_rgb_shift: SettingValue;
+  fx_sobel: SettingValue;
+  fx_afterimage: SettingValue;
   projection: SettingValue;
+  proj_blend: SettingValue;
   hyp_scale: SettingValue;
   hyp_boost_x: SettingValue;
   hyp_boost_y: SettingValue;
@@ -65,6 +77,11 @@ export const DEFAULT_SETTINGS: Settings = {
   border_c: 0,
   border_h: 0,
   border_a: 42,
+  edge_profile_width: 0,
+  edge_profile_glow: 0,
+  edge_profile_l: 100,
+  edge_profile_c: 0,
+  edge_profile_h: 0,
   bg_mode: '0',
   bg_l: 4,
   bg_c: 1,
@@ -96,7 +113,14 @@ export const DEFAULT_SETTINGS: Settings = {
   mat_irid_thick_max: 420,
   mat_rough_mod: 20,
   mat_metal_mod: 20,
+  fx_pixel_size: 1,
+  fx_posterize: 256,
+  fx_grain: 0,
+  fx_rgb_shift: 0,
+  fx_sobel: 0,
+  fx_afterimage: 0,
   projection: '0',
+  proj_blend: 0,
   hyp_scale: 50,
   hyp_boost_x: 50,
   hyp_boost_y: 50,
@@ -126,7 +150,6 @@ export function numberSetting(settings: Settings | Partial<Settings>, key: Setti
 }
 
 export type MaterialSettings = {
-  relief: number;
   roughness: number;
   roughMod: number;
   metalness: number;
@@ -140,7 +163,6 @@ export type MaterialSettings = {
 
 export function materialSettings(settings: Settings | Partial<Settings>): MaterialSettings {
   return {
-    relief: intSetting(settings, 'mat_relief', 0, 160) / 100,
     roughness: unitSetting(settings, 'mat_roughness'),
     roughMod: unitSetting(settings, 'mat_rough_mod'),
     metalness: unitSetting(settings, 'mat_metalness'),

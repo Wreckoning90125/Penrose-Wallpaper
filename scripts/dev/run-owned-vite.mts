@@ -72,10 +72,10 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   return { mode, options, passthroughArgs };
 }
 
-function parsePort(raw: string | undefined, fallback: number): number {
-  const parsed = Number(raw ?? fallback);
+function parsePort(raw: string | undefined, defaultPort: number): number {
+  const parsed = Number(raw ?? defaultPort);
   if (Number.isInteger(parsed) && parsed > 0 && parsed < 65536) return parsed;
-  throw new Error(`Invalid port: ${raw ?? String(fallback)}`);
+  throw new Error(`Invalid port: ${raw ?? String(defaultPort)}`);
 }
 
 function readPort(mode: Mode, options: Map<string, string>): number {

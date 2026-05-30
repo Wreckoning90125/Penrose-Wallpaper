@@ -1,6 +1,7 @@
 import {
   AgXToneMapping,
   AmbientLight,
+  BufferAttribute,
   BufferGeometry,
   Color,
   DataTexture,
@@ -12,27 +13,41 @@ import {
   Mesh,
   MeshBasicNodeMaterial,
   MeshPhysicalNodeMaterial,
+  NoToneMapping,
   OrthographicCamera,
   RGBAFormat,
+  RenderPipeline,
   SRGBColorSpace,
   Scene,
   WebGPURenderer,
 } from 'three/webgpu';
+import type Node from 'three/src/nodes/core/Node.js';
 import {
-  abs,
   attribute,
   clamp,
   float,
+  max,
+  mix,
+  normalFlat,
+  pass,
   positionLocal,
   sin,
+  tanh,
   uniform,
   vertexColor,
+  vec2,
   vec3,
 } from 'three/tsl';
+import type { PostChainSpec, RenderInputs } from '../types';
+import { fxBuilder, afterImageDamp, type FxUniforms } from './postFxRegistry';
+import { trails, type TrailsNode, type TrailsMode } from './trailsNode';
+import { fxDescriptor, fxStructuralSignature } from './postFxCatalog';
 import { intSetting, lightSettings, materialSettings, type MaterialSettings, type Settings } from '../settings/androidSettings';
 import { oklchToLinearSrgb } from '../color/palette';
 import type { Palette } from '../color/palette';
-import type { AudioFeatures, Gains, ProjectionGesture } from '../types';
+import type { AudioDriveEditState, AudioModulationValues, ProjectionGesture } from '../types';
+import { CenterHealthTracker } from './renderHealth';
+import { clampNumber } from '../util/clamp';
 
 type RendererUniforms = ReturnType<typeof createRendererUniforms>;
 type DragMode = 'boost' | 'zoom' | 'rotate';
@@ -47,6 +62,20 @@ type DragState = {
   bx: number;
   by: number;
 };
+type HealthSamplePoint = {
+  sourceX: number;
+  sourceY: number;
+  viewportX: number;
+  viewportY: number;
+};
+type HealthSampleRegion = {
+  points: HealthSamplePoint[];
+};
+
+function clampLinearColor(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
 
 function createRendererUniforms() {
   return {
@@ -57,14 +86,34 @@ function createRendererUniforms() {
     clearcoat: uniform(0.62),
     anisotropy: uniform(0.28),
     iridescence: uniform(0.44),
+    iridThicknessMin: uniform(120),
+    iridThicknessMax: uniform(420),
     emissive: uniform(0),
+    colorMix: uniform(1),
+    materialMix: uniform(1),
+    projectionMix: uniform(1),
+    fieldMix: uniform(1),
+    projBlend: uniform(0),
+    projScale: uniform(1.525),
     shadeFloor: uniform(0.04),
     sheen: uniform(0.12),
     brightness: uniform(1),
     rippleAmp: uniform(0),
+    rippleColorAmp: uniform(0),
     rippleFreq: uniform(4),
+    depthScale: uniform(0.42),
+    reliefScale: uniform(0.55),
+    edgeDepthBias: uniform(0.0015),
     time: uniform(0),
+    boostX: uniform(0),
+    boostY: uniform(0),
   };
+}
+
+function displayScaleFromSettings(settings: Settings | Partial<Settings>): number {
+  if (String(settings.projection) === '1') return 1;
+  const value = intSetting(settings, 'hyp_scale', 0, 100);
+  return 0.35 + value / 100 * 1.95;
 }
 
 export class WallpaperRenderer {
@@ -77,14 +126,37 @@ export class WallpaperRenderer {
   keyLight: DirectionalLight;
   fillLight: DirectionalLight;
   renderer: WebGPURenderer;
+  postPipeline: RenderPipeline | null;
+  postChainSpec: PostChainSpec;
+  postChainSignature: string;
+  postChainUniforms: Map<string, FxUniforms>;
+  feedbackNodes: Map<string, TrailsNode>;
+  // The scene pass is created ONCE and reused across pipeline rebuilds — recreating
+  // it each rebuild orphaned a full-res HalfFloat render target (the dominant GPU
+  // leak), since RenderPipeline.dispose() only frees its quad material.
+  scenePassNode: ReturnType<typeof pass> | null;
+  // The previous output-node tree, kept so a rebuild can free every render target
+  // its addon FX nodes (bloom/anamorphic/RTT/etc.) own before discarding it.
+  postOutputNode: Node | null;
+  postBg: [number, number, number];
   uniforms: RendererUniforms;
   material: MeshPhysicalNodeMaterial;
   edgeMaterial: MeshBasicNodeMaterial;
   mesh: Mesh<BufferGeometry, MeshPhysicalNodeMaterial> | null;
   edgeMesh: Mesh<BufferGeometry, MeshBasicNodeMaterial> | null;
+  renderConnected: boolean;
+  lightingConnected: boolean;
   baseMaterial: MaterialSettings;
   baseRippleAmp: number;
+  baseDepthScale: number;
   baseScale: number;
+  projectionScale: number;
+  settings: Partial<Settings>;
+  audioBoostX: number | null;
+  audioBoostY: number | null;
+  audioEditMode: AudioDriveEditState['dragMode'];
+  dragBoostX: number;
+  dragBoostY: number;
   viewZoom: number;
   initialized: boolean;
   clockEnabled: boolean;
@@ -95,6 +167,18 @@ export class WallpaperRenderer {
   drag: DragState | null;
   projectionGesture: ProjectionGesture | null;
   resizeObserver: ResizeObserver;
+  healthCanvas: HTMLCanvasElement;
+  healthContext: CanvasRenderingContext2D | null;
+  healthTracker: CenterHealthTracker;
+  healthFrame: number;
+  warmupFrame: number;
+  warmupFramesRemaining: number;
+  lastHealthCheck: number;
+  healthReadbackFailed: boolean;
+  forceCenterBlackHealthProbe: boolean;
+  forceCenterOcclusionHealthProbe: boolean;
+  deviceLost: boolean;
+  onDeviceLost: ((message: string) => void) | null;
 
   constructor(container: HTMLElement) {
     if (!navigator.gpu) {
@@ -122,6 +206,14 @@ export class WallpaperRenderer {
     this.renderer.toneMapping = AgXToneMapping;
     this.renderer.toneMappingExposure = 1.08;
     container.appendChild(this.renderer.domElement);
+    this.postPipeline = null;
+    this.postChainSpec = [];
+    this.postChainSignature = '';
+    this.postChainUniforms = new Map();
+    this.feedbackNodes = new Map();
+    this.scenePassNode = null;
+    this.postOutputNode = null;
+    this.postBg = [0, 0, 0];
 
     this.uniforms = createRendererUniforms();
 
@@ -131,12 +223,22 @@ export class WallpaperRenderer {
       opacity: 0.4,
       depthWrite: false,
     });
-    this.edgeMaterial.positionNode = this.ripplePositionNode();
+    this.edgeMaterial.positionNode = this.boostedEdgePositionNode();
     this.mesh = null;
     this.edgeMesh = null;
+    this.renderConnected = true;
+    this.lightingConnected = true;
     this.baseMaterial = materialSettings({});
     this.baseRippleAmp = 0;
+    this.baseDepthScale = 0.42;
     this.baseScale = 1;
+    this.projectionScale = 1;
+    this.settings = {};
+    this.audioBoostX = null;
+    this.audioBoostY = null;
+    this.audioEditMode = 'ride';
+    this.dragBoostX = 50;
+    this.dragBoostY = 50;
     this.viewZoom = 1;
     this.initialized = false;
     this.clockEnabled = false;
@@ -146,6 +248,20 @@ export class WallpaperRenderer {
     this.clockLast = 0;
     this.drag = null;
     this.projectionGesture = null;
+    this.healthCanvas = document.createElement('canvas');
+    this.healthCanvas.width = 1;
+    this.healthCanvas.height = 1;
+    this.healthContext = this.healthCanvas.getContext('2d', { willReadFrequently: true });
+    this.healthTracker = new CenterHealthTracker();
+    this.healthFrame = 0;
+    this.warmupFrame = 0;
+    this.warmupFramesRemaining = 0;
+    this.lastHealthCheck = 0;
+    this.healthReadbackFailed = false;
+    this.forceCenterBlackHealthProbe = new URLSearchParams(window.location.search).has('penroseForceCenterBlack');
+    this.forceCenterOcclusionHealthProbe = new URLSearchParams(window.location.search).has('penroseForceCenterOccluded');
+    this.deviceLost = false;
+    this.onDeviceLost = null;
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.renderer.domElement.addEventListener('contextmenu', event => event.preventDefault());
@@ -159,9 +275,49 @@ export class WallpaperRenderer {
   async init(): Promise<void> {
     await this.renderer.init();
     this.initialized = true;
+    // WebGPU can drop the device (alt-tab / GPU process change / memory
+    // pressure). Without this listener the next render after a loss throws and
+    // cascades ("Instance dropped in popErrorScope") on the next click. Detect
+    // it, stop the render/clock/health loops, and surface it cleanly.
+    const lost = this.deviceLostPromise();
+    // Disposing the renderer calls device.destroy(), which resolves device.lost
+    // with reason 'destroyed' — an intentional teardown, NOT a real loss. Ignore
+    // it (mirroring three's own backend guard) so normal/StrictMode disposal does
+    // not log a spurious device-lost error.
+    if (lost) void lost.then(info => {
+      if (info?.reason === 'destroyed') return;
+      this.handleDeviceLost(info?.message ?? 'unspecified');
+    });
     this.scene.environment = this.createEnvironmentTexture();
+    this.rebuildPostPipeline();
     this.resize();
     this.render();
+  }
+
+  deviceLostPromise(): Promise<{ message?: string; reason?: string }> | null {
+    // Reach the GPUDevice.lost promise through three's backend without a cast:
+    // the intermediate is typed `object`, so Reflect.get returns a loose value
+    // we narrow structurally.
+    const backend: object = this.renderer.backend;
+    const device = Reflect.get(backend, 'device');
+    if (!device || typeof device !== 'object') return null;
+    const lost = Reflect.get(device, 'lost');
+    return lost instanceof Promise ? lost : null;
+  }
+
+  handleDeviceLost(message: string): void {
+    if (this.deviceLost) return;
+    this.deviceLost = true;
+    this.stopClock();
+    if (this.healthFrame) {
+      cancelAnimationFrame(this.healthFrame);
+      this.healthFrame = 0;
+    }
+    // Fail hard and visibly — losing the device should NOT happen in this app,
+    // so surface it (App shows a fatal screen) rather than silently degrade or
+    // recover, to force fixing the root cause.
+    console.error('[WallpaperRenderer] WebGPU device lost:', message);
+    this.onDeviceLost?.(message);
   }
 
   createEnvironmentTexture(): DataTexture {
@@ -187,34 +343,322 @@ export class WallpaperRenderer {
     return texture;
   }
 
-  ripplePositionNode() {
-    const ripplePhase = positionLocal.x.mul(this.uniforms.rippleFreq)
-      .add(positionLocal.y.mul(this.uniforms.rippleFreq.mul(0.73)))
+  postChainSignatureOf(spec: PostChainSpec): string {
+    return spec
+      .map(node => `${node.id}:${node.kind}:${node.bypass ? 1 : 0}:${fxStructuralSignature(node.kind, node.params, node.selects)}`)
+      .join('|');
+  }
+
+  // Free every render target the discarded post-node tree owns. three's
+  // RenderPipeline.dispose() frees only its quad material, and base Node.dispose()
+  // just fires an event — so addon FX nodes (bloom/anamorphic/afterImage/trails)
+  // and convertToTexture's RTTNode leak their GPU render targets across rebuilds
+  // unless we walk the old tree and free them. Reused nodes (the scene pass and
+  // cached uniforms) are protected so they survive into the next build.
+  //
+  // Only nodes that actually own a render target are disposed. Plain nodes and
+  // shared TSL singletons (screenUV/screenSize are nodeImmutable, referenced app
+  // wide) hold no RT, so they are left untouched — disposing them would needlessly
+  // tear down a cache that is reused every frame.
+  private disposePostTree(root: Node, keep: Set<object>): void {
+    const visited = new Set<object>();
+    const freeRenderTarget = (value: object): boolean => {
+      if (Reflect.get(value, 'isRenderTarget') !== true) return false;
+      const rtDispose = Reflect.get(value, 'dispose');
+      if (typeof rtDispose === 'function') Reflect.apply(rtDispose, value, []);
+      return true;
+    };
+    root.traverse(node => {
+      if (keep.has(node) || visited.has(node)) return;
+      visited.add(node);
+      let ownsRenderTarget = false;
+      for (const key of Object.keys(node)) {
+        const value = Reflect.get(node, key);
+        if (!value || typeof value !== 'object') continue;
+        if (freeRenderTarget(value)) {
+          ownsRenderTarget = true;
+        } else if (Array.isArray(value)) {
+          // Bloom keeps arrays of horizontal/vertical blur render targets.
+          for (const item of value) {
+            if (item && typeof item === 'object' && freeRenderTarget(item)) ownsRenderTarget = true;
+          }
+        }
+      }
+      // The override on bloom/anamorphic/afterImage frees their materials + caches
+      // too; RTTNode has no override, but its render target is already freed above.
+      if (ownsRenderTarget) node.dispose();
+    });
+  }
+
+  rebuildPostPipeline(): void {
+    const oldOutput = this.postOutputNode;
+    // Reuse the scene pass; recreating it per rebuild leaked a full-res RT each time.
+    const scenePass = this.scenePassNode ?? pass(this.scene, this.camera);
+    this.scenePassNode = scenePass;
+    // Protect everything still in use (scene pass + cached uniforms + live feedback
+    // nodes) from the old-tree disposal below; only genuinely discarded nodes go.
+    const keep = new Set<object>();
+    scenePass.traverse(node => keep.add(node));
+    for (const uniforms of this.postChainUniforms.values()) {
+      for (const value of Object.values(uniforms)) value.traverse(node => keep.add(node));
+    }
+    // Only the feedback node itself is protected (it is disposed explicitly just
+    // below); its upstream chain must still be freed by the traversal.
+    for (const feedback of this.feedbackNodes.values()) keep.add(feedback);
+    this.postPipeline?.dispose();
+    for (const node of this.feedbackNodes.values()) node.dispose();
+    if (oldOutput) this.disposePostTree(oldOutput, keep);
+    const nextFeedback = new Map<string, TrailsNode>();
+    const nextUniforms = new Map<string, FxUniforms>();
+    let frame: Node = scenePass;
+    // The output color transform (AgX tone map + sRGB) is owned by the toneMap
+    // node, not the pipeline: it applies only when a live toneMap node is in the
+    // chain. Cut/bypass/skip it and the frame reaches the screen untransformed
+    // (linear, washed-out) — the node is downstream of its inlets, like every FX.
+    let hasToneMap = false;
+    for (const node of this.postChainSpec) {
+      if (node.bypass) continue;
+      const descriptor = fxDescriptor(node.kind);
+      if (!descriptor) continue;
+      if (node.kind === 'toneMap') {
+        hasToneMap = true;
+        continue;
+      }
+      if (node.kind === 'feedback') {
+        const mode: TrailsMode = node.selects['mode'] === 'afterimage' ? 'afterimage'
+          : node.selects['mode'] === 'both' ? 'both' : 'trails';
+        const trailsFx = trails(frame, mode);
+        nextFeedback.set(node.id, trailsFx);
+        nextUniforms.set(node.id, {});
+        frame = trailsFx;
+        continue;
+      }
+      const builder = fxBuilder(node.kind);
+      if (!builder) continue;
+      const existing = this.postChainUniforms.get(node.id);
+      const uniforms = existing ?? builder.createUniforms();
+      nextUniforms.set(node.id, uniforms);
+      frame = builder.apply(frame, uniforms, node);
+    }
+
+    this.feedbackNodes = nextFeedback;
+    this.postChainUniforms = nextUniforms;
+    this.postOutputNode = frame;
+    this.postPipeline = new RenderPipeline(this.renderer, frame);
+    // The toneMap node owns ONLY the AgX tone curve. The sRGB output encode
+    // always runs (outputColorTransform = true), so bypassing toneMap drops the
+    // curve — highlights clip and wash out — instead of skipping the gamma
+    // encode (which would just darken the whole frame). Cut/skip it, the curve
+    // stops; the node is downstream of its place on the wire path.
+    this.renderer.toneMapping = hasToneMap ? AgXToneMapping : NoToneMapping;
+    this.postPipeline.outputColorTransform = true;
+    this.postPipeline.needsUpdate = true;
+  }
+
+  setPostChain(spec: PostChainSpec): void {
+    this.postChainSpec = spec;
+    const signature = this.postChainSignatureOf(spec);
+    if (signature !== this.postChainSignature) {
+      this.postChainSignature = signature;
+      this.rebuildPostPipeline();
+    }
+    this.writePostChainUniforms();
+    this.render();
+  }
+
+  writePostChainUniforms(): void {
+    for (const node of this.postChainSpec) {
+      if (node.kind === 'feedback') {
+        const trailsFx = this.feedbackNodes.get(node.id);
+        if (trailsFx) {
+          trailsFx.decay.value = afterImageDamp(node.params['trail'] ?? 0);
+          trailsFx.zoom.value = node.params['zoom'] ?? 0;
+          trailsFx.rotate.value = node.params['rotate'] ?? 0;
+          trailsFx.hue.value = node.params['hue'] ?? 0;
+          trailsFx.maskMode.value = node.selects['mask'] === 'surface' ? 1 : node.selects['mask'] === 'inverse' ? 2 : 0;
+          trailsFx.bg.value.set(this.postBg[0], this.postBg[1], this.postBg[2]);
+        }
+        continue;
+      }
+      const uniforms = this.postChainUniforms.get(node.id);
+      if (!uniforms) continue;
+      if (node.kind === 'afterImage') {
+        const damp = uniforms['damp'];
+        if (damp) damp.value = afterImageDamp(node.params['trail'] ?? 0);
+        continue;
+      }
+      for (const [key, value] of Object.entries(node.params)) {
+        const target = uniforms[key];
+        if (!target) continue;
+        // Dot-screen scale is a normalized 0..1 control mapped to raw scale 8*v^2,
+        // so the coarse/useful range gets most of the slider and the degenerate
+        // ultra-fine bottom is compressed into the first ~11% of travel.
+        target.value = node.kind === 'dotScreen' && key === 'scale' ? value * value * 8 : value;
+      }
+    }
+  }
+
+  boostCoordinateNodes(x: Node<'float'>, y: Node<'float'>) {
+    // Continuous Euclid <-> Poincaré disk projection in the vertex shader
+    // (matches CPU projectHyp: z = normalize(x,y) * tanh(r * scale * 0.5)).
+    // projBlend 0 = Euclidean (px=x, py=y -> byte-identical default), 1 = full
+    // disk; modulates live with no geometry rebuild. Adds no vertex attribute.
+    const r = x.mul(x).add(y.mul(y)).sqrt();
+    const safeR = max(r, float(1e-6));
+    const d = tanh(r.mul(this.uniforms.projScale).mul(0.5));
+    const px = mix(x, x.div(safeR).mul(d), this.uniforms.projBlend);
+    const py = mix(y, y.div(safeR).mul(d), this.uniforms.projBlend);
+    // projectionMix is the projection->palette inlet: 1 = the wired hyperbolic
+    // boost, 0 = identity (flat). Cutting that wire flattens the projection
+    // instead of hiding the mesh. bx=by=0 is exactly identity here.
+    const bx = this.uniforms.boostX.mul(this.uniforms.projectionMix);
+    const by = this.uniforms.boostY.mul(this.uniforms.projectionMix);
+    const bb = bx.mul(bx).add(by.mul(by));
+    const zz = px.mul(px).add(py.mul(py));
+    const zb = px.mul(bx).add(py.mul(by));
+    // Guard the Möbius denominator away from 0 (the CPU projectHyp clamps it to
+    // 1e-6). Near the singularity — reachable with proj_blend + boost — an
+    // unguarded divide yields Inf/NaN positions, and a single NaN pixel poisons
+    // the feedback ping-pong buffer permanently (NaN*decay = NaN), which breaks
+    // the surface/inverse trail mask. At the default (boost 0) denom = 1, no-op.
+    const denom = max(bb.mul(zz).add(zb.mul(2)).add(1), float(1e-4));
+    const oneMinusBoost = float(1).sub(bb);
+    const boostedWeight = zz.add(zb.mul(2)).add(1);
+    const boostedX = oneMinusBoost.mul(px).add(boostedWeight.mul(bx)).div(denom);
+    const boostedY = oneMinusBoost.mul(py).add(boostedWeight.mul(by)).div(denom);
+    return { x: boostedX, y: boostedY };
+  }
+
+  rippleWaveNode(x: Node<'float'>, y: Node<'float'>): Node<'float'> {
+    const phase = x.mul(this.uniforms.rippleFreq)
+      .add(y.mul(this.uniforms.rippleFreq.mul(0.73)))
       .add(this.uniforms.time);
-    const ripple = sin(ripplePhase).mul(this.uniforms.rippleAmp);
-    return positionLocal.add(vec3(0, 0, ripple));
+    return sin(phase);
+  }
+
+  surfaceDepthNode(
+    boostedX: Node<'float'>,
+    boostedY: Node<'float'>,
+    tileRing: Node<'float'>,
+    tileOrient: Node<'vec2'>,
+    tileCenter: Node<'vec2'>,
+  ): Node<'float'> {
+    const boostedCenter = this.boostCoordinateNodes(tileCenter.x, tileCenter.y);
+    const localX = boostedX.sub(boostedCenter.x);
+    const localY = boostedY.sub(boostedCenter.y);
+    const directionalDepth = localX.mul(tileOrient.x).add(localY.mul(tileOrient.y))
+      .mul(this.uniforms.depthScale)
+      .mul(0.12);
+    const contourDepth = tileRing.sub(0.5).mul(this.uniforms.depthScale).mul(0.012);
+    return directionalDepth.add(contourDepth);
+  }
+
+  // The surface z-displacement. The scalar relief (positionLocal.z * reliefScale)
+  // is always present; the displacement FIELD — the per-tile depth plus a ripple
+  // that modulates (relief + depth) — is gated by fieldMix (the §0 field wire) and
+  // contributes nothing when cut. So: cut the field -> static relief; relief 0 AND
+  // depth 0 -> flat; ripple only ever waves displacement that actually exists.
+  surfaceZNode(
+    boostedX: Node<'float'>,
+    boostedY: Node<'float'>,
+    tileRing: Node<'float'>,
+    tileOrient: Node<'vec2'>,
+    tileCenter: Node<'vec2'>,
+  ): Node<'float'> {
+    const reliefZ = positionLocal.z.mul(this.uniforms.reliefScale);
+    const depth = this.surfaceDepthNode(boostedX, boostedY, tileRing, tileOrient, tileCenter);
+    const wave = this.rippleWaveNode(boostedX, boostedY).mul(this.uniforms.rippleAmp);
+    const field = depth.add(reliefZ.add(depth).mul(wave));
+    return reliefZ.add(field.mul(this.uniforms.fieldMix));
+  }
+
+  boostedPositionNode() {
+    const tileRing = attribute<'float'>('tileRing', 'float');
+    const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
+    const tileCenter = attribute<'vec2'>('tileCenter', 'vec2');
+    const boosted = this.boostCoordinateNodes(positionLocal.x, positionLocal.y);
+    return vec3(boosted.x, boosted.y, this.surfaceZNode(boosted.x, boosted.y, tileRing, tileOrient, tileCenter));
+  }
+
+  boostedEdgePositionNode() {
+    const tileRing = attribute<'float'>('tileRing', 'float');
+    const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
+    const tileCenter = attribute<'vec2'>('tileCenter', 'vec2');
+    const boosted = this.boostCoordinateNodes(positionLocal.x, positionLocal.y);
+    return vec3(
+      boosted.x,
+      boosted.y,
+      this.surfaceZNode(boosted.x, boosted.y, tileRing, tileOrient, tileCenter).add(this.uniforms.edgeDepthBias),
+    );
   }
 
   createMaterial(): MeshPhysicalNodeMaterial {
     const tileType = attribute<'float'>('tileType', 'float');
     const tileRing = attribute<'float'>('tileRing', 'float');
     const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
+    const rippleColor = this.rippleWaveNode(positionLocal.x, positionLocal.y).mul(this.uniforms.rippleColorAmp).mul(this.uniforms.fieldMix);
     const material = new MeshPhysicalNodeMaterial({
       side: DoubleSide,
     });
     material.vertexColors = true;
-    material.colorNode = clamp(vertexColor().mul(this.uniforms.brightness), 0.0, 1.0);
-    material.positionNode = this.ripplePositionNode();
-    material.roughnessNode = clamp(this.uniforms.roughness.add(tileRing.mul(this.uniforms.roughMod)), 0.035, 1.0);
-    material.metalnessNode = clamp(this.uniforms.metalness.add(tileType.mul(this.uniforms.metalMod)), 0.0, 1.0);
-    material.clearcoatNode = this.uniforms.clearcoat;
+    // colorMix is the palette->material:color inlet: 1 = palette color, 0 = flat
+    // white. Cutting that wire drops the color (flat tiles) instead of hiding
+    // the mesh — the material is downstream of its color inlet.
+    material.colorNode = clamp(
+      mix(vec3(1.0, 1.0, 1.0), vertexColor(), this.uniforms.colorMix).mul(this.uniforms.brightness.add(rippleColor)),
+      0.0,
+      1.0,
+    );
+    material.positionNode = this.boostedPositionNode();
+    material.normalNode = normalFlat;
+    // materialMix is the material->renderer:surface inlet: 1 = tuned material,
+    // 0 = neutral matte (rough 0.5, no metal/clearcoat/aniso/irid/sheen). Cutting
+    // that wire renders a plain surface instead of hiding the mesh — the material
+    // is downstream of its surface inlet. Default 1 leaves the look untouched.
+    const matMix = this.uniforms.materialMix;
+    material.roughnessNode = clamp(
+      mix(float(0.5), this.uniforms.roughness.add(tileRing.mul(this.uniforms.roughMod)), matMix),
+      0.035,
+      1.0,
+    );
+    material.metalnessNode = clamp(this.uniforms.metalness.add(tileType.mul(this.uniforms.metalMod)), 0.0, 1.0).mul(matMix);
+    material.clearcoatNode = this.uniforms.clearcoat.mul(matMix);
     material.clearcoatRoughnessNode = clamp(this.uniforms.roughness.mul(0.28), 0.018, 0.32);
-    material.anisotropyNode = clamp(abs(tileOrient.x).mul(this.uniforms.anisotropy), 0.0, 1.0);
-    material.iridescenceNode = clamp(this.uniforms.iridescence.mul(float(0.7).add(tileRing.mul(0.3))), 0.0, 1.0);
-    material.sheenNode = this.uniforms.sheen;
+    material.clearcoatNormalNode = normalFlat;
+    material.anisotropyNode = vec2(tileOrient.x, tileOrient.y).mul(this.uniforms.anisotropy).mul(matMix);
+    material.iridescenceNode = clamp(this.uniforms.iridescence.mul(float(0.7).add(tileRing.mul(0.3))), 0.0, 1.0).mul(matMix);
+    material.iridescenceThicknessNode = clamp(
+      this.uniforms.iridThicknessMin.add(this.uniforms.iridThicknessMax.sub(this.uniforms.iridThicknessMin).mul(tileRing)),
+      1.0,
+      1200.0,
+    );
+    material.sheenNode = this.uniforms.sheen.mul(matMix);
     material.sheenRoughnessNode = float(0.44);
-    material.emissiveNode = vertexColor().mul(this.uniforms.emissive.add(this.uniforms.shadeFloor));
+    material.emissiveNode = vertexColor().mul(
+      this.uniforms.emissive.add(this.uniforms.shadeFloor).add(max(rippleColor, 0.0).mul(0.35)),
+    );
     return material;
+  }
+
+  applyPaletteColors(palette: Palette): void {
+    if (!this.mesh) return;
+    const colorAttribute = this.mesh.geometry.getAttribute('color');
+    const slotAttribute = this.mesh.geometry.getAttribute('paletteSlot');
+    if (!(colorAttribute instanceof BufferAttribute) || !(slotAttribute instanceof BufferAttribute)) return;
+    const colorArray = colorAttribute.array;
+    const slotArray = slotAttribute.array;
+    if (!(colorArray instanceof Float32Array) || !(slotArray instanceof Float32Array)) return;
+    for (let i = 0; i < slotArray.length; i += 1) {
+      const slot = Math.max(0, Math.min(palette.colors.length - 1, Math.round(slotArray[i] ?? 0)));
+      const source = palette.colors[slot] ?? palette.colors[0];
+      if (!source) continue;
+      const rgb = oklchToLinearSrgb(source);
+      const p = i * 3;
+      colorArray[p] = clampLinearColor(rgb[0]);
+      colorArray[p + 1] = clampLinearColor(rgb[1]);
+      colorArray[p + 2] = clampLinearColor(rgb[2]);
+    }
+    colorAttribute.needsUpdate = true;
   }
 
   setGeometry(geometry: BufferGeometry, edgeGeometry: BufferGeometry | null = null): void {
@@ -234,11 +678,43 @@ export class WallpaperRenderer {
       this.edgeMesh.renderOrder = 2;
       this.group.add(this.edgeMesh);
     }
+    this.applyRenderConnected();
     this.frameMesh();
+    this.render();
+    this.requestWarmupFrames(10);
+  }
+
+  applyRenderConnected(): void {
+    if (this.mesh) this.mesh.visible = this.renderConnected;
+    if (this.edgeMesh) this.edgeMesh.visible = this.renderConnected;
+  }
+
+  setRenderInputs(inputs: RenderInputs): void {
+    const colorMix = inputs.color ? 1 : 0;
+    const materialMix = inputs.material ? 1 : 0;
+    const projectionMix = inputs.projection ? 1 : 0;
+    const fieldMix = inputs.field ? 1 : 0;
+    const changed =
+      this.renderConnected !== inputs.geometry ||
+      this.lightingConnected !== inputs.lighting ||
+      this.uniforms.colorMix.value !== colorMix ||
+      this.uniforms.materialMix.value !== materialMix ||
+      this.uniforms.projectionMix.value !== projectionMix ||
+      this.uniforms.fieldMix.value !== fieldMix;
+    if (!changed) return;
+    this.renderConnected = inputs.geometry;
+    this.lightingConnected = inputs.lighting;
+    this.uniforms.colorMix.value = colorMix;
+    this.uniforms.materialMix.value = materialMix;
+    this.uniforms.projectionMix.value = projectionMix;
+    this.uniforms.fieldMix.value = fieldMix;
+    this.applyRenderConnected();
+    this.applyLights(this.settings);
     this.render();
   }
 
   setSettings(settings: Settings, palette: Palette): void {
+    this.settings = { ...settings };
     const mat = materialSettings(settings);
     this.baseMaterial = mat;
     this.uniforms.roughness.value = mat.roughness;
@@ -248,23 +724,30 @@ export class WallpaperRenderer {
     this.uniforms.clearcoat.value = mat.clearcoat;
     this.uniforms.anisotropy.value = mat.anisotropy;
     this.uniforms.iridescence.value = mat.iridescence;
+    this.uniforms.iridThicknessMin.value = intSetting(settings, 'mat_irid_thick_min', 1, 1200);
+    this.uniforms.iridThicknessMax.value = Math.max(
+      this.uniforms.iridThicknessMin.value,
+      intSetting(settings, 'mat_irid_thick_max', 1, 1200),
+    );
     this.uniforms.emissive.value = mat.emissive;
     this.uniforms.shadeFloor.value = 0.036 + Math.min(0.028, mat.sheen * 0.018 + mat.clearcoat * 0.012);
     this.uniforms.sheen.value = mat.sheen;
+    this.uniforms.reliefScale.value = intSetting(settings, 'mat_relief', 0, 200) / 200;
     this.uniforms.brightness.value = intSetting(settings, 'brightness', 0, 200) / 100;
-    this.baseRippleAmp = intSetting(settings, 'ripple_amount', 0, 100) / 100
-      * intSetting(settings, 'depth_amount', 0, 100) / 100
-      * 0.075;
+    const rippleAmount = intSetting(settings, 'ripple_amount', 0, 100) / 100;
+    // ripple_kind: 0 Color · 1 Depth · 2 Both · 3 Fine both · 4 None. None zeroes
+    // ripple AND depth so the node contributes nothing (flat, modulo relief).
+    const rippleKind = intSetting(settings, 'ripple_kind', 0, 4);
+    const rippleNone = rippleKind === 4;
+    const hasColorRipple = !rippleNone && rippleKind !== 1;
+    const hasMotionRipple = !rippleNone && rippleKind !== 0;
+    this.baseDepthScale = rippleNone ? 0 : intSetting(settings, 'depth_amount', 0, 100) / 100;
+    this.uniforms.depthScale.value = this.baseDepthScale;
+    this.baseRippleAmp = (hasMotionRipple ? rippleAmount : 0) * (rippleKind === 3 ? 0.092 : 0.075);
     this.uniforms.rippleAmp.value = this.baseRippleAmp;
-    this.uniforms.rippleFreq.value = 2 + intSetting(settings, 'ripple_kind', 0, 3) * 2.25;
-    this.material.roughness = mat.roughness;
-    this.material.metalness = mat.metalness;
-    this.material.clearcoat = mat.clearcoat;
-    this.material.iridescence = mat.iridescence;
-    this.material.envMapIntensity = 0.8 + mat.clearcoat * 0.9 + mat.metalness * 0.5;
-    this.material.clearcoatRoughness = Math.max(0.03, mat.roughness * 0.35);
-    this.material.sheen = mat.sheen;
-    this.material.needsUpdate = true;
+    this.uniforms.rippleColorAmp.value = (hasColorRipple ? rippleAmount : 0) * (rippleKind === 3 ? 0.16 : 0.22);
+    this.uniforms.rippleFreq.value = 2 + rippleKind * 2.25;
+    this.scene.environmentIntensity = 0.8 + mat.clearcoat * 0.9 + mat.metalness * 0.5;
     const border = oklchToLinearSrgb([
       intSetting(settings, 'border_l', 0, 100) / 100,
       intSetting(settings, 'border_c', 0, 37) / 100,
@@ -272,25 +755,153 @@ export class WallpaperRenderer {
     ]);
     this.edgeMaterial.color.setRGB(border[0], border[1], border[2]);
     this.edgeMaterial.opacity = intSetting(settings, 'border_a', 0, 100) / 100;
-    this.edgeMaterial.needsUpdate = true;
+    this.applyPaletteColors(palette);
     this.applyLights(settings);
+    this.uniforms.projBlend.value = intSetting(settings, 'proj_blend', 0, 100) / 100;
+    this.uniforms.projScale.value = 0.05 + intSetting(settings, 'hyp_scale', 0, 100) / 100 * 2.95;
+    this.projectionScale = displayScaleFromSettings(settings);
+    this.applyGroupScale();
+    this.setProjectionBoost(
+      Number(settings.hyp_boost_x ?? 50),
+      Number(settings.hyp_boost_y ?? 50),
+      String(settings.projection) === '1',
+      false,
+    );
 
     const bg = oklchToLinearSrgb(palette.bg);
     this.renderer.setClearColor(new Color(bg[0], bg[1], bg[2]), 1);
+    this.postBg = [bg[0], bg[1], bg[2]];
     this.setClockFromSettings(settings);
     this.render();
+    if (this.mesh) this.requestWarmupFrames(4);
   }
 
-  setAudioDrive(features: AudioFeatures, gains: Gains): void {
-    const mat = this.baseMaterial;
-    this.uniforms.emissive.value = Math.min(2, mat.emissive + features.bass * gains.emissive);
-    this.uniforms.iridescence.value = Math.min(1, mat.iridescence + features.treble * gains.film);
-    this.uniforms.metalness.value = Math.min(1, mat.metalness + features.mid * gains.metal * 0.35);
-    this.uniforms.rippleAmp.value = this.baseRippleAmp * (1 + features.level * Math.max(0, gains.relief));
-    if (this.mesh) {
-      const z = 1 + features.level * gains.relief * 0.08;
-      this.mesh.scale.z = z;
-      if (this.edgeMesh) this.edgeMesh.scale.z = z;
+  setProjectionBoost(x: number, y: number, enabled = true, shouldRender = true): void {
+    let bx = enabled ? (Math.max(0, Math.min(100, x)) - 50) / 50 * 0.9 : 0;
+    let by = enabled ? (Math.max(0, Math.min(100, y)) - 50) / 50 * 0.9 : 0;
+    const magnitude = Math.hypot(bx, by);
+    if (magnitude > 0.92) {
+      const scale = 0.92 / magnitude;
+      bx *= scale;
+      by *= scale;
+    }
+    this.uniforms.boostX.value = bx;
+    this.uniforms.boostY.value = by;
+    if (shouldRender) this.render();
+  }
+
+  effectiveDragBoost(axis: 'x' | 'y', value: number): number {
+    if (this.audioEditMode === 'hold') return value;
+    const audioDelta = axis === 'x' ? this.audioBoostX : this.audioBoostY;
+    return audioDelta === null ? value : clampNumber(value + audioDelta, 0, 100);
+  }
+
+  setAudioDrive(
+    editState: AudioDriveEditState,
+    modulations: AudioModulationValues = {},
+  ): void {
+    this.audioEditMode = editState.dragMode;
+    const held = (key: string) => editState.dragMode === 'hold' && editState.heldParams[key] === true;
+    const hasModulation = (key: string): boolean => {
+      const value = modulations[key];
+      return typeof value === 'number' && Number.isFinite(value) && !held(key);
+    };
+    const modulatedValue = (key: keyof Settings, min: number, max: number): number => {
+      const baseline = intSetting(this.settings, key, min, max);
+      const value = modulations[key];
+      return typeof value === 'number' && Number.isFinite(value) && !held(key)
+        ? clampNumber(baseline + value * (max - min), min, max)
+        : baseline;
+    };
+    const modulatedDelta = (key: keyof Settings, min: number, max: number): number | null => {
+      const value = modulations[key];
+      return typeof value === 'number' && Number.isFinite(value) && !held(key)
+        ? value * (max - min)
+        : null;
+    };
+    const audioSettings: Partial<Settings> = {
+      ...this.settings,
+      brightness: modulatedValue('brightness', 40, 180),
+      depth_amount: modulatedValue('depth_amount', 0, 100),
+      hyp_boost_x: modulatedValue('hyp_boost_x', 0, 100),
+      hyp_boost_y: modulatedValue('hyp_boost_y', 0, 100),
+      hyp_scale: modulatedValue('hyp_scale', 0, 100),
+      proj_blend: modulatedValue('proj_blend', 0, 100),
+      light_ambient: modulatedValue('light_ambient', 0, 100),
+      light_angle: modulatedValue('light_angle', 0, 360),
+      light_elevation: modulatedValue('light_elevation', 0, 90),
+      light_intensity: modulatedValue('light_intensity', 0, 200),
+      light_warmth: modulatedValue('light_warmth', 0, 100),
+      mat_anisotropy: modulatedValue('mat_anisotropy', 0, 100),
+      mat_clearcoat: modulatedValue('mat_clearcoat', 0, 100),
+      mat_emissive: modulatedValue('mat_emissive', 0, 200),
+      mat_iridescence: modulatedValue('mat_iridescence', 0, 100),
+      mat_metal_mod: modulatedValue('mat_metal_mod', 0, 100),
+      mat_metalness: modulatedValue('mat_metalness', 0, 100),
+      mat_relief: modulatedValue('mat_relief', 0, 200),
+      mat_rough_mod: modulatedValue('mat_rough_mod', 0, 100),
+      mat_roughness: modulatedValue('mat_roughness', 0, 100),
+      mat_sheen: modulatedValue('mat_sheen', 0, 200),
+      ripple_amount: modulatedValue('ripple_amount', 0, 100),
+      ripple_speed: modulatedValue('ripple_speed', 0, 200),
+    };
+    const mat = materialSettings(audioSettings);
+    this.uniforms.roughness.value = mat.roughness;
+    this.uniforms.roughMod.value = mat.roughMod;
+    this.uniforms.metalMod.value = mat.metalMod;
+    this.uniforms.clearcoat.value = mat.clearcoat;
+    this.uniforms.anisotropy.value = mat.anisotropy;
+    this.uniforms.sheen.value = mat.sheen;
+    this.uniforms.reliefScale.value = modulatedValue('mat_relief', 0, 200) / 200;
+    this.uniforms.brightness.value = modulatedValue('brightness', 40, 180) / 100;
+    this.uniforms.emissive.value = Math.min(2, mat.emissive);
+    this.uniforms.iridescence.value = Math.min(1, mat.iridescence);
+    this.uniforms.metalness.value = Math.min(1, mat.metalness);
+    const rippleAmount = modulatedValue('ripple_amount', 0, 100) / 100;
+    // ripple_kind 4 = None: zero ripple + depth (see applySettings).
+    const rippleKind = intSetting(audioSettings, 'ripple_kind', 0, 4);
+    const rippleNone = rippleKind === 4;
+    const hasColorRipple = !rippleNone && rippleKind !== 1;
+    const hasMotionRipple = !rippleNone && rippleKind !== 0;
+    const rippleAmp = (hasMotionRipple ? rippleAmount : 0) * (rippleKind === 3 ? 0.092 : 0.075);
+    this.uniforms.rippleAmp.value = rippleAmp;
+    this.uniforms.rippleColorAmp.value = (hasColorRipple ? rippleAmount : 0) * (rippleKind === 3 ? 0.16 : 0.22);
+    this.uniforms.rippleFreq.value = 2 + rippleKind * 2.25;
+    const depthScale = rippleNone ? 0 : modulatedValue('depth_amount', 0, 100) / 100;
+    this.uniforms.depthScale.value = Math.min(1.5, depthScale);
+    if (hasModulation('ripple_speed')) {
+      this.clockRate = Math.max(0, intSetting(this.settings, 'clock_rate', 0, 240) / 100)
+        * Math.max(0.1, modulatedValue('ripple_speed', 0, 200) / 50);
+    }
+    if (
+      hasModulation('light_ambient')
+      || hasModulation('light_angle')
+      || hasModulation('light_elevation')
+      || hasModulation('light_intensity')
+      || hasModulation('light_warmth')
+    ) {
+      this.applyLights(audioSettings);
+    }
+    this.projectionScale = displayScaleFromSettings(audioSettings);
+    this.uniforms.projBlend.value = intSetting(audioSettings, 'proj_blend', 0, 100) / 100;
+    this.uniforms.projScale.value = 0.05 + intSetting(audioSettings, 'hyp_scale', 0, 100) / 100 * 2.95;
+    this.applyGroupScale();
+    this.audioBoostX = hasModulation('hyp_boost_x') ? modulatedDelta('hyp_boost_x', 0, 100) : null;
+    this.audioBoostY = hasModulation('hyp_boost_y') ? modulatedDelta('hyp_boost_y', 0, 100) : null;
+    if (this.drag?.mode === 'boost') {
+      this.setProjectionBoost(
+        this.effectiveDragBoost('x', this.dragBoostX),
+        this.effectiveDragBoost('y', this.dragBoostY),
+        true,
+        false,
+      );
+    } else {
+      this.setProjectionBoost(
+        modulatedValue('hyp_boost_x', 0, 100),
+        modulatedValue('hyp_boost_y', 0, 100),
+        String(audioSettings.projection) === '1',
+        false,
+      );
     }
     this.render();
   }
@@ -338,7 +949,7 @@ export class WallpaperRenderer {
     this.clockFrame = 0;
   }
 
-  applyLights(settings: Settings): void {
+  applyLights(settings: Settings | Partial<Settings>): void {
     const light = lightSettings(settings);
     const xy = Math.cos(light.elevation);
     this.keyLight.position.set(
@@ -346,10 +957,14 @@ export class WallpaperRenderer {
       Math.sin(light.angle) * xy,
       Math.sin(light.elevation) + 0.22,
     );
-    this.keyLight.intensity = 1.25 + light.intensity * 2.25;
-    this.ambientLight.intensity = 0.08 + light.ambient * 0.75;
-    this.hemiLight.intensity = 0.24 + light.ambient * 0.7;
-    this.fillLight.intensity = 0.18 + (1 - light.warmth) * 0.7;
+    // Lighting is a side input: when lighting→renderer is cut the lights go
+    // dark and the surface is left to the environment map alone. Cut the wire,
+    // the lighting stops — the graph is downstream of nothing here, this is.
+    const lit = this.lightingConnected ? 1 : 0;
+    this.keyLight.intensity = (1.25 + light.intensity * 2.25) * lit;
+    this.ambientLight.intensity = (0.08 + light.ambient * 0.75) * lit;
+    this.hemiLight.intensity = (0.24 + light.ambient * 0.7) * lit;
+    this.fillLight.intensity = (0.18 + (1 - light.warmth) * 0.7) * lit;
     this.keyLight.color.setRGB(
       0.86 + light.warmth * 0.28,
       0.9 + light.warmth * 0.1,
@@ -376,7 +991,11 @@ export class WallpaperRenderer {
     const radius = this.mesh.geometry.boundingSphere.radius || 1;
     const scale = 0.92 / radius;
     this.baseScale = scale;
-    this.group.scale.setScalar(this.baseScale * this.viewZoom);
+    this.applyGroupScale();
+  }
+
+  applyGroupScale(): void {
+    this.group.scale.setScalar(this.baseScale * this.viewZoom * this.projectionScale);
   }
 
   zoomWheel(event: WheelEvent): void {
@@ -387,14 +1006,14 @@ export class WallpaperRenderer {
 
   setViewZoom(value: number): void {
     this.viewZoom = Math.max(0.25, Math.min(5, value));
-    this.group.scale.setScalar(this.baseScale * this.viewZoom);
+    this.applyGroupScale();
     this.render();
   }
 
   resetView(): void {
     this.viewZoom = 1;
     this.group.rotation.set(0, 0, 0);
-    this.group.scale.setScalar(this.baseScale);
+    this.applyGroupScale();
     this.render();
   }
 
@@ -415,6 +1034,8 @@ export class WallpaperRenderer {
       bx: Number(settings?.hyp_boost_x ?? 50),
       by: Number(settings?.hyp_boost_y ?? 50),
     };
+    this.dragBoostX = this.drag.bx;
+    this.dragBoostY = this.drag.by;
     this.renderer.domElement.setPointerCapture(event.pointerId);
   }
 
@@ -424,19 +1045,37 @@ export class WallpaperRenderer {
     const dy = (event.clientY - this.drag.y) / Math.max(1, this.container.clientHeight);
     if (this.drag.mode === 'boost') {
       const bx = Math.max(0, Math.min(100, this.drag.bx + dx * 100));
-      const by = Math.max(0, Math.min(100, this.drag.by + dy * 100));
-      this.projectionGesture?.onBoost?.(bx, by);
+      // Screen Y is top-down but the camera/world Y is up, so a raw +dy makes
+      // the boost drag feel inverted on Y only (X is naturally aligned). Negate
+      // dy here so dragging down moves the projection down, matching X.
+      const by = Math.max(0, Math.min(100, this.drag.by - dy * 100));
+      this.dragBoostX = bx;
+      this.dragBoostY = by;
+      this.setProjectionBoost(this.effectiveDragBoost('x', bx), this.effectiveDragBoost('y', by), true);
+      this.projectionGesture?.onBoostPreview?.(bx, by);
       return;
     }
     if (this.drag.mode === 'zoom') {
       this.setViewZoom(this.drag.zoom * Math.exp(-dy * 2.6));
       return;
     }
-    this.pointer(this.drag.rx + dy * 1.2, this.drag.ry - dx * 1.2);
+    this.pointer(this.drag.rx + dy * 1.2, this.drag.ry + dx * 1.2);
   }
 
   endDrag(event: PointerEvent): void {
     if (this.drag?.pointerId === event.pointerId) {
+      if (this.drag.mode === 'boost') {
+        const dx = (event.clientX - this.drag.x) / Math.max(1, this.container.clientWidth);
+        const dy = (event.clientY - this.drag.y) / Math.max(1, this.container.clientHeight);
+        const bx = Math.max(0, Math.min(100, this.drag.bx + dx * 100));
+        // Screen Y is top-down but the camera/world Y is up, so a raw +dy makes
+      // the boost drag feel inverted on Y only (X is naturally aligned). Negate
+      // dy here so dragging down moves the projection down, matching X.
+      const by = Math.max(0, Math.min(100, this.drag.by - dy * 100));
+        this.dragBoostX = bx;
+        this.dragBoostY = by;
+        this.projectionGesture?.onBoostCommit?.(bx, by);
+      }
       this.drag = null;
     }
   }
@@ -449,15 +1088,167 @@ export class WallpaperRenderer {
   }
 
   render(): void {
-    if (!this.initialized) return;
-    this.renderer.render(this.scene, this.camera);
+    if (!this.initialized || this.deviceLost) return;
+    if (this.postPipeline) {
+      this.postPipeline.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
+    if (!this.healthFrame) {
+      this.healthFrame = requestAnimationFrame(() => {
+        this.healthFrame = 0;
+        this.checkCenterPixel();
+      });
+    }
+  }
+
+  requestWarmupFrames(frames: number): void {
+    this.warmupFramesRemaining = Math.max(this.warmupFramesRemaining, frames);
+    if (this.warmupFrame) return;
+    const tick = () => {
+      this.warmupFrame = 0;
+      if (!this.initialized || this.warmupFramesRemaining <= 0) return;
+      this.warmupFramesRemaining -= 1;
+      this.render();
+      if (this.warmupFramesRemaining > 0) {
+        this.warmupFrame = requestAnimationFrame(tick);
+      }
+    };
+    this.warmupFrame = requestAnimationFrame(tick);
+  }
+
+  healthSampleRegion(canvas: HTMLCanvasElement): HealthSampleRegion | null {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0 || canvas.width <= 0 || canvas.height <= 0) return null;
+    const controls = document.getElementById('controls');
+    const controlsRect = controls?.getBoundingClientRect() ?? null;
+    let visibleLeft = rect.left;
+    let visibleRight = rect.right;
+    let visibleTop = rect.top;
+    let visibleBottom = rect.bottom;
+
+    if (controlsRect && controlsRect.width > 0 && controlsRect.height > 0) {
+      const overlapsVertically = controlsRect.bottom > visibleTop && controlsRect.top < visibleBottom;
+      const overlapsHorizontally = controlsRect.right > visibleLeft && controlsRect.left < visibleRight;
+      if (overlapsVertically && controlsRect.left > visibleLeft && controlsRect.left < visibleRight) {
+        visibleRight = controlsRect.left;
+      }
+      if (overlapsHorizontally && controlsRect.top > visibleTop && controlsRect.top < visibleBottom) {
+        visibleBottom = controlsRect.top;
+      }
+    }
+
+    if (visibleRight - visibleLeft < 2 || visibleBottom - visibleTop < 2) return null;
+
+    const sampleColumns = [0.18, 0.34, 0.5, 0.66, 0.82];
+    const sampleRows = [0.25, 0.5, 0.75];
+    const points: HealthSamplePoint[] = [];
+    for (const row of sampleRows) {
+      for (const column of sampleColumns) {
+        const viewportX = visibleLeft + (visibleRight - visibleLeft) * column;
+        const viewportY = visibleTop + (visibleBottom - visibleTop) * row;
+        points.push({
+          sourceX: Math.max(0, Math.min(canvas.width - 1, Math.floor((viewportX - rect.left) / rect.width * canvas.width))),
+          sourceY: Math.max(0, Math.min(canvas.height - 1, Math.floor((viewportY - rect.top) / rect.height * canvas.height))),
+          viewportX,
+          viewportY,
+        });
+      }
+    }
+    return { points };
+  }
+
+  checkCenterPixel(): void {
+    if (!this.mesh || !this.healthContext) return;
+    const now = performance.now();
+    if (now - this.lastHealthCheck < 500) return;
+    this.lastHealthCheck = now;
+    const canvas = this.renderer.domElement;
+    const sourceWidth = canvas.width;
+    const sourceHeight = canvas.height;
+    if (sourceWidth <= 0 || sourceHeight <= 0) return;
+    const sampleRegion = this.healthSampleRegion(canvas);
+    if (!sampleRegion) return;
+
+    try {
+      let red = 0;
+      let green = 0;
+      let blue = 0;
+      let alpha = 0;
+      let strongestSample = -1;
+      let visibleSamples = 0;
+      let centerX = sampleRegion.points[0]?.viewportX ?? 0;
+      let centerY = sampleRegion.points[0]?.viewportY ?? 0;
+      for (const sample of sampleRegion.points) {
+        this.healthContext.clearRect(0, 0, 1, 1);
+        this.healthContext.drawImage(canvas, sample.sourceX, sample.sourceY, 1, 1, 0, 0, 1, 1);
+        const pixel = this.healthContext.getImageData(0, 0, 1, 1).data;
+        const sampleRed = pixel[0] ?? 0;
+        const sampleGreen = pixel[1] ?? 0;
+        const sampleBlue = pixel[2] ?? 0;
+        const sampleAlpha = pixel[3] ?? 0;
+        const sampleStrength = sampleRed + sampleGreen + sampleBlue;
+        if (sampleStrength > strongestSample) {
+          strongestSample = sampleStrength;
+          red = sampleRed;
+          green = sampleGreen;
+          blue = sampleBlue;
+          alpha = sampleAlpha;
+          centerX = sample.viewportX;
+          centerY = sample.viewportY;
+        }
+        const centerElement = document.elementFromPoint(sample.viewportX, sample.viewportY);
+        if (centerElement === canvas || Boolean(centerElement?.closest?.('#viewport'))) {
+          visibleSamples += 1;
+        }
+      }
+      const topElementIsCanvas = visibleSamples > 0;
+      const report = this.healthTracker.sample(
+        { alpha, blue, green, red },
+        this.forceCenterBlackHealthProbe,
+        topElementIsCanvas,
+        this.forceCenterOcclusionHealthProbe,
+      );
+      if (report) {
+        console.warn(report.message, {
+          alpha,
+          blue,
+          forced: this.forceCenterBlackHealthProbe,
+          forcedOcclusion: this.forceCenterOcclusionHealthProbe,
+          reason: report.reason,
+          boostX: this.projectionGesture?.settings.hyp_boost_x,
+          boostY: this.projectionGesture?.settings.hyp_boost_y,
+          centerX,
+          centerY,
+          green,
+          red,
+          rotationX: this.group.rotation.x,
+          rotationY: this.group.rotation.y,
+          viewZoom: this.viewZoom,
+        });
+      }
+    } catch {
+      if (this.healthReadbackFailed) return;
+      this.healthReadbackFailed = true;
+      console.warn('[render-health] center pixel check failed');
+    }
   }
 
   dispose(): void {
     this.stopClock();
+    if (this.healthFrame) cancelAnimationFrame(this.healthFrame);
+    if (this.warmupFrame) cancelAnimationFrame(this.warmupFrame);
     this.resizeObserver.disconnect();
     this.mesh?.geometry.dispose();
     this.edgeMesh?.geometry.dispose();
+    this.postPipeline?.dispose();
+    for (const node of this.feedbackNodes.values()) node.dispose();
+    if (this.postOutputNode) {
+      const keep = new Set<object>();
+      for (const feedback of this.feedbackNodes.values()) keep.add(feedback);
+      this.disposePostTree(this.postOutputNode, keep);
+    }
+    this.scenePassNode?.dispose();
     this.renderer.domElement.remove();
     this.renderer.dispose();
   }

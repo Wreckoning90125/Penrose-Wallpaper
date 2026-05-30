@@ -42,11 +42,14 @@ export type GeometryBuild = {
 };
 
 export type AudioFeatures = {
-  level: number;
   bass: number;
   mid: number;
-  treble: number;
-  beat: number;
+  high: number;
+  rms: number;
+  spectralFlux: number;
+  onsetStrength: number;
+  cwtTransient: number;
+  crestFactor: number;
 };
 
 export type AudioTransport = {
@@ -54,21 +57,29 @@ export type AudioTransport = {
   currentTime: number;
   playing: boolean;
   loop: boolean;
+  sourceName: string;
+  volume: number;
 };
 
 export type AudioStatus = 'idle' | 'mic' | 'file';
 
-export type WebAudioGraph = {
+export type AudioSnapshot = {
   features: AudioFeatures;
   status: AudioStatus;
   transport: AudioTransport;
+};
+
+export type WebAudioGraph = {
+  getSnapshot: () => AudioSnapshot;
   startMic: () => Promise<void>;
   loadFile: (file: File | undefined) => Promise<void>;
   play: () => Promise<void>;
   pause: () => void;
   seek: (time: number) => void;
   setLoop: (loop: boolean) => void;
+  setVolume: (volume: number) => void;
   stop: () => void;
+  subscribe: (listener: () => void) => () => void;
 };
 
 export type Gains = {
@@ -78,11 +89,70 @@ export type Gains = {
   metal: number;
 };
 
+export type DragMode = 'ride' | 'hold';
+
+export type BoostPosition = {
+  x: number;
+  y: number;
+};
+
+export type LiveBoostStore = {
+  getSnapshot: () => BoostPosition | null;
+  set: (value: BoostPosition | null) => void;
+  subscribe: (listener: () => void) => () => void;
+};
+
+export type AudioDriveEditState = {
+  dragMode: DragMode;
+  heldParams: Record<string, boolean | undefined>;
+};
+
+// Graph output keyed by target handle. Values are normalized modulation
+// signals; targets apply them by ranged delta over their live base values.
+export type AudioModulationValues = Record<string, number | undefined>;
+
+// Ordered, serializable description of the screen post-FX chain the renderer
+// compiles. params already include this frame's resolved node-scoped modulation.
+export type PostChainNode = {
+  id: string;
+  kind: string;
+  bypass: boolean;
+  params: Record<string, number>;
+  selects: Record<string, string>;
+};
+
+export type PostChainSpec = PostChainNode[];
+
+// Which renderer inputs the graph topology currently connects. The renderer
+// consumes only connected inputs: geometry hidden when the source->sink chain is
+// broken, lighting off when lighting->renderer is cut. Derived from edges.
+export type RenderInputs = {
+  geometry: boolean;
+  lighting: boolean;
+  color: boolean;
+  material: boolean;
+  projection: boolean;
+  // The surface displacement field (ripple/depth) source -> renderer. Cut it and
+  // the surface stops rippling/displacing (flat, modulo the scalar relief).
+  field: boolean;
+};
+
 export type GamutLabel = string;
 
 export type CustomColors = Oklch[] | null;
 
+export type GraphPresetAppState = {
+  categoryId: string;
+  customColors: CustomColors;
+  dragMode: DragMode;
+  gains: Partial<Gains>;
+  selectedColor: number;
+  settings: Partial<Settings>;
+  targetId: string;
+};
+
 export type ProjectionGesture = {
   settings: Settings;
-  onBoost: (x: number, y: number) => void;
+  onBoostPreview: (x: number, y: number) => void;
+  onBoostCommit: (x: number, y: number) => void;
 };

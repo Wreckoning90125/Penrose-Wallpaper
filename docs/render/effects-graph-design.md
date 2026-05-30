@@ -139,7 +139,7 @@ material/position/attribute nodes (per `tsl-post-fx-model.md` surface layer).
 
 ## 7. The rest of the overhaul (do not forget)
 
-- **Graph honesty pass:** every backbone wire becomes real / locked-annotation / removed; relabel the swapped `postfx` ("Ripple/depth target" = surface) vs `postprocess` ("Post-FX" = frame) nodes; split Projection's live vs rebuild controls.
+- **Graph honesty pass:** every backbone wire becomes real / locked-annotation / removed (done for the §0 inputs); the swapped `postfx` node is now the wired `Field source` (displace/relief/color outlets → renderer inlets, surface-domain), distinct from `postprocess` ("Post-FX" = frame); remaining: split Projection's live vs rebuild controls.
 - **Node-scoped modulation unification:** migrate all targets to `(nodeId,handle)`.
 - **Presets serialize everything:** nodes+positions, edges, settings, palette/custom colors, modulation routing, post-chain, viewport; auto-layout only for on-load default/explicit-align, never silently over user presets.
 - **Optional geometry:** `kovacs2010rcs` real-time creased subdivision / `tosun2011mbs` closed-form manifold surfaces for smoother tiles.

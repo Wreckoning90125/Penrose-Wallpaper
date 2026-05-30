@@ -36,7 +36,7 @@ Primary references:
   commits.
 - Exposing a visible signal inlet that rejects wires or has no render effect.
   Generation, palette slots, luminance, projection subdivisions, material,
-  lighting, ripple/depth, and true post-FX parameters must all use the same
+  lighting, field-source, and true post-FX parameters must all use the same
   signal contract once they appear as ports.
 - Applying audio-rate geometry or palette modulation by overwriting preset
   settings. That turns a live graph signal into saved state drift and makes
@@ -56,7 +56,7 @@ Primary references:
 - Regressing graph chrome during cleanup. The fit button must keep the
   recognizable fit icon, the minimap must remain visible, and add/remove
   operator flows must stay wired.
-- Treating target-only ripple/depth controls as a composited post-processing
+- Treating target-only field-source controls as a composited post-processing
   pass. True composited post-FX must remain separate from direct material or
   displacement targets.
 - Wiring geometry, color, material, and depth as separate late renderer
@@ -92,7 +92,7 @@ Primary references:
 - Preserve ride/hold edit tracking for every slider-like control by calling the
   edit begin/end callbacks across pointer, focus, blur, and final change.
 - Update only the node class that owns the change: palette, material,
-  projection, ripple/depth target, true post-FX, lighting, clock, operator,
+  projection, field source, true post-FX, lighting, clock, operator,
   transport, or renderer.
 - Measure port rows, place handles from those measured centers, and call
   `useUpdateNodeInternals` after the measured position changes. When IO labels
@@ -108,7 +108,7 @@ Primary references:
   add/remove operator interactions in the regression surface. These are graph
   affordances, not cosmetic extras.
 - Keep the graph structure direct: source, audio analysis, and clock nodes feed
-  operators; operators feed material, lighting, projection, ripple/depth,
+  operators; operators feed material, lighting, projection, field source,
   true post-FX parameters, or renderer target inlets.
 - Use the TPMS visualizer target-range model, confirmed in
   `src/apps/procedural-morphology-lab`: a graph value is a modulation delta

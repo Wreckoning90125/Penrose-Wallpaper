@@ -18,7 +18,8 @@ the UI panel label; it is where the value enters the renderer.
 shape is:
 
 1. surface assembly: tiling geometry is projected, classified, assigned palette
-   slots, and bound to material/ripple/depth uniforms before render;
+   slots, and bound to material and field-source uniforms (displacement / relief
+   / colour) before render;
 2. scene pass: `pass(scene, camera)` renders that scene into pass textures;
 3. screen chain: each Post-FX node consumes the previous frame node and returns
    the next screen `vec4`;
@@ -50,16 +51,18 @@ The control graph must mirror the same ordering:
 
 ```text
 Atlas -> Tiling -> Projection -> Color mapper -> Surface material -> Scene pass -> Post-FX -> Display sink
-                                      Ripple/depth target --^
+              Field source (displace/relief/color) ----------------^
                                       Lighting -----------------------------^
 ```
 
 `Surface material` is the pre-scene surface contract. It collects palette
-color, physical material settings, ripple, depth drive, and brightness before
-Three evaluates `MeshPhysicalNodeMaterial` and `positionNode`.
+color and physical material settings; the `Field source` node feeds the
+renderer three separate fields (displace / relief / color) plus brightness and
+speed, all resolved before Three evaluates `MeshPhysicalNodeMaterial` and
+`positionNode`.
 
 `Scene pass` is the point where Three renders the already configured scene into
-frame textures. Geometry, color, material, and depth targets cannot arrive as
+frame textures. Geometry, color, material, and field targets cannot arrive as
 late independent inputs to that pass and still affect mesh shading. They must
 be resolved before `pass(scene, camera)` renders.
 

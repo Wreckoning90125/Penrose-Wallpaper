@@ -81,6 +81,10 @@ function clampLinearColor(value: number): number {
 // carries an independent spatial frequency + temporal speed and its own
 // relief/undulate/colour wave amplitude; the graph fills them from connected
 // field-source nodes. Default zero amplitude -> no contribution.
+// Undulate's spatial frequency relative to the relief/colour wave. Low so the
+// whole atlas bends as a sheet (flapping paper) instead of each tile warping.
+const UNDULATE_FREQ_SCALE = 0.12;
+
 function createFieldSlots() {
   return Array.from({ length: 3 }, () => ({
     freq: uniform(4),
@@ -599,7 +603,12 @@ export class WallpaperRenderer {
     const displaceField = this.surfaceDepthNode(boostedX, boostedY, tileRing, tileOrient, tileCenter);
     const wave = this.rippleWaveNode(boostedX, boostedY, this.uniforms.rippleFreq, this.uniforms.fieldSpeed);
     const reliefField = reliefZ.mul(wave).mul(this.uniforms.rippleAmp);
-    const undulateField = wave.mul(this.uniforms.undulateAmp);
+    // Undulate is the whole-sheet 3D wave (flapping paper): it must be LOW spatial
+    // frequency so a tile barely changes across itself and the sheet bends, rather
+    // than each tile warping (which reads as relief). It carries no relief term —
+    // any real relief simply rides the bent sheet (z heights add).
+    const undulateWave = this.rippleWaveNode(boostedX, boostedY, this.uniforms.rippleFreq.mul(UNDULATE_FREQ_SCALE), this.uniforms.fieldSpeed);
+    const undulateField = undulateWave.mul(this.uniforms.undulateAmp);
     let z = reliefZ
       .add(displaceField.mul(this.uniforms.displaceMix))
       .add(reliefField.mul(this.uniforms.reliefMix))
@@ -607,7 +616,8 @@ export class WallpaperRenderer {
     // Extra independent field sources: each adds its own wave's relief + undulate.
     for (const slot of this.uniforms.fieldSlots) {
       const slotWave = this.rippleWaveNode(boostedX, boostedY, slot.freq, slot.speed);
-      z = z.add(reliefZ.mul(slotWave).mul(slot.relief)).add(slotWave.mul(slot.undulate));
+      const slotUndulate = this.rippleWaveNode(boostedX, boostedY, slot.freq.mul(UNDULATE_FREQ_SCALE), slot.speed);
+      z = z.add(reliefZ.mul(slotWave).mul(slot.relief)).add(slotUndulate.mul(slot.undulate));
     }
     return z;
   }

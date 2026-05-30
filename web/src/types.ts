@@ -126,6 +126,18 @@ export type PostChainSpec = PostChainNode[];
 // Which renderer inputs the graph topology currently connects. The renderer
 // consumes only connected inputs: geometry hidden when the source->sink chain is
 // broken, lighting off when lighting->renderer is cut. Derived from edges.
+// One extra (non-default) field source's wave parameters, pushed to a renderer
+// slot. freq/speed are spatial frequency + temporal speed; relief/undulate/color
+// are this source's wave amplitudes (already §0-gated by the graph: 0 if a field
+// is unwired).
+export type FieldSlot = {
+  freq: number;
+  speed: number;
+  relief: number;
+  undulate: number;
+  color: number;
+};
+
 export type RenderInputs = {
   geometry: boolean;
   lighting: boolean;

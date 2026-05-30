@@ -38,7 +38,7 @@ import {
   vec2,
   vec3,
 } from 'three/tsl';
-import type { PostChainSpec, RenderInputs } from '../types';
+import type { FieldSlot, PostChainSpec, RenderInputs } from '../types';
 import { fxBuilder, afterImageDamp, type FxUniforms } from './postFxRegistry';
 import { trails, type TrailsNode, type TrailsMode } from './trailsNode';
 import { fxDescriptor, fxStructuralSignature } from './postFxCatalog';
@@ -77,8 +77,23 @@ function clampLinearColor(value: number): number {
 }
 
 
+// Extra field-source wave slots (beyond the default source on slot 0). Each
+// carries an independent spatial frequency + temporal speed and its own
+// relief/undulate/colour wave amplitude; the graph fills them from connected
+// field-source nodes. Default zero amplitude -> no contribution.
+function createFieldSlots() {
+  return Array.from({ length: 3 }, () => ({
+    freq: uniform(4),
+    speed: uniform(0),
+    relief: uniform(0),
+    undulate: uniform(0),
+    color: uniform(0),
+  }));
+}
+
 function createRendererUniforms() {
   return {
+    fieldSlots: createFieldSlots(),
     roughness: uniform(0.38),
     roughMod: uniform(0.2),
     metalness: uniform(0.35),
@@ -585,10 +600,16 @@ export class WallpaperRenderer {
     const wave = this.rippleWaveNode(boostedX, boostedY, this.uniforms.rippleFreq, this.uniforms.fieldSpeed);
     const reliefField = reliefZ.mul(wave).mul(this.uniforms.rippleAmp);
     const undulateField = wave.mul(this.uniforms.undulateAmp);
-    return reliefZ
+    let z = reliefZ
       .add(displaceField.mul(this.uniforms.displaceMix))
       .add(reliefField.mul(this.uniforms.reliefMix))
       .add(undulateField.mul(this.uniforms.undulateMix));
+    // Extra independent field sources: each adds its own wave's relief + undulate.
+    for (const slot of this.uniforms.fieldSlots) {
+      const slotWave = this.rippleWaveNode(boostedX, boostedY, slot.freq, slot.speed);
+      z = z.add(reliefZ.mul(slotWave).mul(slot.relief)).add(slotWave.mul(slot.undulate));
+    }
+    return z;
   }
 
   boostedPositionNode() {
@@ -615,7 +636,10 @@ export class WallpaperRenderer {
     const tileType = attribute<'float'>('tileType', 'float');
     const tileRing = attribute<'float'>('tileRing', 'float');
     const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
-    const rippleColor = this.rippleWaveNode(positionLocal.x, positionLocal.y, this.uniforms.rippleFreq, this.uniforms.fieldSpeed).mul(this.uniforms.rippleColorAmp).mul(this.uniforms.colorFieldMix);
+    let rippleColor = this.rippleWaveNode(positionLocal.x, positionLocal.y, this.uniforms.rippleFreq, this.uniforms.fieldSpeed).mul(this.uniforms.rippleColorAmp).mul(this.uniforms.colorFieldMix);
+    for (const slot of this.uniforms.fieldSlots) {
+      rippleColor = rippleColor.add(this.rippleWaveNode(positionLocal.x, positionLocal.y, slot.freq, slot.speed).mul(slot.color));
+    }
     const material = new MeshPhysicalNodeMaterial({
       side: DoubleSide,
     });
@@ -747,6 +771,30 @@ export class WallpaperRenderer {
     this.applyRenderConnected();
     this.applyLights(this.settings);
     this.render();
+  }
+
+  // Update the extra field-source wave slots from the graph (one entry per
+  // connected non-default field source, up to the slot count). Missing slots
+  // reset to zero amplitude so they contribute nothing.
+  setFieldSlots(slots: readonly FieldSlot[]): void {
+    let changed = false;
+    this.uniforms.fieldSlots.forEach((target, index) => {
+      const input = slots[index];
+      const next = input ?? { freq: 4, speed: 0, relief: 0, undulate: 0, color: 0 };
+      if (
+        target.freq.value !== next.freq || target.speed.value !== next.speed
+        || target.relief.value !== next.relief || target.undulate.value !== next.undulate
+        || target.color.value !== next.color
+      ) {
+        changed = true;
+        target.freq.value = next.freq;
+        target.speed.value = next.speed;
+        target.relief.value = next.relief;
+        target.undulate.value = next.undulate;
+        target.color.value = next.color;
+      }
+    });
+    if (changed) this.render();
   }
 
   setSettings(settings: Settings, palette: Palette): void {

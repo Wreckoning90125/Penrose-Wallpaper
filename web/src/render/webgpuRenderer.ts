@@ -28,11 +28,12 @@ import {
   float,
   max,
   mix,
-  normalFlat,
+  normalize,
   pass,
   positionLocal,
   sin,
   tanh,
+  transformNormalToView,
   uniform,
   vertexColor,
   vec2,
@@ -620,12 +621,39 @@ export class WallpaperRenderer {
     return z;
   }
 
+  // The analytic surface normal from the displacement gradient (finite-differenced
+  // surfaceZNode). This decouples shading smoothness from polygon density: a flat,
+  // low-poly sheet still shades as a smooth undulation rather than faceting, with
+  // no geometry subdivision. Per-fragment, so it is smooth at any tessellation.
+  surfaceNormalNode(
+    boostedX: Node<'float'>,
+    boostedY: Node<'float'>,
+    tileRing: Node<'float'>,
+    tileOrient: Node<'vec2'>,
+    tileCenter: Node<'vec2'>,
+  ): Node<'vec3'> {
+    const eps = float(0.005);
+    const z0 = this.surfaceZNode(boostedX, boostedY, tileRing, tileOrient, tileCenter);
+    const zx = this.surfaceZNode(boostedX.add(eps), boostedY, tileRing, tileOrient, tileCenter);
+    const zy = this.surfaceZNode(boostedX, boostedY.add(eps), tileRing, tileOrient, tileCenter);
+    const localNormal = normalize(vec3(z0.sub(zx).div(eps), z0.sub(zy).div(eps), float(1)));
+    return transformNormalToView(localNormal);
+  }
+
   boostedPositionNode() {
     const tileRing = attribute<'float'>('tileRing', 'float');
     const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
     const tileCenter = attribute<'vec2'>('tileCenter', 'vec2');
     const boosted = this.boostCoordinateNodes(positionLocal.x, positionLocal.y);
     return vec3(boosted.x, boosted.y, this.surfaceZNode(boosted.x, boosted.y, tileRing, tileOrient, tileCenter));
+  }
+
+  surfaceNormalForMaterial(): Node<'vec3'> {
+    const tileRing = attribute<'float'>('tileRing', 'float');
+    const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
+    const tileCenter = attribute<'vec2'>('tileCenter', 'vec2');
+    const boosted = this.boostCoordinateNodes(positionLocal.x, positionLocal.y);
+    return this.surfaceNormalNode(boosted.x, boosted.y, tileRing, tileOrient, tileCenter);
   }
 
   boostedEdgePositionNode() {
@@ -665,7 +693,8 @@ export class WallpaperRenderer {
       1.0,
     );
     material.positionNode = this.boostedPositionNode();
-    material.normalNode = normalFlat;
+    const surfaceNormal = this.surfaceNormalForMaterial();
+    material.normalNode = surfaceNormal;
     // materialMix is the material->renderer:surface inlet: 1 = tuned material,
     // 0 = neutral matte (rough 0.5, no metal/clearcoat/aniso/irid/sheen). Cutting
     // that wire renders a plain surface instead of hiding the mesh — the material
@@ -679,7 +708,7 @@ export class WallpaperRenderer {
     material.metalnessNode = clamp(this.uniforms.metalness.add(tileType.mul(this.uniforms.metalMod)), 0.0, 1.0).mul(matMix);
     material.clearcoatNode = this.uniforms.clearcoat.mul(matMix);
     material.clearcoatRoughnessNode = clamp(this.uniforms.roughness.mul(0.28), 0.018, 0.32);
-    material.clearcoatNormalNode = normalFlat;
+    material.clearcoatNormalNode = surfaceNormal;
     material.anisotropyNode = vec2(tileOrient.x, tileOrient.y).mul(this.uniforms.anisotropy).mul(matMix);
     material.iridescenceNode = clamp(this.uniforms.iridescence.mul(float(0.7).add(tileRing.mul(0.3))), 0.0, 1.0).mul(matMix);
     material.iridescenceThicknessNode = clamp(

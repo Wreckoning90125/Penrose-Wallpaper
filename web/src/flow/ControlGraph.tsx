@@ -285,6 +285,13 @@ function isValidGraphConnection(connection: GraphConnectionLike, nodes: readonly
   if (source.id === 'palette') return sourceHandle === 'color' && target.id === 'material' && targetHandle === 'color';
   if (source.id === 'material') return sourceHandle === 'surface' && target.id === 'renderer' && targetHandle === 'surface';
   if (source.id === 'lighting') return sourceHandle === 'out' && target.id === 'renderer' && targetHandle === 'lighting';
+  if (source.id === 'postfx') {
+    // Field source: its four field outlets each wire only to the matching
+    // renderer field inlet. Without this rule a cut field wire can't be re-added.
+    return target.id === 'renderer'
+      && (sourceHandle === 'displace' || sourceHandle === 'relief' || sourceHandle === 'color' || sourceHandle === 'undulate')
+      && targetHandle === sourceHandle;
+  }
   if (source.id === 'transport') return sourceHandle === 'out' && target.id === 'analysis' && targetHandle === 'transport';
 
   if (sourceHandle === 'frame' && targetHandle === 'frame') {

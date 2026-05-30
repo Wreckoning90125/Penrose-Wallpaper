@@ -614,8 +614,12 @@ export class WallpaperRenderer {
     // colorMix is the palette->material:color inlet: 1 = palette color, 0 = flat
     // white. Cutting that wire drops the color (flat tiles) instead of hiding
     // the mesh — the material is downstream of its color inlet.
+    // brightness lives on the material node; gate it by matMix so a disconnected
+    // material has zero effect (matMix 0 -> neutral 1.0). The colour ripple field
+    // is gated separately by colorFieldMix.
     material.colorNode = clamp(
-      mix(vec3(1.0, 1.0, 1.0), vertexColor(), this.uniforms.colorMix).mul(this.uniforms.brightness.add(rippleColor)),
+      mix(vec3(1.0, 1.0, 1.0), vertexColor(), this.uniforms.colorMix)
+        .mul(mix(float(1.0), this.uniforms.brightness, this.uniforms.materialMix).add(rippleColor)),
       0.0,
       1.0,
     );

@@ -7,6 +7,7 @@ import type { SettingKey } from '../settings/androidSettings';
 export type ControlSpec = readonly [SettingKey, string, number, number, number];
 
 export const MATERIAL_CONTROLS: ControlSpec[] = [
+  ['brightness', 'Brightness', 40, 180, 1],
   ['mat_relief', 'Relief', 0, 200, 1],
   ['mat_roughness', 'Roughness', 0, 100, 1],
   ['mat_rough_mod', 'Worn edges', 0, 100, 1],
@@ -41,7 +42,6 @@ export const CLOCK_CONTROLS: ControlSpec[] = [
 ];
 
 export const RIPPLE_TARGET_CONTROLS: ControlSpec[] = [
-  ['brightness', 'Brightness', 40, 180, 1],
   ['field_displace', 'Displace', 0, 100, 1],
   ['field_relief', 'Relief', 0, 100, 1],
   ['field_color', 'Color', 0, 100, 1],

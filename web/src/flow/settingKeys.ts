@@ -15,6 +15,7 @@ export const PROJECTION_SETTING_KEYS: readonly SettingKey[] = [
   'hyp_border_subdiv',
 ];
 export const MATERIAL_SETTING_KEYS: readonly SettingKey[] = [
+  'brightness',
   'mat_relief',
   'mat_roughness',
   'mat_rough_mod',
@@ -34,7 +35,6 @@ export const LIGHT_SETTING_KEYS: readonly SettingKey[] = [
   'light_ambient',
 ];
 export const RIPPLE_TARGET_SETTING_KEYS: readonly SettingKey[] = [
-  'brightness',
   'field_displace',
   'field_relief',
   'field_color',

@@ -40,6 +40,7 @@ export const RIPPLE_TARGET_SETTING_KEYS: readonly SettingKey[] = [
   'field_color',
   'field_undulate',
   'field_freq',
+  'field_undulate_freq',
   'field_speed',
 ];
 export const BORDER_SETTING_KEYS: readonly SettingKey[] = [
@@ -81,6 +82,7 @@ export const GRAPH_PRESET_SETTING_KEYS: readonly SettingKey[] = [
   'field_relief',
   'field_speed',
   'field_undulate',
+  'field_undulate_freq',
   'generation',
   'hyp_boost_x',
   'hyp_boost_y',

@@ -38,6 +38,7 @@ export const RIPPLE_TARGET_SETTING_KEYS: readonly SettingKey[] = [
   'field_displace',
   'field_relief',
   'field_color',
+  'field_freq',
   'field_speed',
 ];
 export const BORDER_SETTING_KEYS: readonly SettingKey[] = [
@@ -73,6 +74,7 @@ export const GRAPH_PRESET_SETTING_KEYS: readonly SettingKey[] = [
   'family',
   'field_color',
   'field_displace',
+  'field_freq',
   'field_relief',
   'field_speed',
   'generation',

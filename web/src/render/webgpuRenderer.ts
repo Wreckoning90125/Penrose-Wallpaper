@@ -753,7 +753,7 @@ export class WallpaperRenderer {
     this.baseRippleAmp = intSetting(settings, 'field_relief', 0, 100) / 100 * 0.075;
     this.uniforms.rippleAmp.value = this.baseRippleAmp;
     this.uniforms.rippleColorAmp.value = intSetting(settings, 'field_color', 0, 100) / 100 * 0.22;
-    this.uniforms.rippleFreq.value = 6.5;
+    this.uniforms.rippleFreq.value = intSetting(settings, 'field_freq', 0, 100) / 10;
     this.scene.environmentIntensity = 0.8 + mat.clearcoat * 0.9 + mat.metalness * 0.5;
     const border = oklchToLinearSrgb([
       intSetting(settings, 'border_l', 0, 100) / 100,
@@ -867,7 +867,7 @@ export class WallpaperRenderer {
     this.uniforms.metalness.value = Math.min(1, mat.metalness);
     this.uniforms.rippleAmp.value = modulatedValue('field_relief', 0, 100) / 100 * 0.075;
     this.uniforms.rippleColorAmp.value = modulatedValue('field_color', 0, 100) / 100 * 0.22;
-    this.uniforms.rippleFreq.value = 6.5;
+    this.uniforms.rippleFreq.value = modulatedValue('field_freq', 0, 100) / 10;
     const depthScale = modulatedValue('field_displace', 0, 100) / 100;
     this.uniforms.depthScale.value = Math.min(1.5, depthScale);
     if (hasModulation('field_speed')) {

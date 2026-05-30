@@ -22,10 +22,11 @@ support it.
 
 ## Hard rules (these bite — they caused real regressions)
 
-1. **No `as` / `any` / `unknown`.** `ts:policy` is a **text scan**, so the words
-   are banned even inside comments and strings (e.g. "treat X as Y", "any of",
-   "unknown reason" will fail the gate). Reword. Use `Reflect.get`, generics, and
-   typed guards instead of casts. `js:policy` forbids plain JS in the owned tree.
+1. **No `as` / `any` / `unknown`.** `ts:policy` parses the **AST** (TypeScript
+   compiler), so it flags only real `as`/angle casts and `any`/`unknown` type
+   keywords — comments and string literals are fine, and `as const` is allowed.
+   Use `Reflect.get`, generics, and typed guards instead of casts. `js:policy`
+   forbids plain JS in the owned tree.
 2. **The surface material may reference ≤ 8 vertex attributes** (WebGPU
    `maxVertexBuffers`). A 9th `attribute(...)` makes the pipeline invalid → **black
    tiles** (regressed 5×). Pack extra per-vertex data into a spare component of an

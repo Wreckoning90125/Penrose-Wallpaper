@@ -13,7 +13,7 @@
     "render:check": "node .local/scripts/browser_check.mjs",
     "graph:contract": "node tools/check_graph_contract.mts",
     "tilings:verify": "g++ -std=c++20 -O2 -Wall -Wextra -I android/app/src/main/cpp tools/verify_tilings.cpp android/app/src/main/cpp/tiling/penrose.cpp -o .cache/verify_tilings && .cache/verify_tilings",
-    "ts:policy": "python3 tools/check_typescript_policy.py",
+    "ts:policy": "node tools/check_typescript_policy.mts",
     "typecheck": "tsc --noEmit",
     "web:generate": "python3 tools/generate_web_geometry.py",
     "preweb:dev": "npm run web:generate",

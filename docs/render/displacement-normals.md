@@ -25,9 +25,17 @@ every triangle is lit as a flat plate. And our mesh *is* the subdivided relief
 tiles. So the facets that "looked like relief reappearing" were not an artifact —
 they were the relief-tile polygons themselves, lit up. When the surface is flat,
 those polygons are coplanar and you can't see them. Displace it (undulate) and
-each polygon tilts to its own orientation, so the tile mesh we built becomes
+each polygon bends to its own orientation, so the tile mesh we built becomes
 visible. That's the whole bug: we shaded the geometry we made instead of the
 surface it represents.
+
+This is about **displacement, not viewing angle**. Orbiting the camera around a
+flat atlas keeps every face coplanar, so the old face normal shaded it uniformly
+and you never saw facets — rotate a dialed-down flat sheet all you want, it stays
+smooth (true with the old normal *and* the new one). The mesh only showed when you
+*bent* the geometry, giving neighbouring triangles different orientations. "Tilting
+the sheet" rigidly (camera orbit, whole-sheet rotation) never did it; per-vertex
+displacement did.
 
 ## Why it looked frequency-dependent
 
@@ -63,8 +71,8 @@ This does **not** flatten anything you displace. The normal is the slope of the
 displacement `f`, so whatever you dial in — `field_displace` bulge,
 `field_relief` wave, undulation — shows as its real (smooth) shape; relief
 appears exactly when you ask for it. What's removed is only the *spurious* facets:
-tilting the sheet no longer exposes the tile tessellation. (Exception: the static
-baked `mat_relief` is constant under the finite difference — see below.)
+*displacing* the sheet no longer exposes the tile tessellation. (Exception: the
+static baked `mat_relief` is constant under the finite difference — see below.)
 
 ## Process lesson
 

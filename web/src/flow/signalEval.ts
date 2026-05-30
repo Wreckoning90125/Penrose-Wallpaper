@@ -9,6 +9,7 @@ import { dataObject, dataString, numberRecordFromObject, stringRecordFromObject 
 import { isMathOperator, operatorKindFromData, operatorSpec } from './operatorSpecs';
 import { audioFeatureValue, clampSignal, clockSignalValue, signalKey } from './signalUtils';
 import { fxDescriptor } from '../render/postFxCatalog';
+import { FIELD_SOURCE_PARAMS } from './fieldSourceSpec';
 
 export type AudioOperatorRuntimeState = {
   held: Record<string, number | undefined>;
@@ -154,6 +155,29 @@ export function fxModulatedParams(
     if (dragMode === 'hold' && activeEditKey === editKey) continue;
     const baseValue = base[param.key] ?? param.def;
     out[param.key] = Math.min(param.max, Math.max(param.min, baseValue + signal * (param.max - param.min)));
+  }
+  return out;
+}
+
+// Audio modulation for an addable field-source node's per-node params, mirroring
+// fxModulatedParams: a wired operator on a param inlet blends into that param.
+export function fieldModulatedValues(
+  node: Node,
+  edges: readonly Edge[],
+  signals: Map<string, number>,
+  activeEditKey: string | null,
+  dragMode: DragMode,
+): Record<string, number> {
+  const base = numberRecordFromObject(dataObject(node.data, 'values'));
+  const out: Record<string, number> = { ...base };
+  for (const [key, , min, max, , def] of FIELD_SOURCE_PARAMS) {
+    const edge = edges.find(e => e.target === node.id && e.targetHandle === key);
+    if (!edge) continue;
+    const signal = signals.get(signalKey(edge.source, edge.sourceHandle));
+    if (typeof signal !== 'number') continue;
+    if (dragMode === 'hold' && activeEditKey === `field:${node.id}:${key}`) continue;
+    const baseValue = base[key] ?? def;
+    out[key] = Math.min(max, Math.max(min, baseValue + signal * (max - min)));
   }
   return out;
 }

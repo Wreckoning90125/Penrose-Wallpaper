@@ -312,6 +312,14 @@ export function nodeWithPresetData(node: Node, preset: GraphPresetNode): Node {
       selected: false,
     };
   }
+  if (node.type === 'fieldSource') {
+    return {
+      ...node,
+      data: { ...node.data, values: { ...numberRecordFromObject(dataObject(node.data, 'values')), ...values } },
+      position: preset.position,
+      selected: false,
+    };
+  }
   const nextData = node.type === 'operator' && (Object.keys(values).length > 0 || Object.keys(selectValues).length > 0)
     ? { ...node.data, selectValues, values }
     : node.data;

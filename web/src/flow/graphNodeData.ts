@@ -125,3 +125,13 @@ export type FxNodeData = {
   onFxSelect?: (id: string, key: string, value: string) => void;
   onFxBypass?: (id: string, bypass: boolean) => void;
 };
+
+export type FieldSourceNodeData = {
+  activeInputs?: string[];
+  activeOutputs?: string[];
+  id: string;
+  values: Record<string, number>;
+  onBeginEdit: (paramKey: string) => void;
+  onEndEdit: (paramKey: string) => void;
+  onFieldValue?: (id: string, key: string, value: number) => void;
+};

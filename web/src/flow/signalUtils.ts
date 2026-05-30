@@ -9,6 +9,7 @@ import { clampNumber } from '../util/clamp';
 import { operatorKindFromData, operatorSpec } from './operatorSpecs';
 import { fxDescriptor } from '../render/postFxCatalog';
 import { audioTargetRange } from './audioTargets';
+import { FIELD_SOURCE_PARAMS } from './fieldSourceSpec';
 
 export const AUDIO_FEATURE_HANDLES = new Set([
   'rms',
@@ -79,5 +80,6 @@ export function isSignalTarget(node: Node, handle: string | null | undefined): b
     const descriptor = fxDescriptor(dataString(node.data, 'kind'));
     return descriptor ? descriptor.params.some(p => p.key === handle) : false;
   }
+  if (node.type === 'fieldSource') return FIELD_SOURCE_PARAMS.some(([key]) => key === handle);
   return audioTargetRange(handle) !== null;
 }

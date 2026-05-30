@@ -49,12 +49,14 @@ import { EFFECT_CATALOG, fxParamDefaults, fxSelectDefaults, isFxKind } from '../
 import { isSignalSource, isSignalTarget } from './signalUtils';
 import {
   evaluateSignals,
+  fieldModulatedValues,
   fxModulatedParams,
   modulationsFromSignals,
   type AudioOperatorRuntimeState,
   type LiveOperatorData,
   type LiveOperatorDataMap,
 } from './signalEval';
+import { deriveFieldSlots, fieldParamDefaults } from './fieldSourceSpec';
 import { renderInputsFromEdges } from './renderInputs';
 import { dataBoolean, dataObject, dataString, numberRecordFromObject, stringRecordFromObject } from './nodeData';
 import {
@@ -87,6 +89,7 @@ import {
   ClockNode,
   DisplayNode,
   EdgeProfileNode,
+  FieldSourceNode,
   FxNode,
   LightingNode,
   MaterialNode,
@@ -127,6 +130,7 @@ import type {
   AtlasManifest,
   AudioModulationValues,
   DragMode,
+  FieldSlot,
   Gains,
   GraphPresetAppState,
   LiveBoostStore,
@@ -203,6 +207,7 @@ type ControlGraphProps = {
   onAudioModulation: (values: AudioModulationValues) => void;
   onPostChain: (spec: PostChainSpec) => void;
   onRenderInputs: (inputs: RenderInputs) => void;
+  onFieldSlots: (slots: FieldSlot[]) => void;
   onGraphPresetState: (state: GraphPresetAppState) => void;
   onDragMode: (mode: DragMode) => void;
   onBeginEdit: (paramKey: string) => void;
@@ -293,6 +298,13 @@ function isValidGraphConnection(connection: GraphConnectionLike, nodes: readonly
       && targetHandle === sourceHandle;
   }
   if (source.id === 'edgeProfile') return sourceHandle === 'border' && target.id === 'renderer' && targetHandle === 'border';
+  if (source.type === 'fieldSource') {
+    // Addable field source: each field outlet wires only to its matching renderer
+    // field inlet, exactly like the default field source.
+    return target.id === 'renderer'
+      && (sourceHandle === 'relief' || sourceHandle === 'undulate' || sourceHandle === 'color')
+      && targetHandle === sourceHandle;
+  }
   if (source.id === 'transport') return sourceHandle === 'out' && target.id === 'analysis' && targetHandle === 'transport';
 
   if (sourceHandle === 'frame' && targetHandle === 'frame') {
@@ -401,6 +413,7 @@ const nodeTypes = {
   analysis: AudioAnalysisNode,
   operator: OperatorNode,
   postfx: RippleTargetNode,
+  fieldSource: FieldSourceNode,
   fx: FxNode,
   renderer: RendererNode,
   display: DisplayNode,
@@ -560,6 +573,8 @@ export function ControlGraph(props: ControlGraphProps) {
   const operatorIdRef = useRef(2);
   const fxIdRef = useRef(1);
   const fxValuesRef = useRef<Record<string, Record<string, number>>>({});
+  const fieldIdRef = useRef(1);
+  const fieldValuesRef = useRef<Record<string, Record<string, number>>>({});
   const clockIdRef = useRef(2);
   const activeEditRef = useRef<string | null>(null);
   const [editFlush, setEditFlush] = useState(0);
@@ -584,7 +599,12 @@ export function ControlGraph(props: ControlGraphProps) {
       return { ...node, params: fxModulatedParams(flowNode, edgesRef.current, signals, activeEditRef.current, props.dragMode) };
     });
     props.onPostChain(chain);
-  }, [props.audio, props.dragMode, props.onAudioModulation, props.onPostChain]);
+    props.onFieldSlots(deriveFieldSlots(
+      nodesRef.current,
+      edgesRef.current,
+      node => fieldModulatedValues(node, edgesRef.current, signals, activeEditRef.current, props.dragMode),
+    ));
+  }, [props.audio, props.dragMode, props.onAudioModulation, props.onFieldSlots, props.onPostChain]);
   const onOperatorPreview = useCallback<NonNullable<OperatorNodeData['onOperatorPreview']>>((id, values, selectValues) => {
     liveOperatorDataRef.current = {
       ...liveOperatorDataRef.current,
@@ -1320,6 +1340,21 @@ export function ControlGraph(props: ControlGraphProps) {
           },
         };
       }
+      if (presetNode.type === 'fieldSource') {
+        nextNode = {
+          id: presetNode.id,
+          type: 'fieldSource',
+          position: presetNode.position,
+          dragHandle: '.flow-node-title',
+          data: {
+            id: presetNode.id,
+            values: fieldParamDefaults(),
+            onBeginEdit: editCallbacks.onBeginEdit,
+            onEndEdit: editCallbacks.onEndEdit,
+            onFieldValue,
+          },
+        };
+      }
       if (nextNode) nextNodes.push(nodeWithPresetData(nextNode, presetNode));
     }
 
@@ -1387,10 +1422,13 @@ export function ControlGraph(props: ControlGraphProps) {
     // drag on a loaded effect (onFxValue merges off this ref) would wipe its
     // other values.
     const nextFxValues: Record<string, Record<string, number>> = {};
+    const nextFieldValues: Record<string, Record<string, number>> = {};
     for (const node of nextNodes) {
       if (node.type === 'fx') nextFxValues[node.id] = numberRecordFromObject(dataObject(node.data, 'values'));
+      if (node.type === 'fieldSource') nextFieldValues[node.id] = numberRecordFromObject(dataObject(node.data, 'values'));
     }
     fxValuesRef.current = nextFxValues;
+    fieldValuesRef.current = nextFieldValues;
     setNodes(nextNodes);
     setEdges(nextEdges);
     setSnapEnabled(preset.snapEnabled);
@@ -1465,6 +1503,42 @@ export function ControlGraph(props: ControlGraphProps) {
       ? { ...node, data: { ...node.data, bypass } }
       : node));
   }, [setNodes]);
+
+  const onFieldValue = useCallback((id: string, key: string, value: number) => {
+    const current = fieldValuesRef.current[id] ?? {};
+    fieldValuesRef.current = { ...fieldValuesRef.current, [id]: { ...current, [key]: value } };
+    setNodes(nodes => nodes.map(node => node.id === id
+      ? { ...node, data: { ...node.data, values: fieldValuesRef.current[id] } }
+      : node));
+  }, [setNodes]);
+
+  const addFieldSourceNode = useCallback(() => {
+    const id = `fieldSource-${fieldIdRef.current}`;
+    fieldIdRef.current += 1;
+    const values = fieldParamDefaults();
+    fieldValuesRef.current = { ...fieldValuesRef.current, [id]: values };
+    setNodes(current => [...current, {
+      id,
+      type: 'fieldSource',
+      position: nextAddPosition(),
+      dragHandle: '.flow-node-title',
+      data: {
+        id, values,
+        onBeginEdit: editCallbacks.onBeginEdit,
+        onEndEdit: editCallbacks.onEndEdit,
+        onFieldValue,
+      },
+    }]);
+    // Auto-wire all three field outlets to the renderer so it composes immediately.
+    setEdges(current => [
+      ...current,
+      { id: `${id}-renderer-relief`, source: id, sourceHandle: 'relief', target: 'renderer', targetHandle: 'relief', animated: true },
+      { id: `${id}-renderer-undulate`, source: id, sourceHandle: 'undulate', target: 'renderer', targetHandle: 'undulate', animated: true },
+      { id: `${id}-renderer-color`, source: id, sourceHandle: 'color', target: 'renderer', targetHandle: 'color', animated: true },
+    ]);
+    setIsAddMenuOpen(false);
+    setAddMenuCategory(null);
+  }, [editCallbacks, nextAddPosition, onFieldValue, setEdges, setNodes]);
 
   const addFxNode = useCallback((kind: string) => {
     if (!isFxKind(kind)) return;
@@ -1544,6 +1618,7 @@ export function ControlGraph(props: ControlGraphProps) {
         <div className="add-node-menu nodrag nopan">
           <button type="button" className="back-button" onClick={resetAddMenuCategory}>Back</button>
           <button type="button" onClick={addClockNode}>Clock</button>
+          <button type="button" onClick={addFieldSourceNode}>Field +</button>
         </div>
       );
     }
@@ -1574,7 +1649,7 @@ export function ControlGraph(props: ControlGraphProps) {
         ))}
       </div>
     );
-  }, [addClockNode, addFxNode, addMenuCategory, addOperatorNode, chooseAddCategory, isAddMenuOpen, resetAddMenuCategory]);
+  }, [addClockNode, addFieldSourceNode, addFxNode, addMenuCategory, addOperatorNode, chooseAddCategory, isAddMenuOpen, resetAddMenuCategory]);
 
   const snapCurrentLayout = useCallback(() => {
     setNodes(current => current.map(node => ({

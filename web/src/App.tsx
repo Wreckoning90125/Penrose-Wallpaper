@@ -16,7 +16,7 @@ import {
 import { useWebAudioGraph } from './audio/useWebAudioGraph';
 import { ControlGraph } from './flow/ControlGraph';
 import { clampNumber } from './util/clamp';
-import type { AtlasCategory, AtlasItem, AtlasManifest, BoostPosition, DragMode, Gains, GraphPresetAppState, LiveBoostStore, Patch, PostChainSpec, RenderInputs } from './types';
+import type { AtlasCategory, AtlasItem, AtlasManifest, BoostPosition, DragMode, FieldSlot, Gains, GraphPresetAppState, LiveBoostStore, Patch, PostChainSpec, RenderInputs } from './types';
 import type { WallpaperRenderer } from './render/webgpuRenderer';
 
 const CURRENT_CONTROLS = '__current_controls__';
@@ -138,6 +138,7 @@ export function App() {
   const previewSettingsRef = useRef<Settings | null>(null);
   const audioModulationsRef = useRef<Record<string, number | undefined>>({});
   const postChainRef = useRef<PostChainSpec>([]);
+  const fieldSlotsRef = useRef<FieldSlot[]>([]);
   const renderInputsRef = useRef<RenderInputs>({ geometry: true, lighting: true, color: true, material: true, projection: true, fieldDisplace: true, fieldRelief: true, fieldColor: true, fieldUndulate: true, border: true });
   const applyAudioDriveRef = useRef<() => void>(() => undefined);
   const appModulationFrameRef = useRef(0);
@@ -419,6 +420,7 @@ export function App() {
         if (cancelled) return;
         renderer.setPostChain(postChainRef.current);
         renderer.setRenderInputs(renderInputsRef.current);
+        renderer.setFieldSlots(fieldSlotsRef.current);
         setRendererReady(true);
       } catch (caught) {
         if (!cancelled) setError(caught instanceof Error ? errorMessage(caught) : String(caught));
@@ -615,6 +617,11 @@ export function App() {
     rendererRef.current?.setRenderInputs(inputs);
   }, []);
 
+  const onFieldSlots = useCallback((slots: FieldSlot[]) => {
+    fieldSlotsRef.current = slots;
+    rendererRef.current?.setFieldSlots(slots);
+  }, []);
+
   const applyGraphPresetState = useCallback((state: GraphPresetAppState) => {
     setCategoryId(state.categoryId);
     setTargetId(state.targetId);
@@ -734,6 +741,7 @@ export function App() {
               onAudioModulation={onAudioModulation}
               onPostChain={onPostChain}
               onRenderInputs={onRenderInputs}
+              onFieldSlots={onFieldSlots}
               onGraphPresetState={applyGraphPresetState}
               onDragMode={setDragMode}
               onBeginEdit={beginEdit}

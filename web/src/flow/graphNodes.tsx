@@ -24,6 +24,7 @@ import { MeterOutlet, drawWheel, formatTime, settingRangeHandlers, settingWithLi
 import { FAMILIES, familyByValue, seedLabel } from '../tiling/families';
 import { dataObject, numberRecordFromObject, stringRecordFromObject } from './nodeData';
 import { fxDescriptor } from '../render/postFxCatalog';
+import { FIELD_SOURCE_OUTLETS, FIELD_SOURCE_PARAMS } from './fieldSourceSpec';
 import {
   CLOCK_CONTROLS,
   BORDER_CONTROLS,
@@ -43,6 +44,7 @@ import type {
   AudioTransportNodeData,
   ClockNodeData,
   DisplayNodeData,
+  FieldSourceNodeData,
   FxNodeData,
   NodeComponentProps,
   OperatorNodeData,
@@ -776,6 +778,51 @@ export const RippleTargetNode = memo(function RippleTargetNode({ data }: NodeCom
             />
           );
         })}
+      </div>
+    </NodeFrame>
+  );
+});
+
+// An addable field source: its own independent wave (freq/speed) plus relief/
+// undulate/colour amplitudes, summed into the surface alongside the default. The
+// param inlets are audio-drivable (operator -> inlet), the field outlets wire to
+// the renderer; an unwired field outlet contributes nothing (§0).
+export const FieldSourceNode = memo(function FieldSourceNode({ data }: NodeComponentProps<FieldSourceNodeData>) {
+  const flow = useReactFlow<Node, Edge>();
+  const deleteNode = useCallback(() => {
+    const id = data.id;
+    flow.setNodes(current => current.filter(node => node.id !== id));
+    flow.setEdges(current => current.filter(edge => edge.source !== id && edge.target !== id));
+  }, [data.id, flow]);
+  return (
+    <NodeFrame
+      title="Field source +"
+      kind="surface"
+      wide
+      variant={2}
+      inlets={FIELD_SOURCE_PARAMS.map(([key, label]) => ({ id: key, label }))}
+      outlets={FIELD_SOURCE_OUTLETS}
+      activeInputs={data.activeInputs}
+      activeOutputs={data.activeOutputs}
+    >
+      <button type="button" className="node-delete nodrag nopan" aria-label="Delete field source" onClick={deleteNode}>
+        <X size={13} />
+      </button>
+      <div className="control-grid two-col">
+        {FIELD_SOURCE_PARAMS.map(([key, label, min, max, step]) => (
+          <RangeControl
+            key={key}
+            label={label}
+            value={data.values[key] ?? 0}
+            min={min}
+            max={max}
+            step={step}
+            paramKey={`field:${data.id}:${key}`}
+            onBeginEdit={data.onBeginEdit}
+            onChange={value => data.onFieldValue?.(data.id, key, value)}
+            onEndEdit={data.onEndEdit}
+          />
+        ))}
       </div>
     </NodeFrame>
   );

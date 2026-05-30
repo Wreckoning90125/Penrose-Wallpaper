@@ -727,7 +727,7 @@ export const OperatorNode = memo(function OperatorNode({ data }: NodeComponentPr
 export const RippleTargetNode = memo(function RippleTargetNode({ data }: NodeComponentProps<SettingsNodeData>) {
   return (
     <NodeFrame
-      title="Ripple / depth target"
+      title="Field source"
       kind="surface"
       wide
       variant={2}
@@ -755,18 +755,6 @@ export const RippleTargetNode = memo(function RippleTargetNode({ data }: NodeCom
             />
           );
         })}
-      </div>
-      <div className="segmented nodrag nopan">
-        {['Color', 'Depth', 'Both', 'Fine both', 'None'].map((label, idx) => (
-          <button
-            key={label}
-            type="button"
-            className={intSetting(data.settings, 'ripple_kind', 0, 4) === idx ? 'active' : ''}
-            onClick={() => data.onSetting('ripple_kind', String(idx))}
-          >
-            {label}
-          </button>
-        ))}
       </div>
     </NodeFrame>
   );

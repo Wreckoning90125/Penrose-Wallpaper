@@ -35,10 +35,10 @@ export const LIGHT_SETTING_KEYS: readonly SettingKey[] = [
 ];
 export const RIPPLE_TARGET_SETTING_KEYS: readonly SettingKey[] = [
   'brightness',
-  'depth_amount',
-  'ripple_amount',
-  'ripple_speed',
-  'ripple_kind',
+  'field_displace',
+  'field_relief',
+  'field_color',
+  'field_speed',
 ];
 export const BORDER_SETTING_KEYS: readonly SettingKey[] = [
   'border_on',
@@ -65,13 +65,16 @@ export const GRAPH_PRESET_SETTING_KEYS: readonly SettingKey[] = [
   'clock_rate',
   'color_count',
   'color_mode',
-  'depth_amount',
   'edge_profile_c',
   'edge_profile_glow',
   'edge_profile_h',
   'edge_profile_l',
   'edge_profile_width',
   'family',
+  'field_color',
+  'field_displace',
+  'field_relief',
+  'field_speed',
   'generation',
   'hyp_boost_x',
   'hyp_boost_y',
@@ -101,8 +104,5 @@ export const GRAPH_PRESET_SETTING_KEYS: readonly SettingKey[] = [
   'mat_sheen_color_r',
   'preset',
   'projection',
-  'ripple_amount',
-  'ripple_kind',
-  'ripple_speed',
   'seed',
 ];

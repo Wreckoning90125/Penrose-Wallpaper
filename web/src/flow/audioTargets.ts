@@ -7,7 +7,10 @@ import { MAX_COLORS } from '../color/palette';
 export const AUDIO_TARGET_RANGES: Record<string, readonly [number, number]> = {
   brightness: [40, 180],
   color_count: [2, MAX_COLORS],
-  depth_amount: [0, 100],
+  field_displace: [0, 100],
+  field_relief: [0, 100],
+  field_color: [0, 100],
+  field_speed: [0, 200],
   generation: [0, 8],
   hyp_boost_x: [0, 100],
   hyp_boost_y: [0, 100],
@@ -31,8 +34,6 @@ export const AUDIO_TARGET_RANGES: Record<string, readonly [number, number]> = {
   mat_rough_mod: [0, 100],
   mat_roughness: [0, 100],
   mat_sheen: [0, 200],
-  ripple_amount: [0, 100],
-  ripple_speed: [0, 200],
 };
 
 export function audioTargetRange(handle: string | null | undefined): readonly [number, number] | null {

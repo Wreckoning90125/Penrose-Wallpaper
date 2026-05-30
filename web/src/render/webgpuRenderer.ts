@@ -734,19 +734,15 @@ export class WallpaperRenderer {
     this.uniforms.sheen.value = mat.sheen;
     this.uniforms.reliefScale.value = intSetting(settings, 'mat_relief', 0, 200) / 200;
     this.uniforms.brightness.value = intSetting(settings, 'brightness', 0, 200) / 100;
-    const rippleAmount = intSetting(settings, 'ripple_amount', 0, 100) / 100;
-    // ripple_kind: 0 Color · 1 Depth · 2 Both · 3 Fine both · 4 None. None zeroes
-    // ripple AND depth so the node contributes nothing (flat, modulo relief).
-    const rippleKind = intSetting(settings, 'ripple_kind', 0, 4);
-    const rippleNone = rippleKind === 4;
-    const hasColorRipple = !rippleNone && rippleKind !== 1;
-    const hasMotionRipple = !rippleNone && rippleKind !== 0;
-    this.baseDepthScale = rippleNone ? 0 : intSetting(settings, 'depth_amount', 0, 100) / 100;
+    // The field-source emits three independently-driven fields: displacement (a
+    // per-tile bulge), relief (the wave modulating baked relief) and colour. Each
+    // is its own driver; zero on all three leaves the surface flat (modulo relief).
+    this.baseDepthScale = intSetting(settings, 'field_displace', 0, 100) / 100;
     this.uniforms.depthScale.value = this.baseDepthScale;
-    this.baseRippleAmp = (hasMotionRipple ? rippleAmount : 0) * (rippleKind === 3 ? 0.092 : 0.075);
+    this.baseRippleAmp = intSetting(settings, 'field_relief', 0, 100) / 100 * 0.075;
     this.uniforms.rippleAmp.value = this.baseRippleAmp;
-    this.uniforms.rippleColorAmp.value = (hasColorRipple ? rippleAmount : 0) * (rippleKind === 3 ? 0.16 : 0.22);
-    this.uniforms.rippleFreq.value = 2 + rippleKind * 2.25;
+    this.uniforms.rippleColorAmp.value = intSetting(settings, 'field_color', 0, 100) / 100 * 0.22;
+    this.uniforms.rippleFreq.value = 6.5;
     this.scene.environmentIntensity = 0.8 + mat.clearcoat * 0.9 + mat.metalness * 0.5;
     const border = oklchToLinearSrgb([
       intSetting(settings, 'border_l', 0, 100) / 100,
@@ -822,7 +818,7 @@ export class WallpaperRenderer {
     const audioSettings: Partial<Settings> = {
       ...this.settings,
       brightness: modulatedValue('brightness', 40, 180),
-      depth_amount: modulatedValue('depth_amount', 0, 100),
+      field_displace: modulatedValue('field_displace', 0, 100),
       hyp_boost_x: modulatedValue('hyp_boost_x', 0, 100),
       hyp_boost_y: modulatedValue('hyp_boost_y', 0, 100),
       hyp_scale: modulatedValue('hyp_scale', 0, 100),
@@ -842,8 +838,9 @@ export class WallpaperRenderer {
       mat_rough_mod: modulatedValue('mat_rough_mod', 0, 100),
       mat_roughness: modulatedValue('mat_roughness', 0, 100),
       mat_sheen: modulatedValue('mat_sheen', 0, 200),
-      ripple_amount: modulatedValue('ripple_amount', 0, 100),
-      ripple_speed: modulatedValue('ripple_speed', 0, 200),
+      field_relief: modulatedValue('field_relief', 0, 100),
+      field_color: modulatedValue('field_color', 0, 100),
+      field_speed: modulatedValue('field_speed', 0, 200),
     };
     const mat = materialSettings(audioSettings);
     this.uniforms.roughness.value = mat.roughness;
@@ -857,21 +854,14 @@ export class WallpaperRenderer {
     this.uniforms.emissive.value = Math.min(2, mat.emissive);
     this.uniforms.iridescence.value = Math.min(1, mat.iridescence);
     this.uniforms.metalness.value = Math.min(1, mat.metalness);
-    const rippleAmount = modulatedValue('ripple_amount', 0, 100) / 100;
-    // ripple_kind 4 = None: zero ripple + depth (see applySettings).
-    const rippleKind = intSetting(audioSettings, 'ripple_kind', 0, 4);
-    const rippleNone = rippleKind === 4;
-    const hasColorRipple = !rippleNone && rippleKind !== 1;
-    const hasMotionRipple = !rippleNone && rippleKind !== 0;
-    const rippleAmp = (hasMotionRipple ? rippleAmount : 0) * (rippleKind === 3 ? 0.092 : 0.075);
-    this.uniforms.rippleAmp.value = rippleAmp;
-    this.uniforms.rippleColorAmp.value = (hasColorRipple ? rippleAmount : 0) * (rippleKind === 3 ? 0.16 : 0.22);
-    this.uniforms.rippleFreq.value = 2 + rippleKind * 2.25;
-    const depthScale = rippleNone ? 0 : modulatedValue('depth_amount', 0, 100) / 100;
+    this.uniforms.rippleAmp.value = modulatedValue('field_relief', 0, 100) / 100 * 0.075;
+    this.uniforms.rippleColorAmp.value = modulatedValue('field_color', 0, 100) / 100 * 0.22;
+    this.uniforms.rippleFreq.value = 6.5;
+    const depthScale = modulatedValue('field_displace', 0, 100) / 100;
     this.uniforms.depthScale.value = Math.min(1.5, depthScale);
-    if (hasModulation('ripple_speed')) {
+    if (hasModulation('field_speed')) {
       this.clockRate = Math.max(0, intSetting(this.settings, 'clock_rate', 0, 240) / 100)
-        * Math.max(0.1, modulatedValue('ripple_speed', 0, 200) / 50);
+        * Math.max(0.1, modulatedValue('field_speed', 0, 200) / 50);
     }
     if (
       hasModulation('light_ambient')
@@ -913,7 +903,7 @@ export class WallpaperRenderer {
   setClockFromSettings(settings: Settings): void {
     this.clockEnabled = String(settings.clock_enabled ?? '1') !== '0';
     this.clockRate = Math.max(0, intSetting(settings, 'clock_rate', 0, 240) / 100)
-      * Math.max(0.1, intSetting(settings, 'ripple_speed', 0, 200) / 50);
+      * Math.max(0.1, intSetting(settings, 'field_speed', 0, 200) / 50);
     if (this.clockEnabled) {
       this.startClock();
     } else {

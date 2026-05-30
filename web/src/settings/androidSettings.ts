@@ -21,11 +21,11 @@ export type Settings = {
   bg_l: SettingValue;
   bg_c: SettingValue;
   bg_h: SettingValue;
-  ripple_amount: SettingValue;
-  ripple_speed: SettingValue;
-  ripple_kind: SettingValue;
+  field_relief: SettingValue;
+  field_color: SettingValue;
+  field_speed: SettingValue;
   brightness: SettingValue;
-  depth_amount: SettingValue;
+  field_displace: SettingValue;
   clock_enabled: SettingValue;
   clock_rate: SettingValue;
   mat_roughness: SettingValue;
@@ -86,11 +86,11 @@ export const DEFAULT_SETTINGS: Settings = {
   bg_l: 4,
   bg_c: 1,
   bg_h: 280,
-  ripple_amount: 24,
-  ripple_speed: 40,
-  ripple_kind: '2',
+  field_relief: 24,
+  field_color: 24,
+  field_speed: 40,
   brightness: 100,
-  depth_amount: 42,
+  field_displace: 42,
   clock_enabled: '1',
   clock_rate: 100,
   mat_roughness: 38,

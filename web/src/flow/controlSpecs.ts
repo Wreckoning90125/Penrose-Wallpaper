@@ -42,9 +42,10 @@ export const CLOCK_CONTROLS: ControlSpec[] = [
 
 export const RIPPLE_TARGET_CONTROLS: ControlSpec[] = [
   ['brightness', 'Brightness', 40, 180, 1],
-  ['depth_amount', 'Depth drive', 0, 100, 1],
-  ['ripple_amount', 'Ripple', 0, 100, 1],
-  ['ripple_speed', 'Ripple speed', 0, 200, 1],
+  ['field_displace', 'Displace', 0, 100, 1],
+  ['field_relief', 'Relief', 0, 100, 1],
+  ['field_color', 'Color', 0, 100, 1],
+  ['field_speed', 'Speed', 0, 200, 1],
 ];
 
 // The actual tile border (the edgeMesh): width is baked into the edge geometry,

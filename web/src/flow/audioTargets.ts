@@ -6,6 +6,10 @@ import { MAX_COLORS } from '../color/palette';
 
 export const AUDIO_TARGET_RANGES: Record<string, readonly [number, number]> = {
   brightness: [40, 180],
+  border_l: [0, 100],
+  border_c: [0, 37],
+  border_h: [0, 359],
+  border_a: [0, 100],
   color_count: [2, MAX_COLORS],
   field_displace: [0, 100],
   field_relief: [0, 100],

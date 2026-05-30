@@ -292,6 +292,7 @@ function isValidGraphConnection(connection: GraphConnectionLike, nodes: readonly
       && (sourceHandle === 'displace' || sourceHandle === 'relief' || sourceHandle === 'color' || sourceHandle === 'undulate')
       && targetHandle === sourceHandle;
   }
+  if (source.id === 'edgeProfile') return sourceHandle === 'border' && target.id === 'renderer' && targetHandle === 'border';
   if (source.id === 'transport') return sourceHandle === 'out' && target.id === 'analysis' && targetHandle === 'transport';
 
   if (sourceHandle === 'frame' && targetHandle === 'frame') {
@@ -792,6 +793,7 @@ export function ControlGraph(props: ControlGraphProps) {
     { id: 'postfx-renderer-relief', source: 'postfx', sourceHandle: 'relief', target: 'renderer', targetHandle: 'relief' },
     { id: 'postfx-renderer-color', source: 'postfx', sourceHandle: 'color', target: 'renderer', targetHandle: 'color' },
     { id: 'postfx-renderer-undulate', source: 'postfx', sourceHandle: 'undulate', target: 'renderer', targetHandle: 'undulate' },
+    { id: 'edgeProfile-renderer-border', source: 'edgeProfile', sourceHandle: 'border', target: 'renderer', targetHandle: 'border' },
     { id: 'renderer-tonemap', source: 'renderer', sourceHandle: 'frame', target: 'tonemap', targetHandle: 'frame' },
     { id: 'tonemap-display', source: 'tonemap', sourceHandle: 'frame', target: 'display', targetHandle: 'frame' },
     { id: 'transport-analysis', source: 'transport', sourceHandle: 'out', target: 'analysis', targetHandle: 'transport', animated: true },

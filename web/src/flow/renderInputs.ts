@@ -46,5 +46,8 @@ export function renderInputsFromEdges(nodes: readonly Node[], edges: readonly Ed
   const fieldRelief = link('postfx', 'relief', 'renderer', 'relief');
   const fieldColor = link('postfx', 'color', 'renderer', 'color');
   const fieldUndulate = link('postfx', 'undulate', 'renderer', 'undulate');
-  return { geometry: renderChainConnected(nodes, edges), lighting, color, material, projection, fieldDisplace, fieldRelief, fieldColor, fieldUndulate };
+  // The Border node wires its single outlet to the renderer; cut it and the edge
+  // mesh stops rendering.
+  const border = link('edgeProfile', 'border', 'renderer', 'border');
+  return { geometry: renderChainConnected(nodes, edges), lighting, color, material, projection, fieldDisplace, fieldRelief, fieldColor, fieldUndulate, border };
 }

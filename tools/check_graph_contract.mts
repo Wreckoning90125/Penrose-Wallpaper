@@ -103,6 +103,7 @@ const contractNodes: Node[] = [
   wireNode('renderer', 'renderer'),
   wireNode('display', 'display'),
   wireNode('postfx', 'postfx'),
+  wireNode('edgeProfile', 'edgeProfile'),
 ];
 const canonicalWires = {
   atlasTiling: wire('w1', 'atlas', 'out', 'tiling', 'in'),
@@ -116,10 +117,11 @@ const canonicalWires = {
   reliefRenderer: wire('w9', 'postfx', 'relief', 'renderer', 'relief'),
   colorFieldRenderer: wire('w10', 'postfx', 'color', 'renderer', 'color'),
   undulateRenderer: wire('w11', 'postfx', 'undulate', 'renderer', 'undulate'),
+  borderRenderer: wire('w12', 'edgeProfile', 'border', 'renderer', 'border'),
 };
 const allWires: Edge[] = Object.values(canonicalWires);
-type RenderInput = 'geometry' | 'lighting' | 'color' | 'material' | 'projection' | 'fieldDisplace' | 'fieldRelief' | 'fieldColor' | 'fieldUndulate';
-const RENDER_INPUTS: readonly RenderInput[] = ['geometry', 'lighting', 'color', 'material', 'projection', 'fieldDisplace', 'fieldRelief', 'fieldColor', 'fieldUndulate'];
+type RenderInput = 'geometry' | 'lighting' | 'color' | 'material' | 'projection' | 'fieldDisplace' | 'fieldRelief' | 'fieldColor' | 'fieldUndulate' | 'border';
+const RENDER_INPUTS: readonly RenderInput[] = ['geometry', 'lighting', 'color', 'material', 'projection', 'fieldDisplace', 'fieldRelief', 'fieldColor', 'fieldUndulate', 'border'];
 
 const fullyWired = renderInputsFromEdges(contractNodes, allWires);
 for (const key of RENDER_INPUTS) {
@@ -134,6 +136,7 @@ const cutDrops: { wire: keyof typeof canonicalWires; input: RenderInput }[] = [
   { wire: 'reliefRenderer', input: 'fieldRelief' },
   { wire: 'colorFieldRenderer', input: 'fieldColor' },
   { wire: 'undulateRenderer', input: 'fieldUndulate' },
+  { wire: 'borderRenderer', input: 'border' },
   { wire: 'atlasTiling', input: 'geometry' },
   { wire: 'tilingProjection', input: 'geometry' },
   { wire: 'rendererDisplay', input: 'geometry' },

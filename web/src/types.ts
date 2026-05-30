@@ -139,6 +139,10 @@ export type RenderInputs = {
   fieldRelief: boolean;
   fieldColor: boolean;
   fieldUndulate: boolean;
+  // The Border node -> renderer:border wire. Cut it and the tile borders (the
+  // edge mesh) stop rendering — a scene-composition node with zero effect when
+  // disconnected.
+  border: boolean;
 };
 
 export type GamutLabel = string;

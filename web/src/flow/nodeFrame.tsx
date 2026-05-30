@@ -302,6 +302,7 @@ export const SCENE_PASS_INLETS: PortSpec[] = [
   { id: 'relief', label: 'Relief' },
   { id: 'color', label: 'Color' },
   { id: 'undulate', label: 'Undulate' },
+  { id: 'border', label: 'Border' },
 ];
 
 export const DISPLAY_INLETS: PortSpec[] = [{ id: 'frame', label: 'Frame' }];

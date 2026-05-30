@@ -149,6 +149,7 @@ export class WallpaperRenderer {
   mesh: Mesh<BufferGeometry, MeshPhysicalNodeMaterial> | null;
   edgeMesh: Mesh<BufferGeometry, MeshBasicNodeMaterial> | null;
   renderConnected: boolean;
+  borderConnected: boolean;
   lightingConnected: boolean;
   baseMaterial: MaterialSettings;
   baseRippleAmp: number;
@@ -231,6 +232,7 @@ export class WallpaperRenderer {
     this.mesh = null;
     this.edgeMesh = null;
     this.renderConnected = true;
+    this.borderConnected = true;
     this.lightingConnected = true;
     this.baseMaterial = materialSettings({});
     this.baseRippleAmp = 0;
@@ -700,7 +702,9 @@ export class WallpaperRenderer {
 
   applyRenderConnected(): void {
     if (this.mesh) this.mesh.visible = this.renderConnected;
-    if (this.edgeMesh) this.edgeMesh.visible = this.renderConnected;
+    // The edge mesh (tile borders) is gated by BOTH the geometry chain and the
+    // Border node's own wire: cut the Border->renderer wire and the borders stop.
+    if (this.edgeMesh) this.edgeMesh.visible = this.renderConnected && this.borderConnected;
   }
 
   setRenderInputs(inputs: RenderInputs): void {
@@ -713,6 +717,7 @@ export class WallpaperRenderer {
     const undulateMix = inputs.fieldUndulate ? 1 : 0;
     const changed =
       this.renderConnected !== inputs.geometry ||
+      this.borderConnected !== inputs.border ||
       this.lightingConnected !== inputs.lighting ||
       this.uniforms.colorMix.value !== colorMix ||
       this.uniforms.materialMix.value !== materialMix ||
@@ -723,6 +728,7 @@ export class WallpaperRenderer {
       this.uniforms.undulateMix.value !== undulateMix;
     if (!changed) return;
     this.renderConnected = inputs.geometry;
+    this.borderConnected = inputs.border;
     this.lightingConnected = inputs.lighting;
     this.uniforms.colorMix.value = colorMix;
     this.uniforms.materialMix.value = materialMix;
@@ -884,6 +890,18 @@ export class WallpaperRenderer {
     this.uniforms.rippleFreq.value = modulatedValue('field_freq', 0, 100) / 10;
     const depthScale = modulatedValue('field_displace', 0, 100) / 100;
     this.uniforms.depthScale.value = Math.min(1.5, depthScale);
+    // Border colour/opacity are runtime (edgeMaterial), so audio can drive them.
+    if (hasModulation('border_l') || hasModulation('border_c') || hasModulation('border_h')) {
+      const borderRgb = oklchToLinearSrgb([
+        modulatedValue('border_l', 0, 100) / 100,
+        modulatedValue('border_c', 0, 37) / 100,
+        modulatedValue('border_h', 0, 359),
+      ]);
+      this.edgeMaterial.color.setRGB(borderRgb[0], borderRgb[1], borderRgb[2]);
+    }
+    if (hasModulation('border_a')) {
+      this.edgeMaterial.opacity = modulatedValue('border_a', 0, 100) / 100;
+    }
     if (hasModulation('field_speed')) {
       this.clockRate = Math.max(0, intSetting(this.settings, 'clock_rate', 0, 240) / 100)
         * Math.max(0.1, modulatedValue('field_speed', 0, 200) / 50);

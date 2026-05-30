@@ -137,7 +137,7 @@ export function App() {
   const previewSettingsRef = useRef<Settings | null>(null);
   const audioModulationsRef = useRef<Record<string, number | undefined>>({});
   const postChainRef = useRef<PostChainSpec>([]);
-  const renderInputsRef = useRef<RenderInputs>({ geometry: true, lighting: true, color: true, material: true, projection: true, fieldDisplace: true, fieldRelief: true, fieldColor: true, fieldUndulate: true });
+  const renderInputsRef = useRef<RenderInputs>({ geometry: true, lighting: true, color: true, material: true, projection: true, fieldDisplace: true, fieldRelief: true, fieldColor: true, fieldUndulate: true, border: true });
   const applyAudioDriveRef = useRef<() => void>(() => undefined);
   const appModulationFrameRef = useRef(0);
   const appAudioSettingBasesRef = useRef<AppAudioSettingBases>({});

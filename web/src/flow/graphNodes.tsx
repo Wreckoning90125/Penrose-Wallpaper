@@ -348,7 +348,16 @@ export const LightingNode = memo(function LightingNode({ data }: NodeComponentPr
 export const EdgeProfileNode = memo(function EdgeProfileNode({ data }: NodeComponentProps<SettingsNodeData>) {
   const borderOn = String(data.settings.border_on) !== 'false';
   return (
-    <NodeFrame title="Border" kind="surface" wide variant={0}>
+    <NodeFrame
+      title="Border"
+      kind="surface"
+      wide
+      variant={0}
+      inlets={portSpecsFromControls(BORDER_CONTROLS.slice(1))}
+      outlets={[{ id: 'border', label: 'Border' }]}
+      activeInputs={data.activeInputs}
+      activeOutputs={data.activeOutputs}
+    >
       <div className="segmented two nodrag nopan">
         <button type="button" className={borderOn ? 'active' : ''} onClick={() => data.onSetting('border_on', 'true')}>On</button>
         <button type="button" className={!borderOn ? 'active' : ''} onClick={() => data.onSetting('border_on', 'false')}>Off</button>

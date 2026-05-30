@@ -105,6 +105,7 @@ function createRendererUniforms() {
     rippleColorAmp: uniform(0),
     undulateAmp: uniform(0),
     rippleFreq: uniform(4),
+    fieldSpeed: uniform(0.8),
     depthScale: uniform(0.42),
     reliefScale: uniform(0.55),
     edgeDepthBias: uniform(0.0015),
@@ -536,10 +537,15 @@ export class WallpaperRenderer {
     return { x: boostedX, y: boostedY };
   }
 
-  rippleWaveNode(x: Node<'float'>, y: Node<'float'>): Node<'float'> {
-    const phase = x.mul(this.uniforms.rippleFreq)
-      .add(y.mul(this.uniforms.rippleFreq.mul(0.73)))
-      .add(this.uniforms.time);
+  // A unit sine wave parameterized by spatial frequency and temporal speed, so
+  // each field source can carry its own independent wave. The global clock drives
+  // `time`; each source scales it by its own speed (slot 0 reproduces the old
+  // global animation exactly: clockRate dropped the field_speed factor and the
+  // `speed` argument re-applies it).
+  rippleWaveNode(x: Node<'float'>, y: Node<'float'>, freq: Node<'float'>, speed: Node<'float'>): Node<'float'> {
+    const phase = x.mul(freq)
+      .add(y.mul(freq.mul(0.73)))
+      .add(this.uniforms.time.mul(speed));
     return sin(phase);
   }
 
@@ -576,7 +582,7 @@ export class WallpaperRenderer {
   ): Node<'float'> {
     const reliefZ = positionLocal.z.mul(this.uniforms.reliefScale);
     const displaceField = this.surfaceDepthNode(boostedX, boostedY, tileRing, tileOrient, tileCenter);
-    const wave = this.rippleWaveNode(boostedX, boostedY);
+    const wave = this.rippleWaveNode(boostedX, boostedY, this.uniforms.rippleFreq, this.uniforms.fieldSpeed);
     const reliefField = reliefZ.mul(wave).mul(this.uniforms.rippleAmp);
     const undulateField = wave.mul(this.uniforms.undulateAmp);
     return reliefZ
@@ -609,7 +615,7 @@ export class WallpaperRenderer {
     const tileType = attribute<'float'>('tileType', 'float');
     const tileRing = attribute<'float'>('tileRing', 'float');
     const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
-    const rippleColor = this.rippleWaveNode(positionLocal.x, positionLocal.y).mul(this.uniforms.rippleColorAmp).mul(this.uniforms.colorFieldMix);
+    const rippleColor = this.rippleWaveNode(positionLocal.x, positionLocal.y, this.uniforms.rippleFreq, this.uniforms.fieldSpeed).mul(this.uniforms.rippleColorAmp).mul(this.uniforms.colorFieldMix);
     const material = new MeshPhysicalNodeMaterial({
       side: DoubleSide,
     });
@@ -774,6 +780,7 @@ export class WallpaperRenderer {
     this.uniforms.rippleColorAmp.value = intSetting(settings, 'field_color', 0, 100) / 100 * 0.22;
     this.uniforms.undulateAmp.value = intSetting(settings, 'field_undulate', 0, 100) / 100 * 0.075;
     this.uniforms.rippleFreq.value = intSetting(settings, 'field_freq', 0, 100) / 10;
+    this.uniforms.fieldSpeed.value = intSetting(settings, 'field_speed', 0, 200) / 50;
     this.scene.environmentIntensity = 0.8 + mat.clearcoat * 0.9 + mat.metalness * 0.5;
     const border = oklchToLinearSrgb([
       intSetting(settings, 'border_l', 0, 100) / 100,
@@ -889,6 +896,7 @@ export class WallpaperRenderer {
     this.uniforms.rippleColorAmp.value = modulatedValue('field_color', 0, 100) / 100 * 0.22;
     this.uniforms.undulateAmp.value = modulatedValue('field_undulate', 0, 100) / 100 * 0.075;
     this.uniforms.rippleFreq.value = modulatedValue('field_freq', 0, 100) / 10;
+    this.uniforms.fieldSpeed.value = modulatedValue('field_speed', 0, 200) / 50;
     const depthScale = modulatedValue('field_displace', 0, 100) / 100;
     this.uniforms.depthScale.value = Math.min(1.5, depthScale);
     // Border colour/opacity are runtime (edgeMaterial), so audio can drive them.
@@ -902,10 +910,6 @@ export class WallpaperRenderer {
     }
     if (hasModulation('border_a')) {
       this.edgeMaterial.opacity = modulatedValue('border_a', 0, 100) / 100;
-    }
-    if (hasModulation('field_speed')) {
-      this.clockRate = Math.max(0, intSetting(this.settings, 'clock_rate', 0, 240) / 100)
-        * Math.max(0.1, modulatedValue('field_speed', 0, 200) / 50);
     }
     if (
       hasModulation('light_ambient')
@@ -946,8 +950,10 @@ export class WallpaperRenderer {
 
   setClockFromSettings(settings: Settings): void {
     this.clockEnabled = String(settings.clock_enabled ?? '1') !== '0';
-    this.clockRate = Math.max(0, intSetting(settings, 'clock_rate', 0, 240) / 100)
-      * Math.max(0.1, intSetting(settings, 'field_speed', 0, 200) / 50);
+    // The clock is now field-source-independent (clock_rate only). Each field
+    // source scales `time` by its own speed in the wave, so the per-source speed
+    // lives on the field uniform, not the global clock.
+    this.clockRate = Math.max(0, intSetting(settings, 'clock_rate', 0, 240) / 100);
     if (this.clockEnabled) {
       this.startClock();
     } else {

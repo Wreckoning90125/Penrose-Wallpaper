@@ -61,6 +61,13 @@ for the module map and dependency direction.
   black), so it is a reliable **console oracle** but **not a pixel oracle**. Pixel
   correctness needs the user's preview (or `RENDER_HEADED=1` where a display
   exists). Don't claim a visual result you can't see.
+- **Don't theorize at a domain expert who can see the pixels.** When the user
+  says "that's not the cause," stop restating the theory and go read the actual
+  code path. Doubling down on a wrong cause to win the argument is gaslighting and
+  it has burned hours. Honour empirical contradictions (same geometry, two
+  outcomes ⇒ the hypothesis is wrong) immediately. See
+  `docs/render/displacement-normals.md` for the canonical example (shading
+  smoothness is the **normal**, not frequency or poly count).
 - **Fail hard, don't mask.** On WebGPU device loss the app surfaces a fatal screen
   rather than silently recovering — keep it that way unless asked.
 - Reference implementations the user values: `.local/procedural-morphology-lab`
@@ -70,5 +77,7 @@ for the module map and dependency direction.
 ## Docs worth reading
 
 - `docs/render/webgpu-constraints.md` — the WebGPU/TSL rules above, in detail.
+- `docs/render/displacement-normals.md` — shading smoothness is the normal, not
+  geometry/frequency (the multi-hour misconception, written down so it can't recur).
 - `web/src/flow/README.md` — control-graph module map.
 - `docs/render/` and `docs/superpowers/plans/` — render design + the post-FX plan.

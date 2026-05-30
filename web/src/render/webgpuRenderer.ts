@@ -602,10 +602,11 @@ export class WallpaperRenderer {
     const displaceField = this.surfaceDepthNode(boostedX, boostedY, tileRing, tileOrient, tileCenter);
     const wave = this.rippleWaveNode(boostedX, boostedY, this.uniforms.rippleFreq, this.uniforms.fieldSpeed);
     const reliefField = reliefZ.mul(wave).mul(this.uniforms.rippleAmp);
-    // Undulate is the whole-sheet 3D wave. Its spatial frequency is its OWN driven
-    // control (undulateFreq), independent of the relief/colour frequency, so it can
-    // be a broad sheet bend or tighter at the user's choice. No relief term — any
-    // real relief just rides the bent sheet (z heights add).
+    // Undulate is the whole-sheet wave: a 1-D plane wave displacing z (up), so the
+    // flat atlas bends like paper. No relief term — any real relief just rides the
+    // bent sheet (z heights add). Its frequency is its own driven control; shading
+    // stays smooth at ANY frequency because the normal is analytic (surfaceNormalNode),
+    // not the polygon face. Frequency sets the bend scale; it does NOT cause faceting.
     const undulateWave = this.rippleWaveNode(boostedX, boostedY, this.uniforms.undulateFreq, this.uniforms.fieldSpeed);
     const undulateField = undulateWave.mul(this.uniforms.undulateAmp);
     let z = reliefZ
@@ -622,9 +623,13 @@ export class WallpaperRenderer {
   }
 
   // The analytic surface normal from the displacement gradient (finite-differenced
-  // surfaceZNode). This decouples shading smoothness from polygon density: a flat,
-  // low-poly sheet still shades as a smooth undulation rather than faceting, with
-  // no geometry subdivision. Per-fragment, so it is smooth at any tessellation.
+  // surfaceZNode), transformed to view space. Shading smoothness is a property of
+  // the NORMAL, not the geometry: with `normalFlat` (the polygon face normal) any
+  // displacement on low-poly tiles facets, regardless of wave frequency — which is
+  // the real reason a displaced surface "looked like relief". Deriving the normal
+  // from the displacement instead decouples shading from polygon density: a flat,
+  // low-poly sheet shades as a smooth undulation at any frequency/tessellation, no
+  // subdivision. (See docs/render/displacement-normals.md for the war story.)
   surfaceNormalNode(
     boostedX: Node<'float'>,
     boostedY: Node<'float'>,
@@ -640,27 +645,28 @@ export class WallpaperRenderer {
     return transformNormalToView(localNormal);
   }
 
-  boostedPositionNode() {
+  // The boosted (projected) surface coordinates plus the per-tile attributes the
+  // surface z / normal nodes need. Shared by the position and normal builders.
+  private boostedSurfaceInputs() {
     const tileRing = attribute<'float'>('tileRing', 'float');
     const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
     const tileCenter = attribute<'vec2'>('tileCenter', 'vec2');
     const boosted = this.boostCoordinateNodes(positionLocal.x, positionLocal.y);
+    return { boosted, tileRing, tileOrient, tileCenter };
+  }
+
+  boostedPositionNode() {
+    const { boosted, tileRing, tileOrient, tileCenter } = this.boostedSurfaceInputs();
     return vec3(boosted.x, boosted.y, this.surfaceZNode(boosted.x, boosted.y, tileRing, tileOrient, tileCenter));
   }
 
   surfaceNormalForMaterial(): Node<'vec3'> {
-    const tileRing = attribute<'float'>('tileRing', 'float');
-    const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
-    const tileCenter = attribute<'vec2'>('tileCenter', 'vec2');
-    const boosted = this.boostCoordinateNodes(positionLocal.x, positionLocal.y);
+    const { boosted, tileRing, tileOrient, tileCenter } = this.boostedSurfaceInputs();
     return this.surfaceNormalNode(boosted.x, boosted.y, tileRing, tileOrient, tileCenter);
   }
 
   boostedEdgePositionNode() {
-    const tileRing = attribute<'float'>('tileRing', 'float');
-    const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
-    const tileCenter = attribute<'vec2'>('tileCenter', 'vec2');
-    const boosted = this.boostCoordinateNodes(positionLocal.x, positionLocal.y);
+    const { boosted, tileRing, tileOrient, tileCenter } = this.boostedSurfaceInputs();
     return vec3(
       boosted.x,
       boosted.y,

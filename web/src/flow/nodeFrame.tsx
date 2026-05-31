@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Handle, Position, useNodeId, useReactFlow, useUpdateNodeInternals, type Edge, type Node } from '@xyflow/react';
 import type { ControlSpec } from './controlSpecs';
+import { snapCeilValue } from './flowLayout';
 
 export type PortSpec = {
   id: string;
@@ -21,6 +22,7 @@ type NodeFrameProps = {
   inlets?: PortSpec[];
   outlets?: PortSpec[];
   title: string;
+  icon?: ReactNode;
   wide?: boolean;
   variant?: number;
 };
@@ -237,6 +239,7 @@ export function NodeFrame({
   outlets = [],
   kind,
   title,
+  icon,
   wide = false,
   variant = 0,
 }: NodeFrameProps) {
@@ -248,6 +251,33 @@ export function NodeFrame({
   const railClass = `${inlets.length > 0 ? ' has-inlet-rail' : ''}${outlets.length > 0 ? ' has-outlet-rail' : ''}`;
   const portLabelClass = portLabelsVisible ? '' : ' ports-collapsed';
   const { containerRef, expandedRowY, registerRow, rowY } = useMeasuredPortRows(nodeId, portLabelsVisible);
+  // Self-size to the node's real footprint and round up to a full grid cell, so a
+  // short node always contains its (taller) port rail AND vertical gaps stay
+  // uniform. Generic: it measures the actual rendered content + rails — no per-node
+  // port-count table — so it just works for any new node or new node content.
+  const [autoMinHeight, setAutoMinHeight] = useState(0);
+  useLayoutEffect(() => {
+    const card = containerRef.current;
+    if (!card) return undefined;
+    const measure = (): void => {
+      let bottom = 0;
+      for (const child of Array.from(card.children)) {
+        if (!(child instanceof HTMLElement)) continue;
+        if (child.classList.contains('rail-handle')) continue;
+        const isRail = child.classList.contains('node-port-rail');
+        if (!isRail && window.getComputedStyle(child).position === 'absolute') continue;
+        bottom = Math.max(bottom, child.offsetTop + child.offsetHeight);
+      }
+      if (bottom <= 0) return;
+      const target = snapCeilValue(bottom + 8);
+      setAutoMinHeight(prev => (prev === target ? prev : target));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(card);
+    for (const child of Array.from(card.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [containerRef, portLabelsVisible, inlets.length, outlets.length]);
   const pickPortEdge = useCallback((direction: 'in' | 'out', portId: string) => {
     if (!nodeId) return;
     const connected = flow.getEdges().filter(edge => (
@@ -269,7 +299,7 @@ export function NodeFrame({
     })));
   }, [flow, nodeId]);
   return (
-    <div ref={containerRef} className={`flow-node control-node node-kind-${kind} node-variant-${variant}${wide ? ' wide-node' : ''}${railClass}${portLabelClass}`}>
+    <div ref={containerRef} className={`flow-node control-node node-kind-${kind} node-variant-${variant}${wide ? ' wide-node' : ''}${railClass}${portLabelClass}`} style={autoMinHeight > 0 ? { minHeight: autoMinHeight } : undefined}>
       {renderPortRail('in', inlets, activeInputs, pickPortEdge, registerRow)}
       {renderPortRail('out', outlets, activeOutputs, pickPortEdge, registerRow)}
       {renderPortHandles('in', inlets, rowY, expandedRowY, portLabelsVisible)}
@@ -286,6 +316,7 @@ export function NodeFrame({
             IO
           </button>
         ) : null}
+        {icon ? <span className="flow-node-icon" data-tip={title} aria-hidden="true">{icon}</span> : null}
         <strong>{title}</strong>
       </div>
       {children}

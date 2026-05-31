@@ -19,13 +19,19 @@ import {
   RenderPipeline,
   SRGBColorSpace,
   Scene,
+  Vector3,
   WebGPURenderer,
 } from 'three/webgpu';
 import type Node from 'three/src/nodes/core/Node.js';
+import type UniformNode from 'three/src/nodes/core/UniformNode.js';
 import {
   attribute,
   clamp,
+  cross,
+  dFdx,
+  dFdy,
   float,
+  frontFacing,
   max,
   mix,
   normalize,
@@ -40,8 +46,7 @@ import {
   vec3,
 } from 'three/tsl';
 import type { FieldSlot, PostChainSpec, RenderInputs } from '../types';
-import { fxBuilder, afterImageDamp, type FxUniforms } from './postFxRegistry';
-import { trails, type TrailsNode, type TrailsMode } from './trailsNode';
+import { fxBuilder, afterImageDamp, type FxUniforms, type FxContext } from './postFxRegistry';
 import { fxDescriptor, fxStructuralSignature } from './postFxCatalog';
 import { intSetting, lightSettings, materialSettings, type MaterialSettings, type Settings } from '../settings/androidSettings';
 import { oklchToLinearSrgb } from '../color/palette';
@@ -153,7 +158,6 @@ export class WallpaperRenderer {
   postChainSpec: PostChainSpec;
   postChainSignature: string;
   postChainUniforms: Map<string, FxUniforms>;
-  feedbackNodes: Map<string, TrailsNode>;
   // The scene pass is created ONCE and reused across pipeline rebuilds — recreating
   // it each rebuild orphaned a full-res HalfFloat render target (the dominant GPU
   // leak), since RenderPipeline.dispose() only frees its quad material.
@@ -162,6 +166,10 @@ export class WallpaperRenderer {
   // its addon FX nodes (bloom/anamorphic/RTT/etc.) own before discarding it.
   postOutputNode: Node | null;
   postBg: [number, number, number];
+  // Shared scene-background uniform handed to builders via FxContext (the feedback
+  // trail reads it for its surface mask); updated when the background changes.
+  postBgUniform: UniformNode<'vec3', Vector3>;
+  postFxContext: FxContext;
   uniforms: RendererUniforms;
   material: MeshPhysicalNodeMaterial;
   edgeMaterial: MeshBasicNodeMaterial;
@@ -234,7 +242,8 @@ export class WallpaperRenderer {
     this.postChainSpec = [];
     this.postChainSignature = '';
     this.postChainUniforms = new Map();
-    this.feedbackNodes = new Map();
+    this.postBgUniform = uniform(new Vector3(0, 0, 0));
+    this.postFxContext = { bg: this.postBgUniform };
     this.scenePassNode = null;
     this.postOutputNode = null;
     this.postBg = [0, 0, 0];
@@ -421,20 +430,17 @@ export class WallpaperRenderer {
     // Reuse the scene pass; recreating it per rebuild leaked a full-res RT each time.
     const scenePass = this.scenePassNode ?? pass(this.scene, this.camera);
     this.scenePassNode = scenePass;
-    // Protect everything still in use (scene pass + cached uniforms + live feedback
-    // nodes) from the old-tree disposal below; only genuinely discarded nodes go.
+    // Protect everything still in use (scene pass + cached uniforms) from the
+    // old-tree disposal below; only genuinely discarded nodes go. Stateful feedback
+    // nodes need no special protection: a persisting one stays in the new tree, and
+    // a discarded one is freed by disposePostTree like any other RT-owning node.
     const keep = new Set<object>();
     scenePass.traverse(node => keep.add(node));
     for (const uniforms of this.postChainUniforms.values()) {
       for (const value of Object.values(uniforms)) value.traverse(node => keep.add(node));
     }
-    // Only the feedback node itself is protected (it is disposed explicitly just
-    // below); its upstream chain must still be freed by the traversal.
-    for (const feedback of this.feedbackNodes.values()) keep.add(feedback);
     this.postPipeline?.dispose();
-    for (const node of this.feedbackNodes.values()) node.dispose();
     if (oldOutput) this.disposePostTree(oldOutput, keep);
-    const nextFeedback = new Map<string, TrailsNode>();
     const nextUniforms = new Map<string, FxUniforms>();
     let frame: Node = scenePass;
     // The output color transform (AgX tone map + sRGB) is owned by the toneMap
@@ -450,24 +456,14 @@ export class WallpaperRenderer {
         hasToneMap = true;
         continue;
       }
-      if (node.kind === 'feedback') {
-        const mode: TrailsMode = node.selects['mode'] === 'afterimage' ? 'afterimage'
-          : node.selects['mode'] === 'both' ? 'both' : 'trails';
-        const trailsFx = trails(frame, mode);
-        nextFeedback.set(node.id, trailsFx);
-        nextUniforms.set(node.id, {});
-        frame = trailsFx;
-        continue;
-      }
       const builder = fxBuilder(node.kind);
       if (!builder) continue;
       const existing = this.postChainUniforms.get(node.id);
       const uniforms = existing ?? builder.createUniforms();
       nextUniforms.set(node.id, uniforms);
-      frame = builder.apply(frame, uniforms, node);
+      frame = builder.apply(frame, uniforms, node, this.postFxContext);
     }
 
-    this.feedbackNodes = nextFeedback;
     this.postChainUniforms = nextUniforms;
     this.postOutputNode = frame;
     this.postPipeline = new RenderPipeline(this.renderer, frame);
@@ -494,28 +490,18 @@ export class WallpaperRenderer {
 
   writePostChainUniforms(): void {
     for (const node of this.postChainSpec) {
-      if (node.kind === 'feedback') {
-        const trailsFx = this.feedbackNodes.get(node.id);
-        if (trailsFx) {
-          trailsFx.decay.value = afterImageDamp(node.params['trail'] ?? 0);
-          trailsFx.zoom.value = node.params['zoom'] ?? 0;
-          trailsFx.rotate.value = node.params['rotate'] ?? 0;
-          trailsFx.hue.value = node.params['hue'] ?? 0;
-          trailsFx.maskMode.value = node.selects['mask'] === 'surface' ? 1 : node.selects['mask'] === 'inverse' ? 2 : 0;
-          trailsFx.bg.value.set(this.postBg[0], this.postBg[1], this.postBg[2]);
-        }
-        continue;
-      }
       const uniforms = this.postChainUniforms.get(node.id);
       if (!uniforms) continue;
-      if (node.kind === 'afterImage') {
-        const damp = uniforms['damp'];
-        if (damp) damp.value = afterImageDamp(node.params['trail'] ?? 0);
-        continue;
-      }
+      // Feedback-domain effects (afterImage, feedback) map their `trail` 0..1 through
+      // afterImageDamp into the decay/damp uniform; their other params write directly.
+      const feedbackDomain = fxDescriptor(node.kind)?.compose === 'feedback';
       for (const [key, value] of Object.entries(node.params)) {
         const target = uniforms[key];
         if (!target) continue;
+        if (feedbackDomain && key === 'trail') {
+          target.value = afterImageDamp(value);
+          continue;
+        }
         // Dot-screen scale is a normalized 0..1 control mapped to raw scale 8*v^2,
         // so the coarse/useful range gets most of the slider and the degenerate
         // ultra-fine bottom is compressed into the first ~11% of travel.
@@ -641,8 +627,30 @@ export class WallpaperRenderer {
     const z0 = this.surfaceZNode(boostedX, boostedY, tileRing, tileOrient, tileCenter);
     const zx = this.surfaceZNode(boostedX.add(eps), boostedY, tileRing, tileOrient, tileCenter);
     const zy = this.surfaceZNode(boostedX, boostedY.add(eps), tileRing, tileOrient, tileCenter);
-    const localNormal = normalize(vec3(z0.sub(zx).div(eps), z0.sub(zy).div(eps), float(1)));
-    return transformNormalToView(localNormal);
+    // Procedural gradient (undulate/displace/relief-wave): analytic, so the moving
+    // fields stay smooth at ANY tessellation — this is the part 0523f57 fixed and we
+    // must NOT regress.
+    const gx = z0.sub(zx).div(eps);
+    const gy = z0.sub(zy).div(eps);
+    // Baked per-tile relief (positionLocal.z * reliefScale) is a per-vertex constant,
+    // so it cancels in the finite difference above and shades flat — the fill-subdiv
+    // regression. Add it back as a geometric FACE normal of the baked tent: this is
+    // what responds to fill subdivision (more facets -> the face normal varies more
+    // finely across the tent), giving back the "proper" relief shading. The xy/z
+    // ratio is invariant to the cross product's winding sign, so DoubleSide is fine.
+    // (Local/object space; exact in Euclidean, an approximation under Poincaré boost.)
+    const bakedPos = vec3(positionLocal.x, positionLocal.y, positionLocal.z.mul(this.uniforms.reliefScale));
+    const nBaked = normalize(cross(dFdx(bakedPos), dFdy(bakedPos)));
+    const bgx = clamp(nBaked.x.div(nBaked.z), float(-8), float(8));
+    const bgy = clamp(nBaked.y.div(nBaked.z), float(-8), float(8));
+    const localNormal = normalize(vec3(gx.add(bgx), gy.add(bgy), float(1)));
+    // DoubleSide two-sided normal. The geometry now has consistent CCW winding (see
+    // emitTriangle flip), so frontFacing reliably tells front from back: the front
+    // keeps the normal, the back flips it to face the viewer (so the back is lit,
+    // not black). Winding-based, so it's stable under tilt — unlike a view-direction
+    // (N·V) flip, which graze-flickers on the undulated surface.
+    const nView = transformNormalToView(localNormal);
+    return frontFacing.select(nView, nView.negate());
   }
 
   // The boosted (projected) surface coordinates plus the per-tile attributes the
@@ -898,6 +906,7 @@ export class WallpaperRenderer {
     const bg = oklchToLinearSrgb(palette.bg);
     this.renderer.setClearColor(new Color(bg[0], bg[1], bg[2]), 1);
     this.postBg = [bg[0], bg[1], bg[2]];
+    this.postBgUniform.value.set(bg[0], bg[1], bg[2]);
     this.setClockFromSettings(settings);
     this.render();
     if (this.mesh) this.requestWarmupFrames(4);
@@ -1376,11 +1385,10 @@ export class WallpaperRenderer {
     this.mesh?.geometry.dispose();
     this.edgeMesh?.geometry.dispose();
     this.postPipeline?.dispose();
-    for (const node of this.feedbackNodes.values()) node.dispose();
     if (this.postOutputNode) {
-      const keep = new Set<object>();
-      for (const feedback of this.feedbackNodes.values()) keep.add(feedback);
-      this.disposePostTree(this.postOutputNode, keep);
+      // Empty keep-set: free every RT-owning node in the output tree, including any
+      // stateful feedback (TrailsNode) — disposed generically like bloom/anamorphic.
+      this.disposePostTree(this.postOutputNode, new Set<object>());
     }
     this.scenePassNode?.dispose();
     this.renderer.domElement.remove();

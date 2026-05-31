@@ -114,6 +114,7 @@ export type NodeComponentProps<TData> = {
 export type FxNodeData = {
   activeInputs?: string[];
   activeOutputs?: string[];
+  domainWarning?: boolean;
   id: string;
   kind: string;
   bypass: boolean;

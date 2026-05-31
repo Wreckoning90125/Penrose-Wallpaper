@@ -18,34 +18,18 @@ import type { Connection, Edge, Node, OnBeforeDelete } from '@xyflow/react';
 import {
   Activity,
   AlignStartVertical,
-  Aperture,
-  Box,
-  CircleDot,
-  Coffee,
-  Contrast,
-  Droplet,
-  Film,
-  Grid2x2,
   Grid3x3,
-  History,
-  Layers,
   Link2,
   Lock,
   Maximize2,
-  PenLine,
   Plus,
-  Repeat,
   RotateCcw,
   Save,
-  Shuffle,
-  Sparkles,
-  Spline,
-  Sun,
   Unlink,
   Upload,
-  Zap,
 } from 'lucide-react';
-import { EFFECT_CATALOG, fxParamDefaults, fxSelectDefaults, isFxKind } from '../render/postFxCatalog';
+import { EFFECT_CATALOG, fxDescriptor, fxParamDefaults, fxSelectDefaults, isFxKind } from '../render/postFxCatalog';
+import { fxIconComponent } from './fxIcons';
 import { isSignalSource, isSignalTarget } from './signalUtils';
 import {
   evaluateSignals,
@@ -154,11 +138,6 @@ const ADD_CATEGORIES: AddCategorySpec[] = [
   { id: 'operators', label: 'Operators' },
   { id: 'effects', label: 'Effects' },
 ];
-
-const FX_ICONS: Record<string, typeof Box> = {
-  Grid2x2, Layers, Film, Shuffle, PenLine, History, Sparkles, Contrast, CircleDot,
-  Aperture, Coffee, Sun, Droplet, Zap, Spline, Repeat,
-};
 
 type DefaultGainOperator = {
   gainKey: GainKey;
@@ -349,6 +328,25 @@ function derivePostChain(nodes: readonly Node[], edges: readonly Edge[]): PostCh
     cursor = incomingFrame(node.id)?.source;
   }
   return [];
+}
+
+// Non-blocking domain check: a `linear`-domain effect (bloom, blur, anamorphic…)
+// expects scene-referred/HDR input, so placing it *downstream* of the tone-map
+// node — where the signal is already display-referred — is usually a mistake. We
+// flag those nodes so the UI can show a caution marker. Purely advisory; it never
+// blocks or rewires. Derived from the same frame-chain walk + each kind's domain.
+function domainMismatchedFxIds(nodes: readonly Node[], edges: readonly Edge[]): Set<string> {
+  const warned = new Set<string>();
+  const chain = derivePostChain(nodes, edges);
+  let pastToneMap = false;
+  for (const node of chain) {
+    // Only an *active* tone-map establishes the display-referred boundary; a
+    // bypassed one is skipped by the renderer, so the signal is still linear and a
+    // downstream linear effect is fine (no false-positive warning).
+    if (node.kind === 'toneMap') { pastToneMap = pastToneMap || !node.bypass; continue; }
+    if (pastToneMap && fxDescriptor(node.kind)?.domain === 'linear') warned.add(node.id);
+  }
+  return warned;
 }
 
 function liveOperatorDataFromNode(node: Node): LiveOperatorData | null {
@@ -1185,25 +1183,44 @@ export function ControlGraph(props: ControlGraphProps) {
     }));
   }, [props.audio, setNodes]);
 
+  // The domain warning depends on each FX node's kind + bypass (a bypassed
+  // tone-map removes the boundary), which are node data, not edges. This cheap
+  // content signature lets the sync effect re-run when a bypass toggles without
+  // re-running on every position drag (which a raw `nodes` dep would cause).
+  const fxBypassSignature = useMemo(
+    () => nodes.filter(node => node.type === 'fx').map(node => `${node.id}:${dataBoolean(node.data, 'bypass') ? 1 : 0}`).join(','),
+    [nodes],
+  );
+
   useEffect(() => {
-    setNodes(current => current.map(node => {
-      const activeInputs = activeHandles(edges, node.id, 'target');
-      const activeOutputs = activeHandles(edges, node.id, 'source');
-      const previousInputs = Array.isArray(node.data['activeInputs']) ? node.data['activeInputs'].map(String) : [];
-      const previousOutputs = Array.isArray(node.data['activeOutputs']) ? node.data['activeOutputs'].map(String) : [];
-      if (sameStringList(previousInputs, activeInputs) && sameStringList(previousOutputs, activeOutputs)) {
-        return node;
-      }
-      return {
-        ...node,
-        data: {
-          ...node.data,
-          activeInputs,
-          activeOutputs,
-        },
-      };
-    }));
-  }, [edges, setNodes]);
+    setNodes(current => {
+      const warned = domainMismatchedFxIds(current, edges);
+      return current.map(node => {
+        const activeInputs = activeHandles(edges, node.id, 'target');
+        const activeOutputs = activeHandles(edges, node.id, 'source');
+        const domainWarning = node.type === 'fx' && warned.has(node.id);
+        const previousInputs = Array.isArray(node.data['activeInputs']) ? node.data['activeInputs'].map(String) : [];
+        const previousOutputs = Array.isArray(node.data['activeOutputs']) ? node.data['activeOutputs'].map(String) : [];
+        const previousWarning = node.data['domainWarning'] === true;
+        if (
+          sameStringList(previousInputs, activeInputs)
+          && sameStringList(previousOutputs, activeOutputs)
+          && previousWarning === domainWarning
+        ) {
+          return node;
+        }
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            activeInputs,
+            activeOutputs,
+            domainWarning,
+          },
+        };
+      });
+    });
+  }, [edges, fxBypassSignature, setNodes]);
 
   useEffect(() => {
     emitAudioGraph();
@@ -1234,9 +1251,14 @@ export function ControlGraph(props: ControlGraphProps) {
 
   const onBeforeDelete = useCallback<OnBeforeDelete<Node, Edge>>(async ({ nodes: deletingNodes, edges: deletingEdges }) => {
     const deletableNodeIds = new Set(deletingNodes.filter(node => !PROTECTED_NODE_IDS.has(node.id)).map(node => node.id));
+    const allNodes = nodesRef.current;
+    const nodeOf = (nid: string | null): Node | null => (nid ? allNodes.find(node => node.id === nid) ?? null : null);
     setEdges(current => {
       let next = current;
       for (const id of deletableNodeIds) {
+        // Type-aware heal (§0 revised). Frame chain: bridge a deleted FX/tone-map
+        // node's frame-in.source → frame-out.target so removing an effect splices
+        // its neighbours instead of black-screening the render.
         const inEdge = next.find(edge => edge.target === id && edge.targetHandle === 'frame');
         const outEdge = next.find(edge => edge.source === id && edge.sourceHandle === 'frame');
         if (inEdge && outEdge) {
@@ -1246,8 +1268,40 @@ export function ControlGraph(props: ControlGraphProps) {
             source: inEdge.source, sourceHandle: inEdge.sourceHandle ?? null,
             target: outEdge.target, targetHandle: outEdge.targetHandle ?? null, animated: true,
           }];
+          continue;
         }
+        // Operator signal chain: bridge a deleted operator's single signal-in →
+        // single signal-out, but never collapse into a raw feature → target-uniform
+        // mainline (that must be a deliberate rewire). Multi-input operators with
+        // more than one wired inlet are ambiguous and drop without bridging.
+        const deletedNode = nodeOf(id);
+        if (deletedNode?.type !== 'operator') continue;
+        const signalIn = next.filter(edge => edge.target === id && isSignalTarget(deletedNode, edge.targetHandle ?? null));
+        const signalOut = next.filter(edge => edge.source === id && isSignalSource(deletedNode, edge.sourceHandle ?? null));
+        if (signalIn.length !== 1 || signalOut.length !== 1) continue;
+        const fromEdge = signalIn[0]!;
+        const toEdge = signalOut[0]!;
+        const bridge = {
+          source: fromEdge.source, sourceHandle: fromEdge.sourceHandle ?? null,
+          target: toEdge.target, targetHandle: toEdge.targetHandle ?? null,
+        };
+        const sourceNode = nodeOf(bridge.source);
+        const targetNode = nodeOf(bridge.target);
+        const featureMainline = sourceNode?.id === 'analysis' && targetNode?.type !== 'operator';
+        if (featureMainline || !isValidGraphConnection(bridge, allNodes)) continue;
+        next = next.filter(edge => edge !== fromEdge && edge !== toEdge);
+        next = [...next, {
+          id: `${bridge.source}-${bridge.target}-${bridge.targetHandle ?? 'signal'}`,
+          source: bridge.source, sourceHandle: bridge.sourceHandle,
+          target: bridge.target, targetHandle: bridge.targetHandle, animated: true,
+        }];
       }
+      // Safety net: drop any edge still touching a deleted node. Bridges we keep
+      // connect two *surviving* nodes, so this only removes the deleted nodes' own
+      // edges and any intermediate bridge stranded by a multi-node delete (e.g.
+      // deleting two adjacent operators whose collapse hit the mainline guard) —
+      // never a dangling edge into a node that no longer exists.
+      next = next.filter(edge => !deletableNodeIds.has(edge.source) && !deletableNodeIds.has(edge.target));
       return next;
     });
     return {
@@ -1628,9 +1682,9 @@ export function ControlGraph(props: ControlGraphProps) {
         <div className="add-node-menu nodrag nopan">
           <button type="button" className="back-button" onClick={resetAddMenuCategory}>Back</button>
           {EFFECT_CATALOG.filter(d => d.kind !== 'toneMap').map(d => {
-            const Icon = FX_ICONS[d.icon] ?? Box;
+            const Icon = fxIconComponent(d.icon);
             return (
-              <button key={d.kind} type="button" className="add-effect-button" title={d.label} aria-label={d.label} onClick={() => addFxNode(d.kind)}>
+              <button key={d.kind} type="button" className="add-effect-button" data-tip={d.label} aria-label={d.label} onClick={() => addFxNode(d.kind)}>
                 <Icon size={16} />
               </button>
             );
@@ -1808,7 +1862,7 @@ export function ControlGraph(props: ControlGraphProps) {
           setNodes={setNodes}
         />
         <Panel ref={flowToolbarRef} position="top-left" className="flow-panel nodrag nopan">
-          <button type="button" onClick={resetLayout} title="Reset graph" aria-label="Reset graph">
+          <button type="button" onClick={resetLayout} data-tip="Reset graph" aria-label="Reset graph">
             <RotateCcw size={14} />
           </button>
           <FlowFitButton metrics={flowFitMetrics} />
@@ -1816,12 +1870,12 @@ export function ControlGraph(props: ControlGraphProps) {
             type="button"
             className={snapEnabled ? 'active' : ''}
             onClick={() => setSnapEnabled(value => !value)}
-            title={`Snap ${snapEnabled ? 'on' : 'off'}`}
+            data-tip={`Snap ${snapEnabled ? 'on' : 'off'}`}
             aria-label={`Snap ${snapEnabled ? 'on' : 'off'}`}
           >
             <Grid3x3 size={14} />
           </button>
-          <button type="button" onClick={snapCurrentLayout} title="Snap now" aria-label="Snap now">
+          <button type="button" onClick={snapCurrentLayout} data-tip="Snap now" aria-label="Snap now">
             <AlignStartVertical size={14} />
           </button>
           <div className="drag-mode-toggle" role="group" aria-label="Slider drag behavior">
@@ -1829,7 +1883,7 @@ export function ControlGraph(props: ControlGraphProps) {
               type="button"
               className={props.dragMode === 'ride' ? 'active' : ''}
               onClick={() => props.onDragMode('ride')}
-              title="Ride"
+              data-tip="Ride — slider rides live audio while you drag"
               aria-label="Ride"
             >
               <Activity size={14} />
@@ -1838,19 +1892,19 @@ export function ControlGraph(props: ControlGraphProps) {
               type="button"
               className={props.dragMode === 'hold' ? 'active' : ''}
               onClick={() => props.onDragMode('hold')}
-              title="Hold"
+              data-tip="Hold — freeze the param from audio while you tune it"
               aria-label="Hold"
             >
               <Lock size={14} />
             </button>
           </div>
-          <button type="button" onClick={saveGraphPreset} title="Save graph" aria-label="Save graph">
+          <button type="button" onClick={saveGraphPreset} data-tip="Save graph" aria-label="Save graph">
             <Save size={14} />
           </button>
           <button
             type="button"
             onClick={() => graphPresetInputRef.current?.click()}
-            title="Load graph"
+            data-tip="Load graph"
             aria-label="Load graph"
           >
             <Upload size={14} />
@@ -1862,7 +1916,7 @@ export function ControlGraph(props: ControlGraphProps) {
             accept="application/json,.json"
             onChange={loadGraphPresetFile}
           />
-          <button type="button" onClick={restoreLinks} title="Restore links" aria-label="Restore links">
+          <button type="button" onClick={restoreLinks} data-tip="Restore links" aria-label="Restore links">
             <Link2 size={14} />
           </button>
           <button
@@ -1870,7 +1924,7 @@ export function ControlGraph(props: ControlGraphProps) {
             className={hasSelectedEdges ? 'link-delete-ready' : ''}
             aria-disabled={!hasSelectedEdges}
             onClick={deleteSelectedLinks}
-            title="Delete link"
+            data-tip="Delete link"
             aria-label="Delete link"
           >
             <Unlink size={14} />
@@ -1879,7 +1933,7 @@ export function ControlGraph(props: ControlGraphProps) {
             type="button"
             className={isAddMenuOpen ? 'active' : ''}
             onClick={toggleAddMenu}
-            title="Add"
+            data-tip="Add"
             aria-label="Add"
           >
             <Plus size={14} />
@@ -1961,7 +2015,7 @@ function FlowFitButton({ metrics }: { metrics: FlowFitMetrics }) {
   const fit = useCallback(() => {
     void applyAlignedFlowFit(flow, flow.getNodes(), metrics, 180);
   }, [flow, metrics]);
-  return <button type="button" onClick={fit} title="Fit" aria-label="Fit"><Maximize2 size={14} /></button>;
+  return <button type="button" onClick={fit} data-tip="Fit" aria-label="Fit"><Maximize2 size={14} /></button>;
 }
 
 function FlowControls({ metrics }: { metrics: FlowFitMetrics }) {

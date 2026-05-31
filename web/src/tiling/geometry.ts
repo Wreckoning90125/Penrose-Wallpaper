@@ -2,6 +2,7 @@ import { BufferAttribute, BufferGeometry } from 'three/webgpu';
 import { intSetting, numberSetting, type Settings } from '../settings/androidSettings';
 import { buildPalette, oklchToLinearSrgb, type Oklch } from '../color/palette';
 import type { AtlasItem, GeometryBuild, Patch, Point, Point3, Tile } from '../types';
+import { buildTileRing, type TileBorder } from './borderJoin';
 
 type FamilySpec = {
   typeBuckets: number;
@@ -143,15 +144,25 @@ function parsePatch(buffer: ArrayBuffer): Patch {
 export function buildMeshGeometry(patch: Patch, settings: Settings, customColors: Oklch[] | null = null): GeometryBuild {
   const colorMode = intSetting(settings, 'color_mode', 0, 2);
   const colorCount = intSetting(settings, 'color_count', 2, 16);
+  // color_spread decouples the palette's gradient resolution from the tile
+  // quantization: tiles always quantize into color_count buckets, but the colours
+  // applied to those buckets come from a gradient of `appliedStops` stops. 0 =
+  // "follow Slots" (appliedStops === colorCount), which is the historical look.
+  const colorSpread = intSetting(settings, 'color_spread', 0, 16);
+  const appliedStops = colorSpread > 0 ? colorSpread : colorCount;
   const preset = intSetting(settings, 'preset', 0, 11);
-  const palette = buildPalette(preset, colorCount, customColors);
+  const palette = buildPalette(preset, appliedStops, customColors);
   const classes = classify(patch.tiles, patch.family, colorMode, colorCount);
   const relief = averageTileRadius(patch.tiles) * 0.34;
   const maxType = Math.max(1, familySpec(patch.family).typeBuckets - 1);
   const rings = tileRings(patch.tiles, familySpec(patch.family));
   const projector = createProjector(settings);
   const snap = createVertexSnapper(projector.enabled ? 1e-5 : 1e-7);
-  const fillSub = projector.enabled ? intSetting(settings, 'hyp_fill_subdiv', 1, 8) : 1;
+  // Subdivision applies in BOTH projections. It was originally gated to Poincaré
+  // (only the curved projection needed it), but the per-vertex surface displacement
+  // (undulate/relief/field) needs the extra vertices to bend smoothly in Euclidean
+  // too — gating it there left flat-mode undulation coarse no matter the setting.
+  const fillSub = intSetting(settings, 'hyp_fill_subdiv', 1, 8);
 
   let triCount = 0;
   for (const tile of patch.tiles) triCount += tile.verts.length * fillSub * fillSub;
@@ -176,6 +187,10 @@ export function buildMeshGeometry(patch: Patch, settings: Settings, customColors
     const paletteIndex = bucketToPaletteIdx(classes.bucket[tileIndex] ?? 0, classes.numBuckets, colorCount);
     const rgb = clampRgb(oklchToLinearSrgb(palette.colors[paletteIndex] ?? palette.colors[0]!));
     const centerZ = relief * (0.65 + ringValue * 0.35 + typeValue * 0.18);
+    // Normalize this tile's fan winding to CCW. Tiles come in both orientations,
+    // so without this the mesh has mixed winding and faceDirection can't tell front
+    // from back. DoubleSide means reversing the order is visually a no-op.
+    const flip = signedArea(tile.verts) < 0;
     for (let i = 0; i < tile.verts.length; i++) {
       const a = tile.verts[i]!;
       const b = tile.verts[(i + 1) % tile.verts.length]!;
@@ -194,6 +209,7 @@ export function buildMeshGeometry(patch: Patch, settings: Settings, customColors
         orient,
         projectedCenter,
         paletteIndex,
+        flip,
       );
     }
   }
@@ -226,6 +242,17 @@ function clampRgb(rgb: Point3): Point3 {
   ];
 }
 
+// Signed area of a polygon (shoelace). Positive = CCW vertex order.
+function signedArea(verts: Point[]): number {
+  let area = 0;
+  for (let i = 0; i < verts.length; i++) {
+    const a = verts[i]!;
+    const b = verts[(i + 1) % verts.length]!;
+    area += a[0] * b[1] - b[0] * a[1];
+  }
+  return area * 0.5;
+}
+
 function emitTriangle(
   cursor: number,
   buffers: MeshBuffers,
@@ -241,11 +268,27 @@ function emitTriangle(
   orient: Point,
   center: Point,
   paletteIndex: number,
+  // When true, every emitted triangle's winding is reversed (2nd/3rd vertex
+  // swapped) WITHOUT changing any per-vertex data (position, edge distance). This
+  // normalizes CW tiles to CCW so the whole mesh has consistent winding — required
+  // for faceDirection to reliably tell front from back (the DoubleSide normal flip).
+  flip: boolean,
 ): number {
+  const emitTri = (
+    p0: Point3, w0: number, p1: Point3, w1: number, p2: Point3, w2: number,
+  ): void => {
+    if (flip) {
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p0, rgb, typeValue, ringValue, orient, center, paletteIndex, w0);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p2, rgb, typeValue, ringValue, orient, center, paletteIndex, w2);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p1, rgb, typeValue, ringValue, orient, center, paletteIndex, w1);
+    } else {
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p0, rgb, typeValue, ringValue, orient, center, paletteIndex, w0);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p1, rgb, typeValue, ringValue, orient, center, paletteIndex, w1);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p2, rgb, typeValue, ringValue, orient, center, paletteIndex, w2);
+    }
+  };
   if (fillSub <= 1) {
-    cursor = emitProjectedVertex(cursor, buffers, projector, snap, a, rgb, typeValue, ringValue, orient, center, paletteIndex, 1);
-    cursor = emitProjectedVertex(cursor, buffers, projector, snap, b, rgb, typeValue, ringValue, orient, center, paletteIndex, 0);
-    cursor = emitProjectedVertex(cursor, buffers, projector, snap, c, rgb, typeValue, ringValue, orient, center, paletteIndex, 0);
+    emitTri(a, 1, b, 0, c, 0);
     return cursor;
   }
   const invN = 1 / fillSub;
@@ -262,13 +305,9 @@ function emitTriangle(
   };
   for (let i = 0; i < fillSub; i++) {
     for (let j = 0; j < fillSub - i; j++) {
-      cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i, j), rgb, typeValue, ringValue, orient, center, paletteIndex, i / fillSub);
-      cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i + 1, j), rgb, typeValue, ringValue, orient, center, paletteIndex, (i + 1) / fillSub);
-      cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i, j + 1), rgb, typeValue, ringValue, orient, center, paletteIndex, i / fillSub);
+      emitTri(point(i, j), i / fillSub, point(i + 1, j), (i + 1) / fillSub, point(i, j + 1), i / fillSub);
       if (j < fillSub - i - 1) {
-        cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i + 1, j), rgb, typeValue, ringValue, orient, center, paletteIndex, (i + 1) / fillSub);
-        cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i + 1, j + 1), rgb, typeValue, ringValue, orient, center, paletteIndex, (i + 1) / fillSub);
-        cursor = emitProjectedVertex(cursor, buffers, projector, snap, point(i, j + 1), rgb, typeValue, ringValue, orient, center, paletteIndex, i / fillSub);
+        emitTri(point(i + 1, j), (i + 1) / fillSub, point(i + 1, j + 1), (i + 1) / fillSub, point(i, j + 1), i / fillSub);
       }
     }
   }
@@ -366,10 +405,14 @@ function buildEdgeGeometry(
   const width = radius * intSetting(settings, 'border_width', 0, 600) / 600 * 0.16;
   if (!borderOn || borderAlpha <= 0 || width <= 1e-7) return null;
 
-  // border_join: 0 miter (clamped to bevel past the limit) · 1 round · 2 bevel.
+  // border_join: 0 miter · 1 round · 2 bevel. border_fill (0..1) pulls each corner
+  // from the sharp miter toward the centroid so border segments meet more fully.
   const joinStyle = intSetting(settings, 'border_join', 0, 2);
-  const edges = collectVisibleEdges(patch, projector, snap);
-  const sub = projector.enabled ? intSetting(settings, 'hyp_border_subdiv', 1, 32) : 1;
+  const borderFill = intSetting(settings, 'border_fill', 0, 100) / 100;
+  const borderPoint = intSetting(settings, 'border_point', 0, 100) / 100;
+  // Which tile edges carry a visible border (shared same-type edges are hidden).
+  const visibleKeys = new Set(collectVisibleEdges(patch, projector, snap).map((e) => edgeKey(e.a, e.b)));
+  const sub = intSetting(settings, 'hyp_border_subdiv', 1, 32);
   const halfWidth = width * 0.5;
   const edgeZ = relief * BORDER_RELIEF_LIFT + radius * BORDER_SURFACE_BIAS;
   const positions: number[] = [];
@@ -386,52 +429,35 @@ function buildEdgeGeometry(
     }
   };
 
-  // Joinery: each tile-edge endpoint accumulates the incident edge directions so
-  // the vertices where borders meet can be filled (miter/round/bevel) instead of
-  // overlapping square-capped rectangles.
-  type Incident = { dir: Point; ring: number; orient: Point; center: Point };
-  const joints = new Map<string, { x: number; y: number; incident: Incident[] }>();
-  const addIncident = (p: Point, dir: Point, ring: number, orient: Point, center: Point): void => {
-    const key = `${Math.round(p[0] * 2048)}:${Math.round(p[1] * 2048)}`;
-    const joint = joints.get(key) ?? { x: p[0], y: p[1], incident: [] };
-    joint.incident.push({ dir, ring, orient, center });
-    joints.set(key, joint);
-  };
-
-  for (const edge of edges) {
-    const pts: Point[] = [];
-    for (let i = 0; i <= sub; i++) {
-      const p = lerp2(edge.a, edge.b, i / sub);
-      pts.push(snap(projector.map(p[0], p[1])));
+  // Per-tile inset ring: each tile strokes its own border inside itself, so borders
+  // can't overlap (disjoint tiles) or gap (tiles share edges exactly), and each
+  // vertex join is just the tile's own convex corner. (borderJoin.ts owns the
+  // geometry + its headless single-coverage proof, tools/verify_border_joins.mts.)
+  const spec = familySpec(patch.family);
+  const rings = tileRings(patch.tiles, spec);
+  for (let tileIndex = 0; tileIndex < patch.tiles.length; tileIndex++) {
+    const tile = patch.tiles[tileIndex]!;
+    const cen = centroid(tile.verts);
+    const projCentroid = snap(projector.map(cen[0], cen[1]));
+    const tileEdges = [];
+    for (let i = 0; i < tile.verts.length; i++) {
+      const a = tile.verts[i]!;
+      const b = tile.verts[(i + 1) % tile.verts.length]!;
+      const pts: Point[] = [];
+      for (let k = 0; k <= sub; k++) {
+        const p = lerp2(a, b, k / sub);
+        pts.push(snap(projector.map(p[0], p[1])));
+      }
+      tileEdges.push({ pts, visible: visibleKeys.has(edgeKey(a, b)) });
     }
-    // The ribbon: one quad per projected segment, offset by its own normal, with
-    // no end-cap extension — the joints fill the gaps at the tile vertices.
-    for (let i = 0; i < sub; i++) {
-      const p1 = pts[i]!;
-      const p2 = pts[i + 1]!;
-      const dx = p2[0] - p1[0];
-      const dy = p2[1] - p1[1];
-      const len = Math.hypot(dx, dy);
-      if (len <= 1e-8) continue;
-      const nx = -dy / len * halfWidth;
-      const ny = dx / len * halfWidth;
-      const a: Point = [p1[0] + nx, p1[1] + ny];
-      const b: Point = [p1[0] - nx, p1[1] - ny];
-      const c: Point = [p2[0] + nx, p2[1] + ny];
-      const d: Point = [p2[0] - nx, p2[1] - ny];
-      pushTri(a, b, c, edge.ring, edge.orient, edge.center);
-      pushTri(b, d, c, edge.ring, edge.orient, edge.center);
-    }
-    const start = pts[0]!;
-    const afterStart = pts[1] ?? pts[0]!;
-    addIncident(start, unit2(afterStart[0] - start[0], afterStart[1] - start[1]), edge.ring, edge.orient, edge.center);
-    const end = pts[sub]!;
-    const beforeEnd = pts[sub - 1] ?? pts[sub]!;
-    addIncident(end, unit2(beforeEnd[0] - end[0], beforeEnd[1] - end[1]), edge.ring, edge.orient, edge.center);
-  }
-
-  for (const joint of joints.values()) {
-    fillBorderJoint(joint, joinStyle, halfWidth, pushTri);
+    const border: TileBorder = {
+      edges: tileEdges,
+      centroid: projCentroid,
+      ring: rings[tileIndex] ?? 0,
+      orient: orientation(tile, patch.family),
+      center: projCentroid,
+    };
+    buildTileRing(border, halfWidth, joinStyle, borderFill, borderPoint, pushTri);
   }
 
   if (positions.length === 0) return null;
@@ -444,75 +470,6 @@ function buildEdgeGeometry(
   geometry.setAttribute('tileCenter', new BufferAttribute(new Float32Array(tileCenter), 2));
   geometry.computeBoundingSphere();
   return geometry;
-}
-
-function unit2(x: number, y: number): Point {
-  const len = Math.hypot(x, y);
-  return len <= 1e-9 ? [1, 0] : [x / len, y / len];
-}
-
-function lineIntersect(p: Point, d: Point, q: Point, e: Point): Point | null {
-  const denom = d[0] * e[1] - d[1] * e[0];
-  if (Math.abs(denom) < 1e-9) return null;
-  const s = ((q[0] - p[0]) * e[1] - (q[1] - p[1]) * e[0]) / denom;
-  return [p[0] + s * d[0], p[1] + s * d[1]];
-}
-
-const BORDER_MITER_LIMIT = 4;
-
-// Fill the joint where border ribbons meet at a tile vertex, per join style:
-// round = a disc fan, bevel = a flat chamfer per wedge, miter = extend the two
-// offset edges to their intersection (clamped to a bevel past the miter limit or
-// when the apex would fall inward).
-function fillBorderJoint(
-  joint: { x: number; y: number; incident: { dir: Point; ring: number; orient: Point; center: Point }[] },
-  joinStyle: number,
-  halfWidth: number,
-  pushTri: (p0: Point, p1: Point, p2: Point, ring: number, orient: Point, center: Point) => void,
-): void {
-  const lead = joint.incident[0];
-  if (!lead) return;
-  const center: Point = [joint.x, joint.y];
-
-  if (joinStyle === 1) {
-    const segs = 10;
-    for (let i = 0; i < segs; i++) {
-      const t0 = (i / segs) * Math.PI * 2;
-      const t1 = ((i + 1) / segs) * Math.PI * 2;
-      pushTri(
-        center,
-        [joint.x + Math.cos(t0) * halfWidth, joint.y + Math.sin(t0) * halfWidth],
-        [joint.x + Math.cos(t1) * halfWidth, joint.y + Math.sin(t1) * halfWidth],
-        lead.ring, lead.orient, lead.center,
-      );
-    }
-    return;
-  }
-
-  const sorted = [...joint.incident].sort((p, q) => Math.atan2(p.dir[1], p.dir[0]) - Math.atan2(q.dir[1], q.dir[0]));
-  const n = sorted.length;
-  for (let i = 0; i < n; i++) {
-    const e0 = sorted[i]!;
-    const e1 = sorted[(i + 1) % n]!;
-    const c0: Point = [joint.x - e0.dir[1] * halfWidth, joint.y + e0.dir[0] * halfWidth];
-    const c1: Point = [joint.x + e1.dir[1] * halfWidth, joint.y - e1.dir[0] * halfWidth];
-    if (joinStyle === 0) {
-      const apex = lineIntersect(c0, e0.dir, c1, e1.dir);
-      if (apex) {
-        const ex = c1[0] - c0[0];
-        const ey = c1[1] - c0[1];
-        const sideCenter = ex * (joint.y - c0[1]) - ey * (joint.x - c0[0]);
-        const sideApex = ex * (apex[1] - c0[1]) - ey * (apex[0] - c0[0]);
-        const miterLen = Math.hypot(apex[0] - joint.x, apex[1] - joint.y);
-        if (sideCenter * sideApex < 0 && miterLen <= halfWidth * BORDER_MITER_LIMIT) {
-          pushTri(center, c0, apex, e0.ring, e0.orient, e0.center);
-          pushTri(center, apex, c1, e0.ring, e0.orient, e0.center);
-          continue;
-        }
-      }
-    }
-    pushTri(center, c0, c1, e0.ring, e0.orient, e0.center);
-  }
 }
 
 function buildUv(position: Float32Array): Float32Array {

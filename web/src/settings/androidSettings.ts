@@ -6,6 +6,7 @@ export type Settings = {
   preset: SettingValue;
   color_mode: SettingValue;
   color_count: SettingValue;
+  color_spread: SettingValue;
   border_on: SettingValue;
   border_join: SettingValue;
   border_width: SettingValue;
@@ -13,6 +14,8 @@ export type Settings = {
   border_c: SettingValue;
   border_h: SettingValue;
   border_a: SettingValue;
+  border_fill: SettingValue;
+  border_point: SettingValue;
   edge_profile_width: SettingValue;
   edge_profile_glow: SettingValue;
   edge_profile_l: SettingValue;
@@ -75,6 +78,7 @@ export const DEFAULT_SETTINGS: Settings = {
   preset: '4',
   color_mode: '0',
   color_count: 8,
+  color_spread: 0,
   border_on: true,
   border_join: '0',
   border_width: 65,
@@ -82,6 +86,8 @@ export const DEFAULT_SETTINGS: Settings = {
   border_c: 0,
   border_h: 0,
   border_a: 42,
+  border_fill: 0,
+  border_point: 0,
   edge_profile_width: 0,
   edge_profile_glow: 0,
   edge_profile_l: 100,
@@ -98,7 +104,7 @@ export const DEFAULT_SETTINGS: Settings = {
   field_undulate_freq: 25,
   field_speed: 40,
   brightness: 100,
-  field_displace: 42,
+  field_displace: 0,
   clock_enabled: '1',
   clock_rate: 100,
   mat_roughness: 38,

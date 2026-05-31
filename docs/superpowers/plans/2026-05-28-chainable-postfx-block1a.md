@@ -27,7 +27,10 @@
 
 **Compensations to delete — they exist only because the graph isn't authoritative:**
 
-- **delete-heal** (Task 6 reconnects prev→next on delete) — *erases* the consequence of a deletion. Remove it; let the chain walk produce a shorter/broken chain.
+- **delete-heal** (Task 6 reconnects prev→next on delete). **Revised 2026-05-30 (maintainer):** the blanket "remove it" was wrong for a *typed* patch-bay. A wire is bridgeable only when the inlet/outlet types it joins are identical and the bridge has an unambiguous meaning. Keep a **type-aware** heal:
+  - **Frame chain (FX / tone-map / MultiSwitch):** *do* bridge `frame`-in.source → `frame`-out.target on node delete. Deleting an effect should drop that effect and splice its neighbours, **not** black-screen the render. The §0 wire-cut test is unaffected — cutting an actual *edge* still has full consequence; only deleting a *node* bridges, and only along the well-defined `frame↔frame` path. (Already implemented in `onBeforeDelete`.)
+  - **Signal chain (operators):** *may* bridge a deleted operator's single `signal`-in.source → single `signal`-out.target, **but never collapse into a raw `feature → target-uniform` mainline.** Healing operator→operator (or operator↔target, feature→operator) is fine; healing such that an `analysis` audio feature ends up wired straight to a parameter uniform is **not** — that "mainlining" must be a deliberate rewire. Only the unambiguous single-in/single-out operator case heals; multi-input operators (`mix`/`multiply`/`add`/`math`/`sh` with >1 wired input) drop without bridging.
+  - **All other modulation edges drop.** A deleted node's parameter-modulation inlets carry no meaning to any other node, so they are never reconnected.
 - **force-restore** in `applyGraphPreset` (re-pushed "required" edges, overwriting user deletions). Removed — keep removed.
 - **parallel `features × gains`** path in `setAudioDrive` (audio reactivity independent of edges). Removed — keep removed.
 - **props-bypass** — the renderer reading `renderSettings`/`renderPalette`/`patch` instead of graph-derived inputs. This is the deepest one and the real fix: **the renderer's inputs must be derived from graph topology on every change**, the way morphology does it.
@@ -54,7 +57,7 @@
 | `web/src/render/webgpuRenderer.ts` | Add `setPostChain(spec)`, signature recompile, per-frame uniform write, default tone-map; strip the fixed FX from `rebuildPostPipeline`.                                 | Modify        |
 | `web/src/types.ts`                 | `PostChainSpec` / `PostChainNode` types.                                                                                                                                 | Modify        |
 | `web/src/App.tsx`                  | `onPostChain` callback → `renderer.setPostChain`; apply-on-ready ref.                                                                                                    | Modify        |
-| `web/src/flow/ControlGraph.tsx`    | Generic catalog-driven FX node; spec derivation via frame-edge walk; add/reorder/delete (no heal — §0); node-scoped FX modulation; tone-map node; remove monolithic `postprocess`. | Modify        |
+| `web/src/flow/ControlGraph.tsx`    | Generic catalog-driven FX node; spec derivation via frame-edge walk; add/reorder/delete (type-aware heal — §0 revised: frame chain + operator signal chain bridge, no feature→target mainline); node-scoped FX modulation; tone-map node; remove monolithic `postprocess`. | Modify        |
 | `web/src/style.css`                | Minimal styling for the generic FX node (reuses existing node classes).                                                                                                  | Modify        |
 
 ---
@@ -817,7 +820,13 @@ const addFxNode = useCallback(
 );
 ```
 
-**No delete-heal (§0).** Do **not** reconnect a deleted node's upstream to its downstream — auto-healing erases the consequence of the deletion and is exactly the fake-patchbay behavior this plan removes. Deletion simply removes the node and its edges; the chain re-derives from the remaining edges (`derivePostChain`/`renderChainConnected`). If deleting a mid-chain node breaks the path from the scene pass to the sink, that is the **correct** result — the frame path is broken, so the render reflects it (effects drop, and if nothing reaches the sink, the shape goes), and the user re-wires to restore. Removing an effect cleanly means the user deliberately reconnects its neighbours, not an automatic heal that hides what happened. So `onBeforeDelete` only filters the deleted nodes/edges and adds nothing back. (This mirrors morphology's `walkPostFxChain`: a deleted node just isn't traversed.)
+**Type-aware delete-heal (§0, revised 2026-05-30).** The original mandate here was "no heal at all." The maintainer revised it: a *typed* patch-bay should bridge a deleted node **when the join is type-identical and unambiguous**, because removing one effect from a chain should drop that effect — not black-screen the whole render. The §0 principle still holds: cutting an *edge* keeps full consequence (the chain re-derives from the remaining edges via `derivePostChain`/`renderChainConnected`); only *node deletion* bridges, and only along well-defined same-type paths. Concretely, `onBeforeDelete`:
+
+  - **Frame chain:** if the deleted node has both a `frame`-in edge and a `frame`-out edge, bridge `in.source → out.target` on `frame`. (Already implemented — keep.)
+  - **Operator signal chain:** if the deleted node is an `operator` with **exactly one** incoming signal edge and **exactly one** outgoing signal edge, bridge `in.source → out.target`, **unless** that bridge would wire an `analysis` audio feature straight to a parameter-uniform target (the "feature → target uniform" mainline) — in that case drop without bridging. Multi-input operators with >1 wired input also drop (ambiguous which inlet to bridge). Validate the candidate bridge with the same `isValidGraphConnection`/`isSignalSource`+`isSignalTarget` predicate before adding it.
+  - **Everything else (parameter modulation edges) drops** — a deleted node's modulation inlets mean nothing to any other node.
+
+  (Frame bridging mirrors morphology's `walkPostFxChain` collapse; operator bridging is the new typed extension.)
 
 - [ ] **Step 6: Frame-edge validity for FX chaining**
 
@@ -1825,3 +1834,101 @@ Same spec channel as Block 1, and the same §0 rule: the render is downstream of
 Same §0 rule.
 
 - Continuous Euclid ↔ Poincaré disk ↔ ball as live shader sliders (projection math moved into the vertex shader so it modulates without a rebuild), closed-form conformal/holomorphic warps (not the solver-based papers), quasicrystal cut-and-project field, optional Hopf fibration / cone-foci. GIF/phase clock rides on this block's live clock as a real signal, not a decorative node.
+
+---
+
+## Phase E — remaining scoped work (audited 2026-05-30; code complete, E1 acceptance verified, only E2 *visual* pending)
+
+Audit of this plan against the live code found §0 + Tasks 1–16 implemented and the gates green, with the items below. **All five (E1–E5) are implemented and pass the full `quality:local` gate.** Over the loop, four real defects were additionally found and fixed via adversarial review (E1 dangling-edge prune, E2 custom-seed jump, E4 bypass false-positive, E5 toolbar tooltips). **E1's acceptance is objectively verified via headless browser automation** (bundled chromium + swiftshader WebGPU — the app boots and the graph is fully interactive even though pixels are black): all three graph-state criteria pass against the live edge set. **E2 is verified to the data level** the same way — structure (controls/inlet present), runtime (live re-quantize + recolor drive with zero console errors), and the live mesh **colour buffer** (`Slots=N` ⇒ N distinct colours; `spread=count`≡`spread=0`; `spread≠count` changes colours; restoration works). The *only* thing left across all of Phase E is whether the E2 Slots/Spread result is **aesthetically right to a human** — irreducibly the maintainer's judgement, not a verifiable fact. **Nothing in Phase E is committed**; commit awaits the maintainer's aesthetic nod on the E2 visuals.
+
+### E1 — Type-aware delete-heal (maintainer-revised §0). **In progress (2026-05-30).**
+
+See the revised §0 "Compensations" bullet and Task 6 "Type-aware delete-heal." Keep the existing `frame↔frame` bridge in `onBeforeDelete`; **add** the operator signal-chain bridge with the no-`feature→target-uniform`-mainline guard. Files: `web/src/flow/ControlGraph.tsx` (`onBeforeDelete`), reusing `isSignalSource`/`isSignalTarget`/`isValidGraphConnection` and `nodesRef`.
+
+- [x] Operator with exactly one in + one out signal edge bridges in.source → out.target. (`onBeforeDelete`)
+- [x] Bridge skipped when source is `analysis` (feature) and target is a non-operator uniform param.
+- [x] Bridge validated by `isValidGraphConnection` before insertion; multi-input operators drop.
+- [x] Multi-node delete is dangling-edge safe: a final `next.filter` drops every edge still touching a deleted node, so an intermediate bridge stranded by the mainline-guard `continue` (e.g. deleting two adjacent operators that collapse to `feature → uniform`) can't leave an edge pointing at a removed node. Bridges between *surviving* nodes are untouched.
+- [x] Acceptance **verified via headless browser automation** (2026-05-30, bundled chromium + swiftshader WebGPU — the app boots, graph is interactive, pixels black). All three graph-state criteria confirmed against the live React-Flow edge set:
+  - delete a mid-chain effect → neighbours splice: added Pixelate (`renderer→fx-pixelate-1→tonemap`), deleted it → `renderer→tonemap` bridge restored. ✅
+  - delete a mid-signal-chain gain between two operators → signal still flows: built `analysis→gainA→gainB`, deleted `gainA` → `analysis→gainB` bridge created. ✅
+  - delete the gain feeding a uniform directly from a feature → modulation drops: deleted `operator-invert-1` (`analysis→invert→postfx`) → both edges removed, **no** `analysis→postfx` bridge. ✅
+  - "render keeps going": renderer never errored (zero console errors, chain intact) so the pipeline is alive; the literal *pixels* are black under swiftshader, so the visual is the maintainer's to eyeball, but the state driving it is correct.
+
+### E2 — Color-mapper "Slots" vs. "Spread": separate quantization from gradient. **In progress (2026-05-30).**
+
+**Root cause (verified):** `color_count` ("Slots") is in `GEOMETRY_SETTINGS`, so committing it (and audio-modulating it) rebuilds the mesh and **re-quantizes** the baked `paletteSlot` per tile (`classify` + `bucketToPaletteIdx`) — true "how many colors are used." But **dragging** the slider routes through `previewSetting` → `renderer.setSettings(next, buildPalette(v))` → `applyPaletteColors`, which only re-maps the *fixed* baked buckets through a palette gradient of varying stop-count — a continuous recolor sweep with **no** re-quantize. That sweep is the behaviour the maintainer likes but it isn't "slots." Same asymmetry across all three `color_mode`s (Type/Orient/Ring).
+
+The fix splits the two conflated behaviours into two independent, modulatable controls:
+
+- **`color_count` ("Slots")** stays the quantization: how many distinct buckets tiles fall into. Make its **drag** also re-quantize (live geometry rebuild on `color_count`/`color_mode` preview, debounced via rAF using a cached `buildMeshGeometry` + current patch), so the slider, the number field, and audio all agree — an enumerated color count.
+- **`color_spread` (new, "Spread")** is the recolor knob = today's drag behaviour, set aside as its own thing. The applied palette uses `buildPalette(preset, spread>0 ? spread : color_count)` while the geometry quantizes by `color_count`. `spread === 0` (default) ⇒ "follow Slots" ⇒ **identical to today's committed look** (preserve the look). `spread !== color_count` reproduces the gradient-compression sweep, now decoupled and modulatable.
+
+- [x] New setting `color_spread` (default 0 = auto/follow Slots): `androidSettings` (key/default), `settingKeys` (`PALETTE_SETTING_KEYS` + `GRAPH_PRESET_SETTING_KEYS`), **not** in `GEOMETRY_SETTINGS`, `audioTargets` range `[0, MAX_COLORS]`, `graphPreset` round-trip (graph:contract green).
+- [x] Color mapper node: "Spread" `RangeControl` + `color_spread` inlet (modulatable, graph-contract mapped), tooltip explaining auto vs. override (via new `RangeControl` `title`→`data-tip`).
+- [x] `buildMeshGeometry`: bakes `color` from `buildPalette(preset, appliedStops)` where `appliedStops = color_spread>0 ? color_spread : color_count`; `classify`/`bucketToPaletteIdx` stay on `color_count`.
+- [x] App: `appliedColorStops` helper; `palette`/`renderPalette` use it; `previewSetting` routes `color_spread`/`preset` → recolor and `color_count`/`color_mode` → live re-quantize rebuild (`schedulePreviewGeometry`, rAF-debounced, cached `buildMeshGeometry` + `patchRef`); `applyIntegerTarget('color_spread')` recolor-only modulation, `color_count` stays the re-quantize target. **Every** palette build now uses `appliedStops` — including `ensureCustomColors` (custom-edit seed), so starting to edit a colour while Spread>0 doesn't snap the others to a different gradient resolution (default spread 0 ⇒ identical to old behaviour).
+- [~] Acceptance — **structure + runtime + colour-buffer data all verified via headless automation**; only the maintainer's *aesthetic* judgement remains. Confirmed live (bundled chromium + swiftshader WebGPU):
+  - Structure: palette node exposes the `color_spread` inlet handle + both Slots/Spread `RangeControl`s.
+  - Runtime: driving Slots across 7 values and Spread across 5 (exercising live re-quantize `schedulePreviewGeometry → buildMeshGeometry → setGeometry` + the recolor path) → **zero console errors**.
+  - **Data (read back the live mesh `color` buffer):** `Slots=8` ⇒ exactly **8 distinct colours** (re-quantize genuinely uses N colours); `spread=8`(==count) is **byte-identical** to `spread=0` (the default-unchanged invariant holds); `spread=4` and `spread=16` keep 8 buckets but yield **different colours** (the sweep is real and decoupled from quantization); returning to `spread=0` **restores** the original colours.
+  - Plus proven by construction: drag and type both call the same `buildMeshGeometry(settings)` ⇒ identical geometry; `appliedColorStops===color_count` when spread 0 ⇒ default byte-identical to pre-feature code (every build site uses `appliedStops`).
+  - Genuinely remaining = **only** whether the re-quantized Slots and the Spread sweep *look right/pleasing to a human* — irreducibly the maintainer's call (the plan's designated step), not a verifiable fact.
+
+### E3 — Feedback effect: folded into the registry (single source of builder truth). **Done (2026-05-30).**
+
+The earlier "document the exception" approach was a cop-out (the maintainer never offered it — the agent invented the fork). `feedback` is now a **real registry builder**, no special-casing:
+- `createUniforms()` owns its live params (`trail`/`zoom`/`rotate`/`hue`); `apply(input, u, node, ctx)` **constructs** the `TrailsNode` and wires them in — just like every other builder.
+- `mask`/`mode` are already in `fxStructuralSignature`, so they **bake** at build time (no per-frame uniform); the `mask` uniform was removed from `TrailsNode` entirely.
+- The renderer hands builders a small `FxContext` (`{ bg }`, a shared scene-background uniform) so feedback's surface mask reads the background without a renderer special-case.
+- Per-frame writes are generic: feedback-domain (`compose:'feedback'`) effects map `trail`→`afterImageDamp` uniformly, covering both `afterImage` and `feedback`; their other params write directly. The `afterImage` uniform was renamed `damp`→`trail` so param key == uniform key.
+- Disposal is generic: `TrailsNode` owns render targets, so `disposePostTree` frees it like bloom/anamorphic — the `feedbackNodes` map, the keep-set protection, the explicit dispose loop, and the `node.kind === 'feedback'` branches in `rebuildPostPipeline`/`writePostChainUniforms` are all **deleted**.
+- **Verified live** (headless WebGPU): add Feedback → renders, no fatal; raise Persistence; switch Mode through Afterimage/Both/Trails (3 structural recompiles, each building a new `TrailsNode` and freeing the old one — the device-loss-risk path); delete it — zero console errors throughout. `grep` confirms no feedback special-casing remains in the renderer.
+
+### E4 — Domain-mismatch warning UI (design spec §, Task 8 Step 2). **Done (2026-05-30).**
+
+`domainMismatchedFxIds(nodes, edges)` (`ControlGraph.tsx`) walks `derivePostChain` and flags every `linear`-domain FX positioned **downstream of an active `toneMap`**; the connectivity sync effect writes `domainWarning` into each FX node's data; `FxNode` renders a non-blocking `TriangleAlert` "after tone map" badge with a `data-tip` explanation. Advisory only — never blocks or rewires. A **bypassed** tone-map removes the boundary (the renderer skips it, so the signal stays linear) → no false-positive warning; a cheap `fxBypassSignature` dep makes the warning re-evaluate when a bypass toggles without re-running on every position drag.
+
+### E5 — Node icons: in-graph icon, low-delay tooltips, and an icon audit. **Done (2026-05-30).**
+
+- [x] **Icon top-left in the node title, before the label — for EVERY node type.** `NodeFrame` gained an optional `icon` slot (rendered before `<strong>{title}</strong>`); the title bar switched from CSS grid to flex to seat it. `FxNode` passes its catalog icon (both branches) via the shared `web/src/flow/fxIcons.tsx` (`FX_ICONS` + `fxIconComponent`, also used by the Add menu — one source of truth). **All non-FX node components now also pass a clear lucide icon** so the icon→node-type association is reinforced across the whole graph (the original intent): Curated renders `Images`, Tiling `Shapes`, Color mapper `Palette`, Surface material `Gem`, Lighting `Lightbulb`, Border `Frame`, Projection `Globe`, Clock `Clock`, Audio transport `Music`, Audio analysis `AudioWaveform`, Operator `FunctionSquare`, Field source / Field source+ `Waves`, Scene pass `Image`, Display sink `Monitor`. **Verified live (headless automation): all 19 default-graph nodes render a title icon (19/19).** Icon picks are a judgement call — easy to swap per-node; flagged for maintainer refinement.
+- [x] **Low-delay tooltips.** New `[data-tip]` CSS tooltip shows after ~120ms (vs. native `title`'s ~1s). Applied to the in-graph node icon, the Add-menu effect buttons, **the entire top toolbar** (Reset, Fit, Snap, Snap-now, Ride, Hold, Save, Load, Restore-links, Delete-link, Add — the icon-only buttons whose glyphs are least self-evident; Ride/Hold get an explanatory sentence), and any `RangeControl` given a `title`. Native `title` removed where `data-tip` was added (avoids a double tooltip); `aria-label` kept on every one for accessibility. (Bottom react-flow zoom `Controls` keep native `title` — standard widget, not the app's menu.)
+- [x] **Icon audit (each kind → was → now):**
+
+  | kind | was | now | verdict |
+  | --- | --- | --- | --- |
+  | pixelate | Grid2x2 | Grid2x2 | keep |
+  | posterize | Layers | Layers | keep (levels/bands) |
+  | filmGrain | Film | Film | keep |
+  | rgbShift | Shuffle | **Columns3** | fix — Shuffle (randomize) was misleading; 3 columns = R/G/B channel split |
+  | sobel | PenLine | PenLine | keep (edge line) |
+  | afterImage | History | History | keep (time trail) |
+  | bloom | Sparkles | Sparkles | keep |
+  | toneMap | Contrast | Contrast | keep |
+  | dotScreen | CircleDot | CircleDot | keep |
+  | chromaticAberration | Aperture | Aperture | keep (lens) |
+  | sepia | Coffee | Coffee | keep (tone) |
+  | bleach | Sun | Sun | keep (high-key) |
+  | blur | Droplet | **Haze** | fix — Droplet read as liquid; Haze = soft/foggy = blur |
+  | anamorphic | Zap | Zap | keep (streak/flare energy) |
+  | feedback | Repeat | Repeat | keep (loop) |
+  | aa | Spline | Spline | keep (smooth curve) |
+  | contours | Spline | **Map** | fix — collided with `aa`; Map (topographic) = iso-lines |
+
+  Root toolbar audit (each button → icon → verdict):
+
+  | button | icon | verdict |
+  | --- | --- | --- |
+  | Reset graph | RotateCcw | keep (undo/reset) |
+  | Fit | Maximize2 | keep (expand-to-fit) |
+  | Snap on/off | Grid3x3 | keep (snap-to-grid) |
+  | Snap now | AlignStartVertical | keep (align/snap action) |
+  | Ride | Activity | keep (live signal pulse = value rides audio) |
+  | Hold | Lock | keep (freeze/hold param) |
+  | Save graph | Save | keep (writes JSON to disk) |
+  | Load graph | Upload | keep — conventional "upload a file from disk"; pairs with Save |
+  | Restore links | Link2 | keep (re-link) |
+  | Delete link | Unlink | keep (break link) |
+  | Add | Plus | keep |
+
+  Add-submenu sources/operators use text labels (no icons). Audio-transport node buttons (`Play`/`Pause`/`Mic`/`SkipBack`/`Square`/`Repeat`/`Volume2`) read correctly and keep their native titles (node-internal, clear context). No root-icon swaps needed — the suspect picks were all on FX nodes (above).

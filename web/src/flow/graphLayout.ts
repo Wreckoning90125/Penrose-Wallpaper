@@ -13,9 +13,6 @@ import {
   type FlowFitMetrics,
   type FlowViewport,
 } from './flowLayout';
-import { LIGHT_CONTROLS, MATERIAL_CONTROLS, PROJECTION_CONTROLS, RIPPLE_TARGET_CONTROLS } from './controlSpecs';
-import { DISPLAY_INLETS, SCENE_PASS_INLETS } from './nodeFrame';
-import { dataObject } from './nodeData';
 
 export const LAYOUT_COLUMN_GAP = 120;
 export const LAYOUT_RAIL_CLEARANCE = 48;
@@ -115,39 +112,14 @@ export function measuredHeight(node: Node): number {
   return node.measured?.height ?? node.height ?? 240;
 }
 
-export function nodePortCount(node: Node): number {
-  const type = String(node.type ?? '');
-  if (type === 'operator') {
-    const spec = dataObject(node.data, 'spec');
-    const inputsValue = spec ? Object.getOwnPropertyDescriptor(spec, 'inputs')?.value : null;
-    const outputsValue = spec ? Object.getOwnPropertyDescriptor(spec, 'outputs')?.value : null;
-    const inputs = Array.isArray(inputsValue) ? inputsValue.length : 0;
-    const outputs = Array.isArray(outputsValue) ? outputsValue.length : 0;
-    return Math.max(inputs, outputs);
-  }
-  if (node.id === 'palette') return 3;
-  if (node.id === 'projection') return PROJECTION_CONTROLS.length + 1;
-  if (node.id === 'material') return MATERIAL_CONTROLS.length + 2;
-  if (node.id === 'lighting') return LIGHT_CONTROLS.length;
-  if (node.id === 'postfx') return RIPPLE_TARGET_CONTROLS.length;
-  if (node.id === 'renderer') return SCENE_PASS_INLETS.length;
-  if (node.id === 'display') return DISPLAY_INLETS.length;
-  return 1;
-}
-
-export function nodeIoOverhang(node: Node): number {
-  const rows = nodePortCount(node);
-  if (rows <= 1) return 0;
-  const railTop = 42;
-  const rowHeight = 24;
-  const rowGap = 6;
-  const railHeight = railTop + rows * rowHeight + (rows - 1) * rowGap;
-  return Math.max(0, railHeight - measuredHeight(node));
-}
-
+// The grid-snapped vertical footprint a node occupies. The node card already
+// self-sizes to its real content + port rail and rounds to a full grid cell
+// (NodeFrame), so the measured height is authoritative — no per-node port-count
+// table here. Snapping again is idempotent and a safe guard before the card has
+// measured.
 export function layoutAdvanceHeight(id: string, node: Node): number {
   void id;
-  return snapCeilValue(measuredHeight(node) + nodeIoOverhang(node));
+  return snapCeilValue(measuredHeight(node));
 }
 
 export function nodeHasMeasuredSize(node: Node): boolean {

@@ -29,6 +29,8 @@ const CURRENT_CONTROLS = '__current_controls__';
 const GEOMETRY_SETTINGS: SettingKey[] = [
   'border_a',
   'border_c',
+  'border_fill',
+  'border_point',
   'border_h',
   'border_join',
   'border_l',
@@ -41,11 +43,23 @@ const GEOMETRY_SETTINGS: SettingKey[] = [
   'projection',
 ];
 const HYPERBOLIC_GEOMETRY_SETTINGS: SettingKey[] = [...GEOMETRY_SETTINGS, 'hyp_scale'];
+
+// How many gradient stops the applied palette uses. `color_spread` overrides the
+// stop-count independently of how many tile buckets exist (`color_count`); 0 means
+// "follow Slots" so the historical look is unchanged. Re-baked live by
+// applyPaletteColors / buildMeshGeometry — no geometry rebuild for spread alone.
+function appliedColorStops(settings: Settings | Partial<Settings>): number {
+  const spread = intSetting(settings, 'color_spread', 0, MAX_COLORS);
+  return spread > 0 ? spread : intSetting(settings, 'color_count', 2, MAX_COLORS);
+}
 const APP_AUDIO_SETTING_KEYS: readonly SettingKey[] = [
   'generation',
   'color_count',
+  'color_spread',
   'hyp_fill_subdiv',
   'hyp_border_subdiv',
+  'border_fill',
+  'border_point',
 ];
 
 type SettingsMutator = (current: Settings) => Settings;
@@ -141,7 +155,15 @@ export function App() {
   const fieldSlotsRef = useRef<FieldSlot[]>([]);
   const renderInputsRef = useRef<RenderInputs>({ geometry: true, lighting: true, color: true, material: true, projection: true, fieldDisplace: true, fieldRelief: true, fieldColor: true, fieldUndulate: true, border: true });
   const applyAudioDriveRef = useRef<() => void>(() => undefined);
+  const schedulePreviewGeometryRef = useRef<() => void>(() => undefined);
   const appModulationFrameRef = useRef(0);
+  // Live "Slots"/"Color mode" preview re-quantizes the tile→bucket assignment,
+  // which lives in the baked paletteSlot attribute — so the slider drag must
+  // rebuild the mesh, not just recolor it. These refs let the dependency-free
+  // previewSetting reach the (lazily imported) geometry builder + current patch.
+  const buildMeshGeometryRef = useRef<typeof import('./tiling/geometry').buildMeshGeometry | null>(null);
+  const patchRef = useRef<Patch | null>(null);
+  const previewGeometryFrameRef = useRef(0);
   const appAudioSettingBasesRef = useRef<AppAudioSettingBases>({});
   const luminanceModBaseRef = useRef<LuminanceModulationBase | null>(null);
   const luminanceModActiveRef = useRef(false);
@@ -183,17 +205,22 @@ export function App() {
   const maxGeneration = maxGenerationForFamily(settings.family);
   const colorCount = intSetting(settings, 'color_count', 2, MAX_COLORS);
   const palettePreset = intSetting(settings, 'preset', 0, 11);
+  // Slots (color_count) quantizes tiles into buckets; Spread (color_spread) sets
+  // the palette gradient's stop-count independently. 0 = follow Slots, so the
+  // default look is unchanged. See appliedColorStops.
+  const appliedStops = appliedColorStops(settings);
   const palette = useMemo(() => (
-    buildPalette(palettePreset, colorCount, customColors)
-  ), [colorCount, customColors, palettePreset]);
+    buildPalette(palettePreset, appliedStops, customColors)
+  ), [appliedStops, customColors, palettePreset]);
   const renderSettings = useMemo(() => (
     clampGeneration(normalizeSettings({ ...settings, ...appAudioSettings }))
   ), [appAudioSettings, settings]);
   const renderColorCount = intSetting(renderSettings, 'color_count', 2, MAX_COLORS);
   const renderPalettePreset = intSetting(renderSettings, 'preset', 0, 11);
+  const renderAppliedStops = appliedColorStops(renderSettings);
   const renderPalette = useMemo(() => (
-    buildPalette(renderPalettePreset, renderColorCount, customColors)
-  ), [customColors, renderColorCount, renderPalettePreset]);
+    buildPalette(renderPalettePreset, renderAppliedStops, customColors)
+  ), [customColors, renderAppliedStops, renderPalettePreset]);
   const renderColorCountRef = useRef(renderColorCount);
   const renderPaletteRef = useRef(renderPalette);
   // Lets previewSetting read the live palette without a dependency on it, so
@@ -237,8 +264,19 @@ export function App() {
       [key]: value,
     };
     previewSettingsRef.current = next;
-    const nextPalette = key === 'color_count' || key === 'preset'
-      ? buildPalette(intSetting(next, 'preset', 0, 11), intSetting(next, 'color_count', 2, MAX_COLORS), customColorsRef.current)
+    // Slots / Color mode change how many buckets tiles fall into — baked into the
+    // paletteSlot attribute — so the live preview must re-quantize via a geometry
+    // rebuild (debounced), not merely recolour. This makes a Slots *drag* show the
+    // true enumerated colour count, matching the number field, audio, and commit.
+    if (key === 'color_count' || key === 'color_mode') {
+      schedulePreviewGeometryRef.current();
+      return;
+    }
+    // Spread (and preset) only change colour *values* per bucket — recolour live
+    // with the spread-aware applied palette, no rebuild. Default spread 0 = follow
+    // Slots, so nothing changes versus the historical look.
+    const nextPalette = key === 'preset' || key === 'color_spread'
+      ? buildPalette(intSetting(next, 'preset', 0, 11), appliedColorStops(next), customColorsRef.current)
       : paletteRef.current;
     rendererRef.current?.setSettings(next, nextPalette);
     // setSettings renders the un-modulated baseline; re-apply the current audio
@@ -247,6 +285,30 @@ export function App() {
     // un-modulated frame before the audio loop re-mods — the ride/hold jitter.
     applyAudioDriveRef.current();
   }, []);
+
+  // Rebuild the mesh from the live preview settings, coalesced to one rebuild per
+  // frame, so dragging Slots / Color mode re-quantizes the tiles live. Uses the
+  // lazily-imported builder cached by the geometry effect; before that first import
+  // resolves there is nothing on screen to re-quantize, so it simply no-ops.
+  const schedulePreviewGeometry = useCallback(() => {
+    if (previewGeometryFrameRef.current) return;
+    previewGeometryFrameRef.current = requestAnimationFrame(() => {
+      previewGeometryFrameRef.current = 0;
+      const build = buildMeshGeometryRef.current;
+      const currentPatch = patchRef.current;
+      const renderer = rendererRef.current;
+      if (!build || !currentPatch || !renderer) return;
+      const current = previewSettingsRef.current ?? settingsRef.current;
+      const { geometry, edgeGeometry, palette: builtPalette } = build(currentPatch, current, customColorsRef.current);
+      renderer.setSettings(current, builtPalette);
+      renderer.setGeometry(geometry, edgeGeometry);
+      applyAudioDriveRef.current();
+    });
+  }, []);
+
+  useEffect(() => {
+    schedulePreviewGeometryRef.current = schedulePreviewGeometry;
+  }, [schedulePreviewGeometry]);
 
   const beginEdit = useCallback((paramKey: string) => {
     heldParamsRef.current[paramKey] = true;
@@ -265,6 +327,10 @@ export function App() {
   useEffect(() => {
     customColorsRef.current = customColors;
   }, [customColors]);
+
+  useEffect(() => {
+    patchRef.current = patch;
+  }, [patch]);
 
   useEffect(() => {
     selectedColorRef.current = selectedColor;
@@ -333,6 +399,10 @@ export function App() {
     const generationMax = maxGenerationForFamily(String(baselineSettings.family ?? DEFAULT_SETTINGS.family));
     applyIntegerTarget('generation', 0, generationMax);
     applyIntegerTarget('color_count', 2, MAX_COLORS);
+    // Spread modulates the palette gradient only (not in GEOMETRY_SETTINGS), so it
+    // recolours live through the uniform-apply effect — no per-frame mesh rebuild,
+    // unlike color_count above.
+    applyIntegerTarget('color_spread', 0, MAX_COLORS);
     applyIntegerTarget('hyp_fill_subdiv', 1, 8);
     applyIntegerTarget('hyp_border_subdiv', 1, 32);
 
@@ -401,6 +471,7 @@ export function App() {
       cancelled = true;
       if (boostFrameRef.current) cancelAnimationFrame(boostFrameRef.current);
       if (appModulationFrameRef.current) cancelAnimationFrame(appModulationFrameRef.current);
+      if (previewGeometryFrameRef.current) cancelAnimationFrame(previewGeometryFrameRef.current);
     };
   }, []);
 
@@ -467,6 +538,7 @@ export function App() {
     let activeEdgeGeometry: BufferGeometry | null = null;
     async function buildGeometry() {
       const { buildMeshGeometry } = await import('./tiling/geometry');
+      buildMeshGeometryRef.current = buildMeshGeometry;
       if (cancelled || !rendererRef.current) return;
       // Read the latest settings from a ref: this effect intentionally re-runs only
       // when a geometry-affecting setting changes (geometrySettingsKey) or the patch
@@ -496,7 +568,24 @@ export function App() {
 
   useEffect(() => {
     if (!rendererReady || !rendererRef.current) return;
-    rendererRef.current.setSettings(renderSettings, renderPalette);
+    // This committed-state apply re-fires every frame the audio/clock loop changes
+    // renderSettings. For a param the user is actively dragging (held), that would
+    // clobber its live preview with the not-yet-committed baseline — the slider
+    // snaps back when you pause the drag, and geometry params (scale/boost) jump.
+    // So keep held params at their live preview value here; previewSetting drives
+    // them, commit lands on release.
+    const preview = previewSettingsRef.current;
+    const held = heldParamsRef.current;
+    const heldKeys = preview
+      ? Object.keys(held).filter(key => held[key] === true && Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key))
+      : [];
+    if (!preview || heldKeys.length === 0) {
+      rendererRef.current.setSettings(renderSettings, renderPalette);
+      return;
+    }
+    const effective = { ...renderSettings };
+    for (const key of heldKeys) Reflect.set(effective, key, Reflect.get(preview, key));
+    rendererRef.current.setSettings(effective, renderPalette);
   }, [renderPalette, renderSettings, rendererReady]);
 
   useEffect(() => {
@@ -567,9 +656,13 @@ export function App() {
 
   const ensureCustomColors = useCallback((): Oklch[] => {
     if (customColors) return customColors.map(copyOklch);
-    const source = buildPalette(palettePreset, colorCount).colors;
+    // Seed from the *displayed* palette (Spread-aware stop count), not the raw
+    // Slots count, so starting to edit a colour doesn't snap the others from the
+    // on-screen spread gradient to a different resolution. spread 0 = follow Slots,
+    // so this is identical to the old behaviour in the default case.
+    const source = buildPalette(palettePreset, appliedStops).colors;
     return source.map(copyOklch);
-  }, [colorCount, customColors, palettePreset]);
+  }, [appliedStops, customColors, palettePreset]);
 
   const updateCustomColor = useCallback((updater: (color: Oklch) => Oklch) => {
     const nextColors = ensureCustomColors();

@@ -17,15 +17,23 @@ import { hashBlur } from 'three/addons/tsl/display/hashBlur.js';
 import { anamorphic } from 'three/addons/tsl/display/AnamorphicNode.js';
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
 import { smaa } from 'three/addons/tsl/display/SMAANode.js';
+import type { Vector3 } from 'three/webgpu';
 import type { FxKind } from './postFxCatalog';
 import { isFxKind } from './postFxCatalog';
+import { trails, type TrailsMode } from './trailsNode';
 import type { PostChainNode } from '../types';
 
 export type FxUniforms = Record<string, UniformNode<'float', number>>;
 
+// Shared per-pipeline resources a builder may read. Most ignore it; the feedback
+// trail reads `bg` (the renderer's scene-background uniform) for its surface mask.
+export type FxContext = {
+  bg: UniformNode<'vec3', Vector3>;
+};
+
 export type FxBuilder = {
   createUniforms: () => FxUniforms;
-  apply: (input: Node, u: FxUniforms, node: PostChainNode) => Node;
+  apply: (input: Node, u: FxUniforms, node: PostChainNode, ctx: FxContext) => Node;
 };
 
 const pixelateNode = Fn(([input, pixelSize]: [Node, Node<'float'>]) => {
@@ -76,8 +84,11 @@ export const FX_BUILDERS: Record<FxKind, FxBuilder> = {
     },
   },
   afterImage: {
-    createUniforms: () => ({ damp: uniform(afterImageDamp(0)) }),
-    apply: (input, u) => afterImage(input, u['damp']!),
+    // `trail` (0..1) is mapped through afterImageDamp() at write time — shared with
+    // feedback (both are compose:'feedback'), so the renderer applies the curve to
+    // the `trail` uniform of any feedback-domain effect uniformly.
+    createUniforms: () => ({ trail: uniform(afterImageDamp(0)) }),
+    apply: (input, u) => afterImage(input, u['trail']!),
   },
   bloom: {
     createUniforms: () => ({ strength: uniform(0.5), radius: uniform(0.4), threshold: uniform(0.8) }),
@@ -146,7 +157,21 @@ export const FX_BUILDERS: Record<FxKind, FxBuilder> = {
       return add(base, streaks);
     },
   },
-  feedback: { createUniforms: () => ({}), apply: (input) => input },
+  feedback: {
+    // The cross-frame trail (TrailsNode) is a stateful node, but it's still built
+    // here like every other effect: createUniforms owns its live params, apply
+    // constructs the node and wires them in. `mask`/`mode` are structural (they're
+    // in fxStructuralSignature), so they bake at build time; `bg` comes from the
+    // shared context; disposal is generic (TrailsNode owns render targets, so the
+    // renderer's disposePostTree frees it like bloom/afterImage).
+    createUniforms: () => ({ trail: uniform(afterImageDamp(0)), zoom: uniform(0), rotate: uniform(0), hue: uniform(0) }),
+    apply: (input, u, node, ctx) => {
+      const mode: TrailsMode = node.selects['mode'] === 'afterimage' ? 'afterimage'
+        : node.selects['mode'] === 'both' ? 'both' : 'trails';
+      const maskMode = node.selects['mask'] === 'surface' ? 1 : node.selects['mask'] === 'inverse' ? 2 : 0;
+      return trails(input, mode, { decay: u['trail']!, zoom: u['zoom']!, rotate: u['rotate']!, hue: u['hue']!, maskMode, bg: ctx.bg });
+    },
+  },
   aa: {
     createUniforms: () => ({}),
     apply: (input, _u, node) => {

@@ -5,21 +5,36 @@
 import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useReactFlow, type Edge, type Node } from '@xyflow/react';
 import {
+  AudioWaveform,
   Clock,
+  FunctionSquare,
+  Gem,
+  Globe,
+  Frame,
+  Image as ImageIcon,
+  Images,
+  Lightbulb,
   Mic,
+  Monitor,
+  Music,
+  Palette as PaletteIcon,
   Pause,
   Play,
   Repeat,
   RotateCcw,
+  Shapes,
   SkipBack,
   Square,
+  TriangleAlert,
   Upload,
   Volume2,
+  Waves,
   X,
 } from 'lucide-react';
 import { MultiSwitch } from './MultiSwitch';
 import { RangeControl } from './RangeControl';
 import { DISPLAY_INLETS, NodeFrame, SCENE_PASS_INLETS, portSpecsFromControls } from './nodeFrame';
+import { fxIconComponent } from './fxIcons';
 import { MeterOutlet, drawWheel, formatTime, settingRangeHandlers, settingWithLiveBoost } from './nodeHelpers';
 import { FAMILIES, familyByValue, seedLabel } from '../tiling/families';
 import { dataObject, numberRecordFromObject, stringRecordFromObject } from './nodeData';
@@ -83,6 +98,7 @@ export const AtlasNode = memo(function AtlasNode({ data }: NodeComponentProps<At
   return (
     <NodeFrame
       title="Curated renders"
+      icon={<Images size={14} />}
       kind="source"
       wide
       variant={0}
@@ -117,6 +133,7 @@ export const TilingNode = memo(function TilingNode({ data }: NodeComponentProps<
   return (
     <NodeFrame
       title="Tiling source"
+      icon={<Shapes size={14} />}
       kind="source"
       wide
       variant={1}
@@ -181,12 +198,14 @@ export const PaletteNode = memo(function PaletteNode({ data }: NodeComponentProp
   return (
     <NodeFrame
       title="Color mapper"
+      icon={<PaletteIcon size={14} />}
       kind="color"
       wide
       variant={0}
       inlets={[
         { id: 'in', label: 'Projection' },
         { id: 'color_count', label: 'Slots' },
+        { id: 'color_spread', label: 'Spread' },
         { id: 'luminance', label: 'Lum' },
       ]}
       outlets={[{ id: 'color', label: 'Color' }]}
@@ -212,6 +231,19 @@ export const PaletteNode = memo(function PaletteNode({ data }: NodeComponentProp
           onBeginEdit={data.onBeginEdit}
           onChange={value => data.onPreviewSetting('color_count', value)}
           onCommit={value => data.onSetting('color_count', value)}
+          onEndEdit={data.onEndEdit}
+        />
+        <RangeControl
+          label="Spread"
+          title="Palette gradient stops, independent of Slots. 0 = follow Slots (auto); above 0 overrides the gradient resolution for a recolor sweep."
+          value={intSetting(data.settings, 'color_spread', 0, MAX_COLORS)}
+          min={0}
+          max={MAX_COLORS}
+          step={1}
+          paramKey="color_spread"
+          onBeginEdit={data.onBeginEdit}
+          onChange={value => data.onPreviewSetting('color_spread', value)}
+          onCommit={value => data.onSetting('color_spread', value)}
           onEndEdit={data.onEndEdit}
         />
       </div>
@@ -276,6 +308,7 @@ export const MaterialNode = memo(function MaterialNode({ data }: NodeComponentPr
   return (
     <NodeFrame
       title="Surface material"
+      icon={<Gem size={14} />}
       kind="surface"
       wide
       variant={0}
@@ -315,6 +348,7 @@ export const LightingNode = memo(function LightingNode({ data }: NodeComponentPr
   return (
     <NodeFrame
       title="Lighting"
+      icon={<Lightbulb size={14} />}
       kind="surface"
       wide
       variant={1}
@@ -352,6 +386,7 @@ export const EdgeProfileNode = memo(function EdgeProfileNode({ data }: NodeCompo
   return (
     <NodeFrame
       title="Border"
+      icon={<Frame size={14} />}
       kind="surface"
       wide
       variant={0}
@@ -410,6 +445,7 @@ export const ProjectionNode = memo(function ProjectionNode({ data }: NodeCompone
   return (
     <NodeFrame
       title="Projection"
+      icon={<Globe size={14} />}
       kind="geometry"
       wide
       variant={0}
@@ -474,6 +510,7 @@ export const ClockNode = memo(function ClockNode({ data }: NodeComponentProps<Cl
   return (
     <NodeFrame
       title="Clock source"
+      icon={<Clock size={14} />}
       kind="signal"
       variant={0}
       inlets={[]}
@@ -540,6 +577,7 @@ export const AudioTransportNode = memo(function AudioTransportNode({ data }: Nod
   return (
     <NodeFrame
       title="Audio transport"
+      icon={<Music size={14} />}
       kind="signal"
       wide
       variant={1}
@@ -605,6 +643,7 @@ export const AudioAnalysisNode = memo(function AudioAnalysisNode({ data }: NodeC
   return (
     <NodeFrame
       title="Audio analysis"
+      icon={<AudioWaveform size={14} />}
       kind="signal"
       wide
       variant={2}
@@ -693,6 +732,7 @@ export const OperatorNode = memo(function OperatorNode({ data }: NodeComponentPr
   return (
     <NodeFrame
       title={data.spec.label}
+      icon={<FunctionSquare size={14} />}
       kind="operator"
       variant={0}
       inlets={data.spec.inputs.map(id => ({ id, label: id }))}
@@ -751,6 +791,7 @@ export const RippleTargetNode = memo(function RippleTargetNode({ data }: NodeCom
   return (
     <NodeFrame
       title="Field source"
+      icon={<Waves size={14} />}
       kind="surface"
       wide
       variant={2}
@@ -797,6 +838,7 @@ export const FieldSourceNode = memo(function FieldSourceNode({ data }: NodeCompo
   return (
     <NodeFrame
       title="Field source +"
+      icon={<Waves size={14} />}
       kind="surface"
       wide
       variant={2}
@@ -838,10 +880,12 @@ export const FxNode = memo(function FxNode({ data }: NodeComponentProps<FxNodeDa
     flow.setEdges(current => current.filter(edge => edge.source !== id && edge.target !== id));
   }, [data.id, flow]);
   if (!descriptor) return null;
+  const Icon = fxIconComponent(descriptor.icon);
   if (descriptor.compose === 'transform') {
     return (
       <NodeFrame
         title={descriptor.label}
+        icon={<Icon size={14} />}
         kind="output"
         variant={3}
         inlets={[{ id: 'frame', label: 'Frame' }]}
@@ -856,6 +900,7 @@ export const FxNode = memo(function FxNode({ data }: NodeComponentProps<FxNodeDa
   return (
     <NodeFrame
       title={descriptor.label}
+      icon={<Icon size={14} />}
       kind="output"
       variant={3}
       inlets={[{ id: 'frame', label: 'Frame' }, ...descriptor.params.map(p => ({ id: p.key, label: p.label }))]}
@@ -871,6 +916,15 @@ export const FxNode = memo(function FxNode({ data }: NodeComponentProps<FxNodeDa
       >
         <X size={13} />
       </button>
+      {data.domainWarning ? (
+        <div
+          className="fx-domain-warning nodrag nopan"
+          data-tip="Linear-domain effect placed after Tone map, where the image is already display-referred. Move it before Tone map for correct results."
+        >
+          <TriangleAlert size={12} />
+          <span>after tone map</span>
+        </div>
+      ) : null}
       <div className="control-grid two-col">
         {descriptor.params.map(param => (
           <RangeControl
@@ -912,6 +966,7 @@ export const RendererNode = memo(function RendererNode({ data }: NodeComponentPr
   return (
     <NodeFrame
       title="Scene pass"
+      icon={<ImageIcon size={14} />}
       kind="output"
       variant={0}
       inlets={SCENE_PASS_INLETS}
@@ -932,6 +987,7 @@ export const DisplayNode = memo(function DisplayNode({ data }: NodeComponentProp
   return (
     <NodeFrame
       title="Display sink"
+      icon={<Monitor size={14} />}
       kind="output"
       variant={0}
       inlets={DISPLAY_INLETS}

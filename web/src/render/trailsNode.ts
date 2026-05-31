@@ -11,7 +11,7 @@ import type Node from 'three/src/nodes/core/Node.js';
 import type UniformNode from 'three/src/nodes/core/UniformNode.js';
 import {
   Fn, float, vec2, vec3, uv, texture, convertToTexture, nodeObject,
-  max, mix, sin, cos, cross, dot, normalize, distance, smoothstep, step, sign, uniform,
+  max, mix, sin, cos, cross, dot, normalize, distance, smoothstep, step, sign,
 } from 'three/tsl';
 
 const _size = new Vector2();
@@ -20,6 +20,19 @@ const _quadMesh = new QuadMesh();
 let _rendererState: RendererState;
 
 export type TrailsMode = 'afterimage' | 'trails' | 'both';
+
+// The live inputs a TrailsNode reads. decay/zoom/rotate/hue are external uniforms
+// owned by the post-chain (written generically each frame); bg is the renderer's
+// shared scene-background uniform; maskMode is baked (the `mask` select is
+// structural, so it changes only on recompile — no per-frame uniform needed).
+export type TrailsInputs = {
+  decay: UniformNode<'float', number>;
+  zoom: UniformNode<'float', number>;
+  rotate: UniformNode<'float', number>;
+  hue: UniformNode<'float', number>;
+  maskMode: number;
+  bg: UniformNode<'vec3', Vector3>;
+};
 
 const hueRotate = Fn(([color, angle]: [Node<'vec3'>, Node<'float'>]) => {
   const k = normalize(vec3(1, 1, 1));
@@ -35,27 +48,27 @@ class TrailsNode extends TempNode {
   zoom: UniformNode<'float', number>;
   rotate: UniformNode<'float', number>;
   hue: UniformNode<'float', number>;
-  maskMode: UniformNode<'float', number>;
   bg: UniformNode<'vec3', Vector3>;
 
+  private _maskMode: number;
   private _compRT: RenderTarget;
   private _oldRT: RenderTarget;
   private _textureNode: TextureNode;
   private _textureNodeOld: TextureNode;
   private _material: NodeMaterial | null;
 
-  constructor(textureNode: TextureNode, mode: TrailsMode) {
+  constructor(textureNode: TextureNode, mode: TrailsMode, inputs: TrailsInputs) {
     super('vec4');
 
     this.textureNode = textureNode;
     this.mode = mode;
 
-    this.decay = uniform(0.96);
-    this.zoom = uniform(0);
-    this.rotate = uniform(0);
-    this.hue = uniform(0);
-    this.maskMode = uniform(0);
-    this.bg = uniform(new Vector3(0, 0, 0));
+    this.decay = inputs.decay;
+    this.zoom = inputs.zoom;
+    this.rotate = inputs.rotate;
+    this.hue = inputs.hue;
+    this.bg = inputs.bg;
+    this._maskMode = inputs.maskMode;
 
     this._compRT = new RenderTarget(1, 1, { depthBuffer: false });
     this._compRT.texture.name = 'TrailsNode.comp';
@@ -146,8 +159,9 @@ class TrailsNode extends TempNode {
 
       const bgDist = distance(cur.rgb, this.bg);
       const surface = smoothstep(0.003, 0.012, bgDist);
-      const notNone = step(0.5, this.maskMode);
-      const isInv = step(1.5, this.maskMode);
+      const maskMode = float(this._maskMode);
+      const notNone = step(0.5, maskMode);
+      const isInv = step(1.5, maskMode);
       const masked = mix(surface, surface.oneMinus(), isInv);
       const m = mix(float(1), masked, notNone);
       return mix(cur, accum, m);
@@ -169,5 +183,5 @@ class TrailsNode extends TempNode {
 
 export { TrailsNode };
 
-export const trails = (node: Node, mode: TrailsMode): TrailsNode =>
-  new TrailsNode(convertToTexture(nodeObject(node)), mode);
+export const trails = (node: Node, mode: TrailsMode, inputs: TrailsInputs): TrailsNode =>
+  new TrailsNode(convertToTexture(nodeObject(node)), mode, inputs);

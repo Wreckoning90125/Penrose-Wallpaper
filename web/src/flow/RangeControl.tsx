@@ -12,6 +12,7 @@ export type RangeControlProps = {
   max: number;
   step: number;
   digits?: number;
+  title?: string;
   paramKey?: string;
   onBeginEdit?: (paramKey: string) => void;
   onChange: (value: number) => void;
@@ -30,6 +31,7 @@ export function RangeControl({
   max,
   step,
   digits = 0,
+  title,
   paramKey,
   onBeginEdit,
   onChange,
@@ -126,7 +128,7 @@ export function RangeControl({
   }, [endSliderGesture]);
 
   return (
-    <label className="range-row nodrag nopan">
+    <label className="range-row nodrag nopan" data-tip={title}>
       <span>{label}</span>
       <input
         type="range"

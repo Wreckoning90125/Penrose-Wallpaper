@@ -4,7 +4,7 @@
 import type { SettingKey } from '../settings/androidSettings';
 
 export const TILING_SETTING_KEYS: readonly SettingKey[] = ['family', 'seed', 'generation'];
-export const PALETTE_SETTING_KEYS: readonly SettingKey[] = ['preset', 'color_mode', 'color_count'];
+export const PALETTE_SETTING_KEYS: readonly SettingKey[] = ['preset', 'color_mode', 'color_count', 'color_spread'];
 export const PROJECTION_SETTING_KEYS: readonly SettingKey[] = [
   'projection',
   'proj_blend',
@@ -51,6 +51,8 @@ export const BORDER_SETTING_KEYS: readonly SettingKey[] = [
   'border_c',
   'border_h',
   'border_a',
+  'border_fill',
+  'border_point',
 ];
 export const CLOCK_SETTING_KEYS: readonly SettingKey[] = ['clock_enabled', 'clock_rate'];
 export const GRAPH_PRESET_SETTING_KEYS: readonly SettingKey[] = [
@@ -59,6 +61,8 @@ export const GRAPH_PRESET_SETTING_KEYS: readonly SettingKey[] = [
   'bg_l',
   'bg_mode',
   'border_a',
+  'border_fill',
+  'border_point',
   'border_c',
   'border_h',
   'border_join',
@@ -70,6 +74,7 @@ export const GRAPH_PRESET_SETTING_KEYS: readonly SettingKey[] = [
   'clock_rate',
   'color_count',
   'color_mode',
+  'color_spread',
   'edge_profile_c',
   'edge_profile_glow',
   'edge_profile_h',

@@ -178,7 +178,7 @@ export function buildTileRing(
     const tB = 1 - (!reflex[(e + 1) % k] ? Math.min(0.45, edgeLen > 0 ? trim / edgeLen : 0) : 0);
     const outerAt = (t: number): Point => {
       const s = t * last;
-      const j = Math.min(last - 1, Math.floor(s));
+      const j = Math.max(0, Math.min(last - 1, Math.floor(s)));
       const f = s - j;
       return [ep[j]![0] + (ep[j + 1]![0] - ep[j]![0]) * f, ep[j]![1] + (ep[j + 1]![1] - ep[j]![1]) * f];
     };

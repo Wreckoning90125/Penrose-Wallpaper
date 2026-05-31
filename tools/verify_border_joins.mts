@@ -4,6 +4,7 @@
 // single layer (no self-overlap), and it fully covers the band on visible edges (no
 // gaps) — including under edge subdivision and on thin/odd tiles. Run:
 //   node tools/verify_border_joins.mts
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { buildTileRing, type TileBorder } from '../web/src/tiling/borderJoin.ts';
 
 type P = [number, number];
@@ -252,6 +253,68 @@ function area(style: number): number {
 if (!(Math.abs(area(0) - area(2)) > 1e-4 && Math.abs(area(1) - area(2)) > 1e-4)) {
   failures++;
   console.log(`  styles not distinct: ${area(0).toFixed(4)} ${area(1).toFixed(4)} ${area(2).toFixed(4)}`);
+}
+
+// REAL ATLAS TILES: parse the generated .ptg geometry (every family — Penrose,
+// kite-dart, chair/domino, hat/spectre, …) and run the joinery over every actual
+// tile. The per-tile guarantee (ring strictly inside its own tile) means the only
+// thing to check is, per tile, no self-overlap and stays inside the tile. Skips
+// gracefully when the gitignored generated files aren't present (e.g. fresh CI).
+function parsePtg(buf: Buffer): { verts: P[] }[] {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  if (String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)) !== 'PTG1') return [];
+  const count = dv.getUint32(16, true); // magic(4)+family(4)+seed(4)+generation(4)
+  let o = 20;
+  const tiles: { verts: P[] }[] = [];
+  for (let i = 0; i < count; i++) {
+    const vc = dv.getUint8(o++); o++; // vcount, type
+    const verts: P[] = [];
+    for (let j = 0; j < vc; j++) { verts.push([dv.getFloat32(o, true), dv.getFloat32(o + 4, true)]); o += 8; }
+    tiles.push({ verts });
+  }
+  return tiles;
+}
+const ATLAS_DIR = 'web/public/generated/atlas';
+if (existsSync(ATLAS_DIR)) {
+  const files = readdirSync(ATLAS_DIR).filter((f) => f.endsWith('.ptg'));
+  let realTiles = 0;
+  let realFiles = 0;
+  for (const file of files) {
+    const tiles = parsePtg(readFileSync(`${ATLAS_DIR}/${file}`));
+    if (tiles.length === 0) continue;
+    realFiles++;
+    // representative average radius → realistic max half-width, like the renderer.
+    let rsum = 0;
+    for (const t of tiles) {
+      const cx = t.verts.reduce((s, v) => s + v[0], 0) / t.verts.length;
+      const cy = t.verts.reduce((s, v) => s + v[1], 0) / t.verts.length;
+      rsum += t.verts.reduce((s, v) => s + Math.hypot(v[0] - cx, v[1] - cy), 0) / t.verts.length;
+    }
+    const radius = rsum / tiles.length;
+    for (const t of tiles.slice(0, 400)) { // cap per file for runtime
+      if (t.verts.length < 3) continue;
+      realTiles++;
+      const cx = t.verts.reduce((s, v) => s + v[0], 0) / t.verts.length;
+      const cy = t.verts.reduce((s, v) => s + v[1], 0) / t.verts.length;
+      const tile: TileBorder = {
+        edges: t.verts.map((a, i) => ({ pts: [a, t.verts[(i + 1) % t.verts.length]!], visible: true })),
+        centroid: [cx, cy], ring: 0, orient: [1, 0], center: [cx, cy],
+      };
+      for (const style of [0, 1, 2]) {
+        const tris: P[][] = [];
+        buildTileRing(tile, radius * 0.08, style, 0, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
+        const real = tris.filter((tt) => triArea(tt[0]!, tt[1]!, tt[2]!) > 1e-12);
+        if (anyOverlap(real) > 0) { failures++; console.log(`  REAL overlap ${file} tile#${realTiles} style=${style}`); break; }
+        for (const tt of real) for (const v of tt) {
+          if (!inPoly(v, t.verts)) {
+            const d = Math.min(...t.verts.map((a, i) => distToSeg(v, a, t.verts[(i + 1) % t.verts.length]!).d));
+            if (d > radius * 0.01) { failures++; console.log(`  REAL outside ${file} tile#${realTiles} style=${style}`); break; }
+          }
+        }
+      }
+    }
+  }
+  console.log(`real atlas tiles: checked ${realTiles} tiles across ${realFiles} files`);
 }
 
 if (failures > 0) {

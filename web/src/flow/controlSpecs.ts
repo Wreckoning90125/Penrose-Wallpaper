@@ -61,5 +61,5 @@ export const BORDER_CONTROLS: ControlSpec[] = [
   ['border_h', 'Hue', 0, 359, 1],
   ['border_a', 'Opacity', 0, 100, 1],
   ['border_fill', 'Fill', 0, 100, 1],
-  ['border_point', 'Point', 0, 100, 1],
+  ['border_point', 'Point', -100, 100, 1],
 ];

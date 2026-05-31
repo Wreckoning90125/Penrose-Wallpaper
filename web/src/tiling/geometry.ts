@@ -409,7 +409,7 @@ function buildEdgeGeometry(
   // from the sharp miter toward the centroid so border segments meet more fully.
   const joinStyle = intSetting(settings, 'border_join', 0, 2);
   const borderFill = intSetting(settings, 'border_fill', 0, 100) / 100;
-  const borderPoint = intSetting(settings, 'border_point', 0, 100) / 100;
+  const borderPoint = intSetting(settings, 'border_point', -100, 100) / 100;
   // Which tile edges carry a visible border (shared same-type edges are hidden).
   const visibleKeys = new Set(collectVisibleEdges(patch, projector, snap).map((e) => edgeKey(e.a, e.b)));
   const sub = intSetting(settings, 'hyp_border_subdiv', 1, 32);

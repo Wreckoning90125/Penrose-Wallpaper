@@ -315,6 +315,57 @@ if (existsSync(ATLAS_DIR)) {
     }
   }
   console.log(`real atlas tiles: checked ${realTiles} tiles across ${realFiles} files`);
+
+  // Same real tiles, but PROJECTED + SUBDIVIDED the way the Poincaré renderer does
+  // (radial tanh warp curves straight edges into arcs). Subdivision must not change
+  // the no-overlap / inside-tile property. Sample fewer tiles per file for runtime.
+  const projectHyp = (x: number, y: number, scale: number): P => {
+    const r = Math.hypot(x, y);
+    const d = Math.tanh(r * scale * 0.5);
+    return r > 1e-6 ? [(x / r) * d, (y / r) * d] : [0, 0];
+  };
+  const SUB = 8;
+  let projTiles = 0;
+  for (const file of files) {
+    const tiles = parsePtg(readFileSync(`${ATLAS_DIR}/${file}`));
+    for (const t of tiles.slice(0, 80)) {
+      if (t.verts.length < 3) continue;
+      const scale = 1.525; // hyp_scale default
+      const edges = t.verts.map((a, i): { pts: P[]; visible: boolean } => {
+        const b = t.verts[(i + 1) % t.verts.length]!;
+        const pts: P[] = [];
+        for (let s = 0; s <= SUB; s++) {
+          const u = s / SUB;
+          pts.push(projectHyp(a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, scale));
+        }
+        return { pts, visible: true };
+      });
+      const outline: P[] = [];
+      for (const e of edges) for (let i = 0; i < e.pts.length - 1; i++) outline.push(e.pts[i]!);
+      if (outline.length < 3) continue;
+      const cx = outline.reduce((s, v) => s + v[0], 0) / outline.length;
+      const cy = outline.reduce((s, v) => s + v[1], 0) / outline.length;
+      let r2 = 0;
+      for (const v of outline) r2 += Math.hypot(v[0] - cx, v[1] - cy);
+      const radius = r2 / outline.length;
+      if (radius < 1e-5) continue;
+      projTiles++;
+      const tile: TileBorder = { edges, centroid: [cx, cy], ring: 0, orient: [1, 0], center: [cx, cy] };
+      for (const style of [0, 1, 2]) {
+        const tris: P[][] = [];
+        buildTileRing(tile, radius * 0.08, style, 0, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
+        const real = tris.filter((tt) => triArea(tt[0]!, tt[1]!, tt[2]!) > 1e-12);
+        if (anyOverlap(real) > 0) { failures++; console.log(`  PROJ overlap ${file} tile#${projTiles} style=${style}`); break; }
+        for (const tt of real) for (const v of tt) {
+          if (!inPoly(v, outline)) {
+            const d = Math.min(...outline.map((a, i) => distToSeg(v, a, outline[(i + 1) % outline.length]!).d));
+            if (d > radius * 0.03) { failures++; console.log(`  PROJ outside ${file} tile#${projTiles} style=${style}`); break; }
+          }
+        }
+      }
+    }
+  }
+  console.log(`projected (Poincaré+subdivided) real tiles: checked ${projTiles}`);
 }
 
 if (failures > 0) {

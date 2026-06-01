@@ -22,6 +22,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.TooltipCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -415,18 +416,18 @@ class SettingsFragment : PreferenceFragmentCompat(),
         val prefs = preferenceManager.sharedPreferences ?: return
         applyingAtlasTarget = true
         try {
-            val editor = prefs.edit()
-                .putString(Settings.KEY_ATLAS_CATEGORY, categoryId)
-                .putString(Settings.KEY_ATLAS_TARGET, target.id)
-            for ((key, value) in target.settings) {
-                when (value) {
-                    is StaticValue.IntValue -> editor.putInt(key, value.v)
-                    is StaticValue.StringValue -> editor.putString(key, value.v)
-                    is StaticValue.BoolValue -> editor.putBoolean(key, value.v)
-                    is StaticValue.FloatValue -> editor.putFloat(key, value.v)
+            prefs.edit(commit = true) {
+                putString(Settings.KEY_ATLAS_CATEGORY, categoryId)
+                putString(Settings.KEY_ATLAS_TARGET, target.id)
+                for ((key, value) in target.settings) {
+                    when (value) {
+                        is StaticValue.IntValue -> putInt(key, value.v)
+                        is StaticValue.StringValue -> putString(key, value.v)
+                        is StaticValue.BoolValue -> putBoolean(key, value.v)
+                        is StaticValue.FloatValue -> putFloat(key, value.v)
+                    }
                 }
             }
-            editor.commit()
         } finally {
             applyingAtlasTarget = false
         }
@@ -436,9 +437,9 @@ class SettingsFragment : PreferenceFragmentCompat(),
 
     private fun clearAtlasTargetSelection(sp: SharedPreferences?) {
         if (sp?.contains(Settings.KEY_ATLAS_TARGET) != true) return
-        sp.edit()
-            .remove(Settings.KEY_ATLAS_TARGET)
-            .apply()
+        sp.edit {
+            remove(Settings.KEY_ATLAS_TARGET)
+        }
         if (currentScreen == ScreenKey.Tiling) {
             findPreference<ListPreference>(Settings.KEY_ATLAS_TARGET)?.let { targetPref ->
                 targetPref.value = null
@@ -496,11 +497,11 @@ class SettingsFragment : PreferenceFragmentCompat(),
             grid.adapter = PresetPickerAdapter(ctx, presets) { which ->
                 val prefs = preferenceManager.sharedPreferences
                     ?: return@PresetPickerAdapter
-                val editor = prefs.edit()
-                for ((key, value) in presets[which].values) {
-                    editor.putInt(key, value)
+                prefs.edit {
+                    for ((key, value) in presets[which].values) {
+                        putInt(key, value)
+                    }
                 }
-                editor.apply()
                 loadScreen(ScreenKey.Material)
                 Toast.makeText(ctx, presets[which].name, Toast.LENGTH_SHORT).show()
                 dialog.dismiss()

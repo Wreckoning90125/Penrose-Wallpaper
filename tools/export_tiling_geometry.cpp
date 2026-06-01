@@ -7,9 +7,11 @@
 #include <charconv>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -20,6 +22,39 @@ bool parseInt(const char* text, int& out) {
     const char* last = first + s.size();
     const auto [ptr, ec] = std::from_chars(first, last, out);
     return ec == std::errc{} && ptr == last;
+}
+
+bool pathStartsWith(const std::filesystem::path& path, const std::filesystem::path& root) {
+    auto pit = path.begin();
+    auto rit = root.begin();
+    for (; rit != root.end(); ++rit, ++pit) {
+        if (pit == path.end() || *pit != *rit) return false;
+    }
+    return true;
+}
+
+bool resolveOutputPath(const char* text, std::filesystem::path& out) {
+    std::filesystem::path requested(text);
+    if (requested.empty() || requested.is_absolute() || requested.extension() != ".ptg") {
+        return false;
+    }
+    for (const auto& part : requested) {
+        if (part == "." || part == "..") return false;
+    }
+
+    std::error_code ec;
+    const std::filesystem::path root = std::filesystem::weakly_canonical(
+        std::filesystem::current_path(ec),
+        ec
+    );
+    if (ec) return false;
+    const std::filesystem::path parent = requested.parent_path().empty()
+        ? root
+        : std::filesystem::weakly_canonical(root / requested.parent_path(), ec);
+    if (ec || !pathStartsWith(parent, root)) return false;
+
+    out = parent / requested.filename();
+    return true;
 }
 
 void writeU32(std::ofstream& out, uint32_t value) {
@@ -62,9 +97,15 @@ int main(int argc, char** argv) {
     const auto family = static_cast<penrose::Family>(familyId);
     const std::vector<penrose::Tile> tiles = penrose::generate(family, seed, generation);
 
-    std::ofstream out(argv[4], std::ios::binary | std::ios::trunc);
+    std::filesystem::path outputPath;
+    if (!resolveOutputPath(argv[4], outputPath)) {
+        std::cerr << "bad output path (must be a relative .ptg path under cwd): " << argv[4] << "\n";
+        return 2;
+    }
+
+    std::ofstream out(outputPath, std::ios::binary | std::ios::trunc);
     if (!out) {
-        std::cerr << "cannot open output: " << argv[4] << "\n";
+        std::cerr << "cannot open output: " << outputPath << "\n";
         return 1;
     }
 
@@ -91,7 +132,7 @@ int main(int argc, char** argv) {
     }
 
     if (!out) {
-        std::cerr << "failed while writing: " << argv[4] << "\n";
+        std::cerr << "failed while writing: " << outputPath << "\n";
         return 1;
     }
     return 0;

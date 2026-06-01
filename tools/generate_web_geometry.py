@@ -66,13 +66,14 @@ def write_geometry(target_id: str, settings: dict[str, Any]) -> str:
     generation = setting_int(settings, "generation", 0)
     filename = f"{target_id}.ptg"
     output = OUT_DIR / filename
+    output_arg = output.relative_to(ROOT)
     subprocess.run(
         [
             str(EXPORTER_BIN),
             str(family),
             str(seed),
             str(generation),
-            str(output),
+            str(output_arg),
         ],
         cwd=ROOT,
         check=True,
@@ -95,6 +96,15 @@ def main() -> None:
         family, seed, generation, output = args.live
         build_exporter()
         out = Path(output)
+        if out.is_absolute():
+            out = out.resolve()
+            try:
+                output_arg = out.relative_to(ROOT)
+            except ValueError as exc:
+                raise SystemExit(f"live output must stay under {ROOT}: {out}") from exc
+        else:
+            output_arg = out
+            out = ROOT / out
         out.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             [
@@ -102,7 +112,7 @@ def main() -> None:
                 str(int(family)),
                 str(int(seed)),
                 str(int(generation)),
-                str(out),
+                str(output_arg),
             ],
             cwd=ROOT,
             check=True,

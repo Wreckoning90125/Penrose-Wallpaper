@@ -9,6 +9,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: assembleRelease
@@ -410,3 +413,7 @@ jobs:
         with:
           gradle-version: "9.4.1"
           build-root-directory: android
+          # Report what ships in the APK. The default "resolve all" graph
+          # includes Gradle/plugin classpaths, which created Dependabot alerts
+          # for Netty/BouncyCastle/JDOM used by build tooling, not by Penrose.
+          dependency-graph-include-configurations: "releaseRuntimeClasspath"

@@ -1,6 +1,7 @@
 package com.penrose.wallpaper
 
 import android.content.SharedPreferences
+import androidx.core.content.edit
 
 /**
  * Strongly-typed projection of our SharedPreferences, encoded into the
@@ -319,12 +320,12 @@ internal class Settings(
             prefs: SharedPreferences,
             zoom: Float, rotation: Float, panX: Float, panY: Float,
         ) {
-            prefs.edit()
-                .putFloat(KEY_ZOOM, zoom)
-                .putFloat(KEY_ROTATION, rotation)
-                .putFloat(KEY_PAN_X, panX)
-                .putFloat(KEY_PAN_Y, panY)
-                .apply()
+            prefs.edit {
+                putFloat(KEY_ZOOM, zoom)
+                putFloat(KEY_ROTATION, rotation)
+                putFloat(KEY_PAN_X, panX)
+                putFloat(KEY_PAN_Y, panY)
+            }
         }
     }
 }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.annotation.OptIn
+import androidx.core.content.edit
 import androidx.core.net.toUri
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
@@ -106,10 +107,9 @@ class AudioPlaybackService : MediaSessionService() {
      * keeps evaluating on the home screen even with no time-based ripple.
      */
     private fun writeAudioActive(active: Boolean) {
-        getSharedPreferences(Settings.PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(Settings.KEY_AUDIO_ACTIVE, active)
-            .apply()
+        getSharedPreferences(Settings.PREFS_NAME, Context.MODE_PRIVATE).edit {
+            putBoolean(Settings.KEY_AUDIO_ACTIVE, active)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

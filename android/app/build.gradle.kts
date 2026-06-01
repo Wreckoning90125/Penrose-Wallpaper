@@ -71,6 +71,11 @@ android {
         sarifReport = true
         htmlReport = true
         ignoreTestSources = true
+        // Suppress the bogus OldTargetApi warning — targetSdk=36 (the
+        // current installable target API in CI) is being flagged because Lint's
+        // bundled API metadata in AGP 9.2 does not recognise it as current.
+        // Re-enable when platforms;android-37 is available to sdkmanager.
+        disable.add("OldTargetApi")
         // Resource shrinking needs R8 keep-rule work for JNI names first;
         // keep the explicit release-build choice out of code-scanning noise.
         disable.add("NotShrinkingResources")

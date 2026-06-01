@@ -7,7 +7,6 @@ local.properties
 
 # Local research docs
 .local/
-docs/superpowers/
 
 # Log/OS Files
 *.log
@@ -103,11 +102,14 @@ test-results/
 /tmp/
 repomix/
 *.tgz
-a.out
 
 # AI agent orchestration (local-only state)
 .mcp.json
 .claude/worktrees/
 .claude/*.lock
 /.claude/plans/
+docs/superpowers/
 .codex/worktrees/
+
+# Native compiler scratch output
+a.out

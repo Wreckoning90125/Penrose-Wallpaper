@@ -138,6 +138,28 @@ Primary references:
 
 ## Repo Rule
 
+- The xyFlow graph is an editor for app semantics, not just a drawing. Every
+  visible wire must correspond to behavior in `renderInputs.ts`, the post-chain
+  walk, signal evaluation, or preset/apply logic. Decorative or "maybe later"
+  ports are bugs because they teach the user a false dataflow.
+- Keep xyFlow ownership boundaries clean. A component that renders `<ReactFlow>`
+  cannot call provider-backed hooks (`useReactFlow`, `useUpdateNodeInternals`,
+  etc.) above that provider. Use `onInit` for the owning component's instance ref,
+  or move hook-using logic into descendants that are actually inside React Flow.
+- Use xyFlow deletion APIs for node delete buttons. Keyboard deletion, toolbar
+  deletion, and in-node X buttons must all flow through `onBeforeDelete`, so
+  Field Source bypass splicing and operator/frame bridge logic stay identical.
+- Treat the viewport as xyFlow state unless a feature truly needs controlled
+  viewport rendering. Store the latest viewport in a ref on move end for preset
+  save/load, and call the instance helpers (`setViewport`, fit helpers) for
+  explicit actions. Do not rerender the whole graph shell on every pan/zoom tick.
+- Scene-pass inlets are single-owner semantic inputs. If a target can receive
+  either a direct material lane or a Field Source lane, connection handling must
+  replace the previous owner instead of accumulating ambiguous parallel wires.
+- Atlas target selection and graph/audio presets are separate user intents.
+  Choosing a tiling target may write family/seed/generation/projection/material
+  settings, but it must not secretly replace the user's graph unless the UI is
+  explicitly a graph preset loader.
 - Do not add a graph-wide `setNodes` loop for frame-rate state. If a value can
   update on pointer move, audio tick, or animation frame, put it in a ref,
   renderer uniform, or narrowly subscribed store.

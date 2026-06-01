@@ -595,10 +595,10 @@ bool Renderer::buildGeometry() {
             // Jacobian in disk mode (no separate tangent needed: the
             // projection acts the same on any world-tangent-shaped
             // vector, miter direction included).
-            borders.push_back({ r.p1x, r.p1y, p1n[0], p1n[1], p1n[2] });
-            borders.push_back({ r.p1x, r.p1y, p1m[0], p1m[1], p1m[2] });
-            borders.push_back({ r.p2x, r.p2y, p2n[0], p2n[1], p2n[2] });
-            borders.push_back({ r.p2x, r.p2y, p2m[0], p2m[1], p2m[2] });
+            borders.push_back({ r.p1x, r.p1y, p1n[0], p1n[1], p1n[2], 0.0f, 0.0f, 0.0f });
+            borders.push_back({ r.p1x, r.p1y, p1m[0], p1m[1], p1m[2], 0.0f, 0.0f, 0.0f });
+            borders.push_back({ r.p2x, r.p2y, p2n[0], p2n[1], p2n[2], 0.0f, 0.0f, 0.0f });
+            borders.push_back({ r.p2x, r.p2y, p2m[0], p2m[1], p2m[2], 0.0f, 0.0f, 0.0f });
             borderIndices.push_back(base + 0);
             borderIndices.push_back(base + 1);
             borderIndices.push_back(base + 2);
@@ -651,11 +651,11 @@ bool Renderer::buildGeometry() {
                 const auto bMit  = cornerMiter(b.edgeIdx, b.end, bWorld);
 
                 const uint32_t base = static_cast<uint32_t>(borders.size());
-                borders.push_back({ p[0], p[1], 0.0f,     0.0f,     0.0f     });
-                borders.push_back({ p[0], p[1], aNorm[0], aNorm[1], aNorm[2] });
-                borders.push_back({ p[0], p[1], aMit[0],  aMit[1],  aMit[2]  });
-                borders.push_back({ p[0], p[1], bMit[0],  bMit[1],  bMit[2]  });
-                borders.push_back({ p[0], p[1], bNorm[0], bNorm[1], bNorm[2] });
+                borders.push_back({ p[0], p[1], 0.0f,     0.0f,     0.0f,     0.0f, 0.0f, 0.0f });
+                borders.push_back({ p[0], p[1], aNorm[0], aNorm[1], aNorm[2], 0.0f, 0.0f, 0.0f });
+                borders.push_back({ p[0], p[1], aMit[0],  aMit[1],  aMit[2],  0.0f, 0.0f, 0.0f });
+                borders.push_back({ p[0], p[1], bMit[0],  bMit[1],  bMit[2],  0.0f, 0.0f, 0.0f });
+                borders.push_back({ p[0], p[1], bNorm[0], bNorm[1], bNorm[2], 0.0f, 0.0f, 0.0f });
                 borderIndices.push_back(base + 0);
                 borderIndices.push_back(base + 1);
                 borderIndices.push_back(base + 2);

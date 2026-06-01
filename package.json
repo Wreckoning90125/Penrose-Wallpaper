@@ -20,14 +20,9 @@
     "web:generate": "python3 tools/generate_web_geometry.py",
     "preweb:dev": "npm run web:generate",
     "preweb:dev:alt": "npm run web:generate",
-    "preweb:dev:tools": "npm run web:generate",
-    "preweb:dev:tools:alt": "npm run web:generate",
     "dev": "npm run web:dev",
-    "react:devtools": "react-devtools",
     "web:dev": "node scripts/dev/run-owned-vite.mts serve",
     "web:dev:alt": "node scripts/dev/run-owned-vite.mts serve --port 5274",
-    "web:dev:tools": "PENROSE_REACT_DEVTOOLS=1 node scripts/dev/run-owned-vite.mts serve",
-    "web:dev:tools:alt": "PENROSE_REACT_DEVTOOLS=1 node scripts/dev/run-owned-vite.mts serve --port 5274",
     "preweb:build": "npm run web:generate",
     "web:build": "vite build",
     "web:preview": "node scripts/dev/run-owned-vite.mts preview",
@@ -45,7 +40,6 @@
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.184.1",
-    "react-devtools": "^7.0.1",
     "typescript": "^6.0.3",
     "vite": "8.0.14"
   }

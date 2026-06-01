@@ -16,7 +16,7 @@ using namespace penrose;
 
 namespace {
 
-inline Renderer* asRenderer(jlong ptr) { return reinterpret_cast<Renderer*>(ptr); }
+inline Renderer* asRenderer(jlong ptr) { return reinterpret_cast<Renderer*>(ptr); } // NOLINT(performance-no-int-to-ptr)
 
 // Decode a Settings struct from the flat int/float arrays the Kotlin side
 // passes us. Layout (ints / floats):

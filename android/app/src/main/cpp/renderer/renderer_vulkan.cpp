@@ -621,6 +621,7 @@ void Renderer::destroyPerFrameResources() {
     }
     if (commandPool_ != VK_NULL_HANDLE && !frames_.empty()) {
         std::vector<VkCommandBuffer> bufs;
+        bufs.reserve(frames_.size());
         for (auto& f : frames_) bufs.push_back(f.cmd);
         vkFreeCommandBuffers(device_, commandPool_, (uint32_t)bufs.size(), bufs.data());
     }

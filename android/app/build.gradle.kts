@@ -78,12 +78,9 @@ android {
         // here documents the suppression rather than burying it in a
         // baseline file.
         disable.add("OldTargetApi")
-        // Version-pinning decisions are reviewed deliberately in
-        // gradle/libs.versions.toml and CI action pins. Lint's dependency
-        // freshness checks duplicate Dependabot and flood SARIF with
-        // non-actionable warnings, so keep the static-analysis ratchet on
-        // code/resource defects.
-        disable.addAll(listOf("GradleDependency", "NewerVersionAvailable"))
+        // Resource shrinking needs R8 keep-rule work for JNI names first;
+        // keep the explicit release-build choice out of code-scanning noise.
+        disable.add("NotShrinkingResources")
     }
 
     externalNativeBuild {
@@ -161,7 +158,6 @@ android {
             // surface yet and shrinking would silently rename `external fun`
             // entry points, breaking the C++ lookup.
             isMinifyEnabled = false
-            //noinspection AndroidLintUnusedResources
             isShrinkResources = false
             signingConfig = signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))

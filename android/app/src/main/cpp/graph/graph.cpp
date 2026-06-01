@@ -218,9 +218,6 @@ public:
                 addIN<float>("t", 0.0f, filt);
                 break;
             case NodeKind::OpClamp:
-                p0 = 0.0f; p1 = 1.0f;
-                addIN<float>("x", 0.0f, filt);
-                break;
             case NodeKind::OpSmoothstep:
                 p0 = 0.0f; p1 = 1.0f;
                 addIN<float>("x", 0.0f, filt);

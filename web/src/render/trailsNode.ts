@@ -11,7 +11,7 @@ import type Node from 'three/src/nodes/core/Node.js';
 import type UniformNode from 'three/src/nodes/core/UniformNode.js';
 import {
   Fn, float, vec2, vec3, uv, texture, convertToTexture, nodeObject,
-  max, mix, sin, cos, cross, dot, normalize, distance, smoothstep, step, sign,
+  max, mix, sin, cos, cross, dot, normalize, distance, smoothstep, step, sign, passTexture,
 } from 'three/tsl';
 
 const _size = new Vector2();
@@ -76,7 +76,11 @@ class TrailsNode extends TempNode {
     this._oldRT = new RenderTarget(1, 1, { depthBuffer: false });
     this._oldRT.texture.name = 'TrailsNode.old';
 
-    this._textureNode = texture(this._compRT.texture);
+    // Three's r184 stateful post nodes expose their result via PassTextureNode so
+    // the builder knows this texture is owned by the pass node. Runtime accepts a
+    // TempNode owner (AfterImageNode does the same); @types narrows it to PassNode.
+    // @ts-expect-error see comment above: r184 addon pattern is passTexture(this, texture).
+    this._textureNode = passTexture(this, this._compRT.texture);
     this._textureNodeOld = texture(this._oldRT.texture);
 
     this._material = null;
@@ -139,9 +143,15 @@ class TrailsNode extends TempNode {
 
       if (this.mode === 'afterimage') {
         const old = textureNodeOld.sample(textureNodeOld.uvNode || uv()).toVar();
-        const m = max(sign(old.sub(0.1)), 0.0);
-        old.mulAssign(this.decay.mul(m));
-        return max(cur, old);
+        const oldGate = max(sign(old.sub(0.1)), 0.0);
+        old.mulAssign(this.decay.mul(oldGate));
+        const accum = max(cur, old);
+        if (this._maskMode === 0) return accum;
+        const bgDist = distance(cur.rgb, this.bg);
+        const surface = smoothstep(0.003, 0.012, bgDist);
+        const isInv = step(1.5, float(this._maskMode));
+        const masked = mix(surface, surface.oneMinus(), isInv);
+        return mix(cur, accum, masked);
       }
 
       const center = vec2(0.5, 0.5);
@@ -156,14 +166,12 @@ class TrailsNode extends TempNode {
       const accum = this.mode === 'both'
         ? max(cur, max(old, textureNodeOld.sample(textureNodeOld.uvNode || uv()).mul(this.decay))).toVar()
         : max(cur, old).toVar();
-
+      if (this._maskMode === 0) return accum;
       const bgDist = distance(cur.rgb, this.bg);
       const surface = smoothstep(0.003, 0.012, bgDist);
-      const maskMode = float(this._maskMode);
-      const notNone = step(0.5, maskMode);
-      const isInv = step(1.5, maskMode);
+      const isInv = step(1.5, float(this._maskMode));
       const masked = mix(surface, surface.oneMinus(), isInv);
-      const m = mix(float(1), masked, notNone);
+      const m = mix(float(1), masked, step(0.5, float(this._maskMode)));
       return mix(cur, accum, m);
     });
 

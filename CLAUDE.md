@@ -15,10 +15,10 @@ support it.
 - `npm run dev` — Vite dev server.
 - `npm run web:preview` — production preview (port-owned; what the user usually runs).
 - **Gate** (run before claiming work is done): `npm run quality:local` — runs
-  `js:policy · ts:policy · typecheck · atlas:verify · render:health ·
+  `js:policy · ts:policy · typecheck · atlas:verify · border:verify ·
   tilings:verify · shaders:validate · cpp:tidy · web:build · graph:contract`.
   The fast inner loop for web changes is
-  `npm run typecheck && npm run ts:policy && npm run js:policy && npm run web:build && npm run render:health && npm run graph:contract`.
+  `npm run typecheck && npm run ts:policy && npm run js:policy && npm run web:build && npm run graph:contract`.
 
 ## Hard rules (these bite — they caused real regressions)
 

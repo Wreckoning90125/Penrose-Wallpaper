@@ -3,7 +3,7 @@
 // renders a NodeFrame with its controls; no closure over the orchestrator, so they
 // live here and the ControlGraph component just maps them in its nodeTypes.
 import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { useReactFlow, type Edge, type Node } from '@xyflow/react';
+import { useNodeId, useReactFlow, type Edge, type Node } from '@xyflow/react';
 import {
   AudioWaveform,
   Clock,
@@ -39,7 +39,7 @@ import { MeterOutlet, drawWheel, formatTime, settingRangeHandlers, settingWithLi
 import { FAMILIES, familyByValue, seedLabel } from '../tiling/families';
 import { dataObject, numberRecordFromObject, stringRecordFromObject } from './nodeData';
 import { fxDescriptor } from '../render/postFxCatalog';
-import { FIELD_SOURCE_OUTLETS, FIELD_SOURCE_PARAMS } from './fieldSourceSpec';
+import { FIELD_SOURCE_OUTLETS, FIELD_SOURCE_PARAMS, FIELD_SOURCE_PHASE_INLET } from './fieldSourceSpec';
 import {
   CLOCK_CONTROLS,
   BORDER_CONTROLS,
@@ -316,7 +316,11 @@ export const MaterialNode = memo(function MaterialNode({ data }: NodeComponentPr
         { id: 'color', label: 'Color' },
         ...portSpecsFromControls(MATERIAL_CONTROLS),
       ]}
-      outlets={[{ id: 'surface', label: 'Surface' }]}
+      outlets={[
+        { id: 'surface', label: 'Surface' },
+        { id: 'relief', label: 'Relief' },
+        { id: 'color', label: 'Color' },
+      ]}
       activeInputs={data.activeInputs}
       activeOutputs={data.activeOutputs}
     >
@@ -390,8 +394,8 @@ export const EdgeProfileNode = memo(function EdgeProfileNode({ data }: NodeCompo
       kind="surface"
       wide
       variant={0}
-      inlets={portSpecsFromControls(BORDER_CONTROLS.slice(1))}
-      outlets={[{ id: 'border', label: 'Border' }]}
+      inlets={portSpecsFromControls(BORDER_CONTROLS)}
+      outlets={[{ id: 'border', label: 'Out' }]}
       activeInputs={data.activeInputs}
       activeOutputs={data.activeOutputs}
     >
@@ -504,8 +508,7 @@ export const ClockNode = memo(function ClockNode({ data }: NodeComponentProps<Cl
   const deleteClock = useCallback(() => {
     const nodeId = data.id;
     if (!nodeId || !data.deletable) return;
-    flow.setNodes(current => current.filter(node => node.id !== nodeId));
-    flow.setEdges(current => current.filter(edge => edge.source !== nodeId && edge.target !== nodeId));
+    void flow.deleteElements({ nodes: [{ id: nodeId }] });
   }, [data.deletable, data.id, flow]);
   return (
     <NodeFrame
@@ -561,7 +564,7 @@ export const ClockNode = memo(function ClockNode({ data }: NodeComponentProps<Cl
 });
 
 export const AudioTransportNode = memo(function AudioTransportNode({ data }: NodeComponentProps<AudioTransportNodeData>) {
-  const snapshot = useSyncExternalStore(data.audio.subscribe, data.audio.getSnapshot, data.audio.getSnapshot);
+  const snapshot = useSyncExternalStore(data.audio.subscribeUi, data.audio.getSnapshot, data.audio.getSnapshot);
   const transport = snapshot.transport;
   const hasFile = snapshot.status === 'file';
   const seekMax = Math.max(transport.duration, 0.01);
@@ -638,7 +641,7 @@ export const AudioTransportNode = memo(function AudioTransportNode({ data }: Nod
 });
 
 export const AudioAnalysisNode = memo(function AudioAnalysisNode({ data }: NodeComponentProps<AudioAnalysisNodeData>) {
-  const snapshot = useSyncExternalStore<AudioSnapshot>(data.audio.subscribe, data.audio.getSnapshot, data.audio.getSnapshot);
+  const snapshot = useSyncExternalStore<AudioSnapshot>(data.audio.subscribeUi, data.audio.getSnapshot, data.audio.getSnapshot);
   const features = snapshot.features;
   return (
     <NodeFrame
@@ -674,8 +677,7 @@ export const OperatorNode = memo(function OperatorNode({ data }: NodeComponentPr
 
   const deleteOperator = useCallback(() => {
     const nodeId = data.id;
-    flow.setNodes(current => current.filter(node => node.id !== nodeId));
-    flow.setEdges(current => current.filter(edge => edge.source !== nodeId && edge.target !== nodeId));
+    void flow.deleteElements({ nodes: [{ id: nodeId }] });
   }, [data.id, flow]);
 
   const updateValue = useCallback((key: string, value: number) => {
@@ -788,6 +790,12 @@ export const OperatorNode = memo(function OperatorNode({ data }: NodeComponentPr
 });
 
 export const RippleTargetNode = memo(function RippleTargetNode({ data }: NodeComponentProps<SettingsNodeData>) {
+  const flow = useReactFlow<Node, Edge>();
+  const nodeId = useNodeId();
+  const deleteNode = useCallback(() => {
+    if (!nodeId) return;
+    void flow.deleteElements({ nodes: [{ id: nodeId }] });
+  }, [flow, nodeId]);
   return (
     <NodeFrame
       title="Field source"
@@ -795,11 +803,14 @@ export const RippleTargetNode = memo(function RippleTargetNode({ data }: NodeCom
       kind="surface"
       wide
       variant={2}
-      inlets={portSpecsFromControls(RIPPLE_TARGET_CONTROLS)}
+      inlets={[FIELD_SOURCE_PHASE_INLET, { id: 'relief', label: 'Relief in' }, { id: 'color', label: 'Color in' }, ...portSpecsFromControls(RIPPLE_TARGET_CONTROLS)]}
       outlets={[{ id: 'displace', label: 'Displace' }, { id: 'relief', label: 'Relief' }, { id: 'color', label: 'Color' }, { id: 'undulate', label: 'Undulate' }]}
       activeInputs={data.activeInputs}
       activeOutputs={data.activeOutputs}
     >
+      <button type="button" className="node-delete nodrag nopan" aria-label="Delete field source" onClick={deleteNode}>
+        <X size={13} />
+      </button>
       <div className="control-grid two-col">
         {RIPPLE_TARGET_CONTROLS.map(([key, label, min, max, step]) => {
           const handlers = settingRangeHandlers(data, key);
@@ -832,8 +843,7 @@ export const FieldSourceNode = memo(function FieldSourceNode({ data }: NodeCompo
   const flow = useReactFlow<Node, Edge>();
   const deleteNode = useCallback(() => {
     const id = data.id;
-    flow.setNodes(current => current.filter(node => node.id !== id));
-    flow.setEdges(current => current.filter(edge => edge.source !== id && edge.target !== id));
+    void flow.deleteElements({ nodes: [{ id }] });
   }, [data.id, flow]);
   return (
     <NodeFrame
@@ -842,8 +852,12 @@ export const FieldSourceNode = memo(function FieldSourceNode({ data }: NodeCompo
       kind="surface"
       wide
       variant={2}
-      inlets={FIELD_SOURCE_PARAMS.map(([key, label]) => ({ id: key, label }))}
-      outlets={FIELD_SOURCE_OUTLETS}
+      inlets={[FIELD_SOURCE_PHASE_INLET, { id: 'relief', label: 'Relief in' }, { id: 'color', label: 'Color in' }, ...FIELD_SOURCE_PARAMS.map(([key, label]) => ({ id: key, label }))]}
+      outlets={FIELD_SOURCE_OUTLETS.map(port => (
+        port.id === 'relief' ? { ...port, label: 'Relief' }
+          : port.id === 'color' ? { ...port, label: 'Color' }
+          : port
+      ))}
       activeInputs={data.activeInputs}
       activeOutputs={data.activeOutputs}
     >
@@ -876,8 +890,7 @@ export const FxNode = memo(function FxNode({ data }: NodeComponentProps<FxNodeDa
   const descriptor = fxDescriptor(data.kind);
   const deleteNode = useCallback(() => {
     const id = data.id;
-    flow.setNodes(current => current.filter(node => node.id !== id));
-    flow.setEdges(current => current.filter(edge => edge.source !== id && edge.target !== id));
+    void flow.deleteElements({ nodes: [{ id }] });
   }, [data.id, flow]);
   if (!descriptor) return null;
   const Icon = fxIconComponent(descriptor.icon);
@@ -919,7 +932,7 @@ export const FxNode = memo(function FxNode({ data }: NodeComponentProps<FxNodeDa
       {data.domainWarning ? (
         <div
           className="fx-domain-warning nodrag nopan"
-          data-tip="Linear-domain effect placed after Tone map, where the image is already display-referred. Move it before Tone map for correct results."
+          title="Linear-domain effect placed after Tone map, where the image is already display-referred. Move it before Tone map for correct results."
         >
           <TriangleAlert size={12} />
           <span>after tone map</span>

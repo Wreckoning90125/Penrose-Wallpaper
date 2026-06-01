@@ -128,7 +128,7 @@ export function RangeControl({
   }, [endSliderGesture]);
 
   return (
-    <label className="range-row nodrag nopan" data-tip={title}>
+    <label className="range-row nodrag nopan" title={title}>
       <span>{label}</span>
       <input
         type="range"

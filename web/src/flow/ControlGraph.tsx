@@ -14,7 +14,7 @@ import {
   useNodesState,
   useReactFlow,
 } from '@xyflow/react';
-import type { Connection, Edge, Node, OnBeforeDelete } from '@xyflow/react';
+import type { Connection, Edge, Node, OnBeforeDelete, OnMove, ReactFlowInstance, Viewport } from '@xyflow/react';
 import {
   Activity,
   AlignStartVertical,
@@ -30,7 +30,8 @@ import {
 } from 'lucide-react';
 import { EFFECT_CATALOG, fxDescriptor, fxParamDefaults, fxSelectDefaults, isFxKind } from '../render/postFxCatalog';
 import { fxIconComponent } from './fxIcons';
-import { isSignalSource, isSignalTarget } from './signalUtils';
+import { isSignalSource, isSignalTarget, signalKey } from './signalUtils';
+import { isMaterialLaneHandle, spliceMaterialFieldBypasses } from './materialLanes';
 import {
   evaluateSignals,
   fieldModulatedValues,
@@ -40,7 +41,7 @@ import {
   type LiveOperatorData,
   type LiveOperatorDataMap,
 } from './signalEval';
-import { deriveFieldSlots, fieldParamDefaults } from './fieldSourceSpec';
+import { deriveFieldSlots, FIELD_SOURCE_PHASE_INLET, fieldParamDefaults } from './fieldSourceSpec';
 import { renderInputsFromEdges } from './renderInputs';
 import { dataBoolean, dataObject, dataString, numberRecordFromObject, stringRecordFromObject } from './nodeData';
 import {
@@ -62,6 +63,7 @@ import {
   alignedViewportForNodes,
   allNodesMeasured,
   applyAlignedFlowFit,
+  autoLayoutNodes,
   layoutAdvanceHeight,
   measuredLayoutPositions,
   measuredLayoutSignature,
@@ -123,15 +125,11 @@ import type {
   WebAudioGraph,
 } from '../types';
 
-
 type AddMenuCategory = 'sources' | 'operators' | 'effects' | null;
 type AddCategorySpec = {
   id: Exclude<AddMenuCategory, null>;
   label: string;
 };
-
-
-
 
 const ADD_CATEGORIES: AddCategorySpec[] = [
   { id: 'sources', label: 'Sources' },
@@ -143,15 +141,19 @@ type DefaultGainOperator = {
   gainKey: GainKey;
   id: string;
   label: string;
-  position: { x: number; y: number };
 };
 
 const DEFAULT_GAIN_OPERATORS: readonly DefaultGainOperator[] = [
-  { id: 'operator-gain-metal', gainKey: 'metal', label: 'Gain', position: { x: 720, y: 760 } },
-  { id: 'operator-gain-film', gainKey: 'film', label: 'Gain', position: { x: 720, y: 940 } },
-  { id: 'operator-gain-glow', gainKey: 'emissive', label: 'Gain', position: { x: 720, y: 1120 } },
-  { id: 'operator-gain-relief', gainKey: 'relief', label: 'Gain', position: { x: 720, y: 1300 } },
+  { id: 'operator-gain-metal', gainKey: 'metal', label: 'Gain' },
+  { id: 'operator-gain-film', gainKey: 'film', label: 'Gain' },
+  { id: 'operator-gain-glow', gainKey: 'emissive', label: 'Gain' },
+  { id: 'operator-gain-relief', gainKey: 'relief', label: 'Gain' },
 ];
+
+function pendingLayoutPosition(): { x: number; y: number } {
+  // Placeholder only; autoLayoutNodes assigns the real default-preset positions.
+  return { x: 0, y: 0 };
+}
 
 type ControlGraphProps = {
   manifest: AtlasManifest | null;
@@ -186,6 +188,7 @@ type ControlGraphProps = {
   onAudioModulation: (values: AudioModulationValues) => void;
   onPostChain: (spec: PostChainSpec) => void;
   onRenderInputs: (inputs: RenderInputs) => void;
+  onFieldPhase: (phase: number) => void;
   onFieldSlots: (slots: FieldSlot[]) => void;
   onGraphPresetState: (state: GraphPresetAppState) => void;
   onDragMode: (mode: DragMode) => void;
@@ -196,25 +199,18 @@ type ControlGraphProps = {
   onResetView: () => void;
 };
 
-
-
-
-
-
-
 type FlowSelection = {
   nodes: Node[];
   edges: Edge[];
 };
-
 
 type MiddleZoomState = {
   y: number;
   zoom: number;
 } | null;
 
-
 const NORMALIZE_GRAPH_PRESET_VIEWPORT_ON_SAVE = false;
+const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 0.62 };
 const PROTECTED_NODE_IDS = new Set([
   'atlas',
   'tiling',
@@ -226,7 +222,6 @@ const PROTECTED_NODE_IDS = new Set([
   'transport',
   'analysis',
   'clock',
-  'postfx',
   'renderer',
   'tonemap',
   'display',
@@ -237,12 +232,25 @@ const DELETABLE_BASE_NODE_IDS = new Set([
   'operator-gain-film',
   'operator-invert-1',
   'operator-gain-relief',
+  'postfx',
 ]);
 
+const DEFAULT_FIELD_HANDLES = new Set(['displace', 'relief', 'color', 'undulate']);
+const ADDABLE_FIELD_HANDLES = new Set(['relief', 'undulate', 'color']);
 
+function isMaterialLaneSource(connection: GraphConnectionLike): boolean {
+  return connection.source === 'material'
+    && isMaterialLaneHandle(connection.sourceHandle);
+}
 
-
-
+function isDefaultFieldConnection(connection: GraphConnectionLike): boolean {
+  const sourceHandle = connection.sourceHandle ?? null;
+  return connection.source === 'postfx'
+    && connection.target === 'renderer'
+    && sourceHandle !== null
+    && sourceHandle === (connection.targetHandle ?? null)
+    && DEFAULT_FIELD_HANDLES.has(sourceHandle);
+}
 
 type GraphConnectionLike = {
   source: string | null;
@@ -267,22 +275,32 @@ function isValidGraphConnection(connection: GraphConnectionLike, nodes: readonly
   if (source.id === 'tiling') return sourceHandle === 'out' && target.id === 'projection' && targetHandle === 'in';
   if (source.id === 'projection') return sourceHandle === 'out' && target.id === 'palette' && targetHandle === 'in';
   if (source.id === 'palette') return sourceHandle === 'color' && target.id === 'material' && targetHandle === 'color';
-  if (source.id === 'material') return sourceHandle === 'surface' && target.id === 'renderer' && targetHandle === 'surface';
+  if (source.id === 'material') {
+    if (sourceHandle === 'surface') return target.id === 'renderer' && targetHandle === 'surface';
+    if (isMaterialLaneHandle(sourceHandle)) {
+      return targetHandle === sourceHandle
+        && (
+          target.id === 'renderer'
+          || target.id === 'postfx'
+          || target.type === 'fieldSource'
+        );
+    }
+    return false;
+  }
   if (source.id === 'lighting') return sourceHandle === 'out' && target.id === 'renderer' && targetHandle === 'lighting';
   if (source.id === 'postfx') {
     // Field source: its four field outlets each wire only to the matching
     // renderer field inlet. Without this rule a cut field wire can't be re-added.
-    return target.id === 'renderer'
-      && (sourceHandle === 'displace' || sourceHandle === 'relief' || sourceHandle === 'color' || sourceHandle === 'undulate')
-      && targetHandle === sourceHandle;
+    return isDefaultFieldConnection(connection);
   }
   if (source.id === 'edgeProfile') return sourceHandle === 'border' && target.id === 'renderer' && targetHandle === 'border';
+  if (source.id === 'clock' && sourceHandle === 'out' && targetHandle === FIELD_SOURCE_PHASE_INLET.id) {
+    return (target.id === 'postfx' || target.type === 'fieldSource') && targetHandle === FIELD_SOURCE_PHASE_INLET.id;
+  }
   if (source.type === 'fieldSource') {
     // Addable field source: each field outlet wires only to its matching renderer
     // field inlet, exactly like the default field source.
-    return target.id === 'renderer'
-      && (sourceHandle === 'relief' || sourceHandle === 'undulate' || sourceHandle === 'color')
-      && targetHandle === sourceHandle;
+    return target.id === 'renderer' && sourceHandle === targetHandle && ADDABLE_FIELD_HANDLES.has(sourceHandle);
   }
   if (source.id === 'transport') return sourceHandle === 'out' && target.id === 'analysis' && targetHandle === 'transport';
 
@@ -461,6 +479,7 @@ function createOperatorNode(
 
 function createGainOperatorNode(
   operator: DefaultGainOperator,
+  position: { x: number; y: number },
   gain: number,
   onGain: (key: GainKey, value: number) => void,
   editCallbacks: EditCallbacks,
@@ -470,7 +489,7 @@ function createGainOperatorNode(
   return {
     id: operator.id,
     type: 'operator',
-    position: operator.position,
+    position,
     data: {
       gainKey: operator.gainKey,
       id: operator.id,
@@ -544,10 +563,91 @@ function editKeyIsIn(paramKey: string | null, keys: readonly SettingKey[]): bool
   return paramKey !== null && keys.some(key => key === paramKey);
 }
 
+function sortedRecordSignature(record: Record<string, number | string | boolean | null | undefined>): string {
+  return Object.keys(record).sort().map(key => `${key}:${String(record[key])}`).join(',');
+}
+
+function numberRecordSignature(record: Record<string, number>): string {
+  return sortedRecordSignature(record);
+}
+
+function stringRecordSignature(record: Record<string, string>): string {
+  return sortedRecordSignature(record);
+}
+
+function looseSettingsSignature(value: object | null, keys: readonly SettingKey[]): string {
+  if (!value) return '';
+  return keys.map(key => `${key}:${String(Object.getOwnPropertyDescriptor(value, key)?.value)}`).join('|');
+}
+
+function runtimeNodeSignature(node: Node): string {
+  const type = String(node.type ?? '');
+  if (type === 'fx') {
+    return [
+      node.id,
+      type,
+      dataString(node.data, 'kind'),
+      dataBoolean(node.data, 'bypass') ? '1' : '0',
+      numberRecordSignature(numberRecordFromObject(dataObject(node.data, 'values'))),
+      stringRecordSignature(stringRecordFromObject(dataObject(node.data, 'selects'))),
+    ].join(':');
+  }
+  if (type === 'operator') {
+    const spec = dataObject(node.data, 'spec');
+    return [
+      node.id,
+      type,
+      spec ? dataString(spec, 'kind') : '',
+      dataString(node.data, 'gainKey'),
+      numberRecordSignature(numberRecordFromObject(dataObject(node.data, 'values'))),
+      stringRecordSignature(stringRecordFromObject(dataObject(node.data, 'selectValues'))),
+    ].join(':');
+  }
+  if (type === 'fieldSource') {
+    return [
+      node.id,
+      type,
+      numberRecordSignature(numberRecordFromObject(dataObject(node.data, 'values'))),
+    ].join(':');
+  }
+  if (type === 'clock') {
+    return [
+      node.id,
+      type,
+      looseSettingsSignature(dataObject(node.data, 'settings'), CLOCK_SETTING_KEYS),
+    ].join(':');
+  }
+  return `${node.id}:${type}`;
+}
+
+function runtimeEdgeSignature(edge: Edge): string {
+  return [
+    edge.id,
+    edge.source,
+    edge.sourceHandle ?? '',
+    edge.target,
+    edge.targetHandle ?? '',
+  ].join(':');
+}
+
+function graphRuntimeSignature(nodes: readonly Node[], edges: readonly Edge[]): string {
+  return [
+    nodes.map(runtimeNodeSignature).sort().join('|'),
+    edges.map(runtimeEdgeSignature).sort().join('|'),
+  ].join('||');
+}
+
+
+function clockNodeRunning(node: Node): boolean {
+  if (node.type !== 'clock') return false;
+  const settings = dataObject(node.data, 'settings');
+  const enabled = String(Object.getOwnPropertyDescriptor(settings, 'clock_enabled')?.value ?? '1') !== '0';
+  const parsedRate = Number.parseInt(String(Object.getOwnPropertyDescriptor(settings, 'clock_rate')?.value ?? '100'), 10);
+  return enabled && Number.isFinite(parsedRate) && parsedRate > 0;
+}
 
 
 export function ControlGraph(props: ControlGraphProps) {
-  const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 0.62 });
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [layoutRequest, setLayoutRequest] = useState(0);
   const [middleZoom, setMiddleZoom] = useState<MiddleZoomState>(null);
@@ -559,6 +659,8 @@ export function ControlGraph(props: ControlGraphProps) {
   const [flowSize, setFlowSize] = useState({ height: 0, width: 0 });
   const flowShellRef = useRef<HTMLDivElement | null>(null);
   const flowToolbarRef = useRef<HTMLDivElement | null>(null);
+  const flowInstanceRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
+  const viewportRef = useRef<Viewport>(DEFAULT_VIEWPORT);
   const graphPresetInputRef = useRef<HTMLInputElement | null>(null);
   const initialAudioRef = useRef(props.audio);
   const initialSettingsRef = useRef(props.settings);
@@ -574,6 +676,10 @@ export function ControlGraph(props: ControlGraphProps) {
   const fieldIdRef = useRef(1);
   const fieldValuesRef = useRef<Record<string, Record<string, number>>>({});
   const clockIdRef = useRef(2);
+  const clockEpochRef = useRef(typeof performance === 'undefined' ? 0 : performance.now());
+  const liveClockSettingsRef = useRef<Settings>(props.settings);
+  const emitGraphFrameRef = useRef(0);
+  const audioModulationSignatureRef = useRef('');
   const activeEditRef = useRef<string | null>(null);
   const [editFlush, setEditFlush] = useState(0);
   const editCallbacks = useMemo<EditCallbacks>(() => ({
@@ -587,22 +693,82 @@ export function ControlGraph(props: ControlGraphProps) {
       setEditFlush(value => value + 1);
     },
   }), [props.onBeginEdit, props.onEndEdit]);
+  useEffect(() => {
+    if (editKeyIsIn(activeEditRef.current, CLOCK_SETTING_KEYS)) return;
+    liveClockSettingsRef.current = props.settings;
+  }, [props.settings]);
+  const resetClock = useCallback(() => {
+    clockEpochRef.current = performance.now();
+    props.onResetClock();
+  }, [props.onResetClock]);
+  const onClockPreviewSetting = useCallback((key: SettingKey, value: SettingValue) => {
+    if (CLOCK_SETTING_KEYS.some(item => item === key)) {
+      liveClockSettingsRef.current = { ...liveClockSettingsRef.current, [key]: value };
+    }
+    props.onPreviewSetting(key, value);
+  }, [props.onPreviewSetting]);
+  const onClockSetting = useCallback((key: SettingKey, value: SettingValue) => {
+    if (CLOCK_SETTING_KEYS.some(item => item === key)) {
+      liveClockSettingsRef.current = { ...liveClockSettingsRef.current, [key]: value };
+    }
+    props.onSetting(key, value);
+  }, [props.onSetting]);
+  const runtimeNodes = useCallback((): readonly Node[] => (
+    nodesRef.current.map(node => node.type === 'clock'
+      ? { ...node, data: { ...node.data, settings: liveClockSettingsRef.current } }
+      : node)
+  ), []);
+
   const emitAudioGraph = useCallback(() => {
     const features = props.audio.getSnapshot().features;
-    const signals = evaluateSignals(features, nodesRef.current, edgesRef.current, audioOperatorStateRef.current, liveOperatorDataRef.current);
-    props.onAudioModulation(modulationsFromSignals(signals, edgesRef.current));
-    const chain = derivePostChain(nodesRef.current, edgesRef.current).map(node => {
-      const flowNode = nodesRef.current.find(item => item.id === node.id);
+    const now = performance.now();
+    const nodesForRuntime = runtimeNodes();
+    const signals = evaluateSignals(
+      features,
+      nodesForRuntime,
+      edgesRef.current,
+      audioOperatorStateRef.current,
+      liveOperatorDataRef.current,
+      now,
+      clockEpochRef.current,
+    );
+    const phaseForNode = (nodeId: string): number => {
+      const edge = edgesRef.current.find(item => item.target === nodeId && item.targetHandle === FIELD_SOURCE_PHASE_INLET.id);
+      if (!edge) return 0;
+      const value = signals.get(signalKey(edge.source, edge.sourceHandle));
+      return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+    };
+    const modulations = modulationsFromSignals(signals, edgesRef.current);
+    const modulationSignature = Object.entries(modulations)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => `${key}:${typeof value === 'number' ? value : ''}`)
+      .join('|');
+    if (audioModulationSignatureRef.current !== modulationSignature) {
+      audioModulationSignatureRef.current = modulationSignature;
+      props.onAudioModulation(modulations);
+    }
+    const chain = derivePostChain(nodesForRuntime, edgesRef.current).map(node => {
+      const flowNode = nodesForRuntime.find(item => item.id === node.id);
       if (!flowNode) return node;
       return { ...node, params: fxModulatedParams(flowNode, edgesRef.current, signals, activeEditRef.current, props.dragMode) };
     });
     props.onPostChain(chain);
+    props.onFieldPhase(phaseForNode('postfx'));
     props.onFieldSlots(deriveFieldSlots(
-      nodesRef.current,
+      nodesForRuntime,
       edgesRef.current,
       node => fieldModulatedValues(node, edgesRef.current, signals, activeEditRef.current, props.dragMode),
+      node => phaseForNode(node.id),
     ));
-  }, [props.audio, props.dragMode, props.onAudioModulation, props.onFieldSlots, props.onPostChain]);
+  }, [props.audio, props.dragMode, props.onAudioModulation, props.onFieldPhase, props.onFieldSlots, props.onPostChain, runtimeNodes]);
+
+  const scheduleEmitAudioGraph = useCallback(() => {
+    if (emitGraphFrameRef.current) return;
+    emitGraphFrameRef.current = requestAnimationFrame(() => {
+      emitGraphFrameRef.current = 0;
+      emitAudioGraph();
+    });
+  }, [emitAudioGraph]);
   const onOperatorPreview = useCallback<NonNullable<OperatorNodeData['onOperatorPreview']>>((id, values, selectValues) => {
     liveOperatorDataRef.current = {
       ...liveOperatorDataRef.current,
@@ -613,11 +779,11 @@ export function ControlGraph(props: ControlGraphProps) {
     };
     emitAudioGraph();
   }, [emitAudioGraph]);
-  const baseNodes = useMemo<Node[]>(() => [
+  const baseNodes = useMemo<Node[]>(() => autoLayoutNodes([
     {
       id: 'atlas',
       type: 'atlas',
-      position: { x: 0, y: 0 },
+      position: pendingLayoutPosition(),
       data: {
         categories: props.manifest?.categories ?? [],
         items: props.activeCategory?.items ?? [],
@@ -631,7 +797,7 @@ export function ControlGraph(props: ControlGraphProps) {
     {
       id: 'tiling',
       type: 'tiling',
-      position: { x: 360, y: 0 },
+      position: pendingLayoutPosition(),
       data: {
         settings: initialSettingsRef.current,
         seedOptions: props.seedOptions,
@@ -646,7 +812,7 @@ export function ControlGraph(props: ControlGraphProps) {
     {
       id: 'palette',
       type: 'palette',
-      position: { x: 1080, y: 0 },
+      position: pendingLayoutPosition(),
       data: {
         settings: initialSettingsRef.current,
         palette: props.palette,
@@ -666,7 +832,7 @@ export function ControlGraph(props: ControlGraphProps) {
     {
       id: 'projection',
       type: 'projection',
-      position: { x: 720, y: 0 },
+      position: pendingLayoutPosition(),
       data: {
         settings: initialSettingsRef.current,
         liveBoostStore: props.liveBoostStore,
@@ -681,7 +847,7 @@ export function ControlGraph(props: ControlGraphProps) {
     {
       id: 'material',
       type: 'material',
-      position: { x: 1080, y: 360 },
+      position: pendingLayoutPosition(),
       data: {
         settings: initialSettingsRef.current,
         onBeginEdit: editCallbacks.onBeginEdit,
@@ -693,7 +859,7 @@ export function ControlGraph(props: ControlGraphProps) {
     {
       id: 'lighting',
       type: 'lighting',
-      position: { x: 1080, y: 880 },
+      position: pendingLayoutPosition(),
       data: {
         settings: initialSettingsRef.current,
         onBeginEdit: editCallbacks.onBeginEdit,
@@ -705,7 +871,7 @@ export function ControlGraph(props: ControlGraphProps) {
     {
       id: 'edgeProfile',
       type: 'edgeProfile',
-      position: { x: 1080, y: 1240 },
+      position: pendingLayoutPosition(),
       data: {
         settings: initialSettingsRef.current,
         onBeginEdit: editCallbacks.onBeginEdit,
@@ -717,7 +883,7 @@ export function ControlGraph(props: ControlGraphProps) {
     {
       id: 'transport',
       type: 'transport',
-      position: { x: 0, y: 360 },
+      position: pendingLayoutPosition(),
       data: {
         audio: initialAudioRef.current,
       },
@@ -725,7 +891,7 @@ export function ControlGraph(props: ControlGraphProps) {
     {
       id: 'analysis',
       type: 'analysis',
-      position: { x: 360, y: 360 },
+      position: pendingLayoutPosition(),
       data: {
         audio: initialAudioRef.current,
       },
@@ -733,28 +899,29 @@ export function ControlGraph(props: ControlGraphProps) {
     {
       id: 'clock',
       type: 'clock',
-      position: { x: 0, y: 720 },
+      position: pendingLayoutPosition(),
       data: {
         settings: initialSettingsRef.current,
         onBeginEdit: editCallbacks.onBeginEdit,
         onEndEdit: editCallbacks.onEndEdit,
-        onSetting: props.onSetting,
-        onPreviewSetting: props.onPreviewSetting,
-        onResetClock: props.onResetClock,
+        onSetting: onClockSetting,
+        onPreviewSetting: onClockPreviewSetting,
+        onResetClock: resetClock,
       },
     },
     ...DEFAULT_GAIN_OPERATORS.map(operator => createGainOperatorNode(
       operator,
+      pendingLayoutPosition(),
       initialGainsRef.current[operator.gainKey],
       props.onGain,
       editCallbacks,
       onOperatorPreview,
     )),
-    createOperatorNode('operator-invert-1', 'invert', { x: 720, y: 360 }, editCallbacks, onOperatorPreview),
+    createOperatorNode('operator-invert-1', 'invert', pendingLayoutPosition(), editCallbacks, onOperatorPreview),
     {
       id: 'postfx',
       type: 'postfx',
-      position: { x: 1080, y: 720 },
+      position: pendingLayoutPosition(),
       data: {
         settings: initialSettingsRef.current,
         onBeginEdit: editCallbacks.onBeginEdit,
@@ -766,7 +933,7 @@ export function ControlGraph(props: ControlGraphProps) {
     {
       id: 'renderer',
       type: 'renderer',
-      position: { x: 1440, y: 0 },
+      position: pendingLayoutPosition(),
       data: {
         tiles: props.tiles,
         loading: props.loading,
@@ -775,7 +942,7 @@ export function ControlGraph(props: ControlGraphProps) {
     {
       id: 'tonemap',
       type: 'fx',
-      position: { x: 1440, y: 360 },
+      position: pendingLayoutPosition(),
       data: {
         id: 'tonemap', kind: 'toneMap', bypass: false, values: {}, selects: {},
         onBeginEdit: editCallbacks.onBeginEdit,
@@ -785,17 +952,19 @@ export function ControlGraph(props: ControlGraphProps) {
     {
       id: 'display',
       type: 'display',
-      position: { x: 1440, y: 600 },
+      position: pendingLayoutPosition(),
       data: {},
     },
-  ].map(node => ({ ...node, dragHandle: '.flow-node-title' })), [
+  ].map(node => ({ ...node, dragHandle: '.flow-node-title' }))), [
     editCallbacks,
+    onClockPreviewSetting,
+    onClockSetting,
     onOperatorPreview,
     props.liveBoostStore,
     props.onGain,
     props.onPreviewSetting,
     props.onResetBoost,
-    props.onResetClock,
+    resetClock,
     props.onResetView,
     props.onSetting,
   ]);
@@ -806,6 +975,9 @@ export function ControlGraph(props: ControlGraphProps) {
     { id: 'projection-palette', source: 'projection', sourceHandle: 'out', target: 'palette', targetHandle: 'in', animated: true },
     { id: 'palette-material', source: 'palette', sourceHandle: 'color', target: 'material', targetHandle: 'color' },
     { id: 'material-renderer', source: 'material', sourceHandle: 'surface', target: 'renderer', targetHandle: 'surface' },
+    { id: 'material-postfx-relief', source: 'material', sourceHandle: 'relief', target: 'postfx', targetHandle: 'relief' },
+    { id: 'material-postfx-color', source: 'material', sourceHandle: 'color', target: 'postfx', targetHandle: 'color' },
+    { id: 'clock-postfx-phase', source: 'clock', sourceHandle: 'out', target: 'postfx', targetHandle: FIELD_SOURCE_PHASE_INLET.id, animated: true },
     { id: 'lighting-renderer', source: 'lighting', sourceHandle: 'out', target: 'renderer', targetHandle: 'lighting' },
     { id: 'postfx-renderer-displace', source: 'postfx', sourceHandle: 'displace', target: 'renderer', targetHandle: 'displace' },
     { id: 'postfx-renderer-relief', source: 'postfx', sourceHandle: 'relief', target: 'renderer', targetHandle: 'relief' },
@@ -835,6 +1007,14 @@ export function ControlGraph(props: ControlGraphProps) {
   useEffect(() => {
     edgesRef.current = edges;
   }, [edges]);
+  const runtimeGraphKey = useMemo(() => graphRuntimeSignature(nodes, edges), [edges, nodes]);
+  const clockGraphActive = useMemo(() => {
+    const nodeLookup = new Map(nodes.map(node => [node.id, node]));
+    return edges.some(edge => {
+      const source = nodeLookup.get(edge.source);
+      return source?.type === 'clock' && edge.sourceHandle === 'out' && clockNodeRunning(source);
+    });
+  }, [edges, nodes]);
   const flowFitMetrics = useMemo<FlowFitMetrics>(() => ({
     chromeLeft: flowChromeLeft,
     chromeTop: flowChromeTop,
@@ -1119,9 +1299,9 @@ export function ControlGraph(props: ControlGraphProps) {
             deletable: node.id !== 'clock',
             onBeginEdit: editCallbacks.onBeginEdit,
             onEndEdit: editCallbacks.onEndEdit,
-            onResetClock: props.onResetClock,
-            onSetting: props.onSetting,
-            onPreviewSetting: props.onPreviewSetting,
+            onResetClock: resetClock,
+            onSetting: onClockSetting,
+            onPreviewSetting: onClockPreviewSetting,
             settings: props.settings,
           },
         }
@@ -1130,9 +1310,9 @@ export function ControlGraph(props: ControlGraphProps) {
     clockSettingsKey,
     editCallbacks,
     editFlush,
-    props.onResetClock,
-    props.onPreviewSetting,
-    props.onSetting,
+    onClockPreviewSetting,
+    onClockSetting,
+    resetClock,
     setNodes,
   ]);
 
@@ -1223,18 +1403,42 @@ export function ControlGraph(props: ControlGraphProps) {
   }, [edges, fxBypassSignature, setNodes]);
 
   useEffect(() => {
-    emitAudioGraph();
-    return props.audio.subscribe(emitAudioGraph);
-  }, [emitAudioGraph, edges, nodes, props.audio]);
+    return props.audio.subscribe(scheduleEmitAudioGraph);
+  }, [props.audio, scheduleEmitAudioGraph]);
+
+  useEffect(() => () => {
+    if (emitGraphFrameRef.current) cancelAnimationFrame(emitGraphFrameRef.current);
+  }, []);
 
   useEffect(() => {
-    props.onRenderInputs(renderInputsFromEdges(nodes, edges));
-  }, [edges, nodes, props.onRenderInputs]);
+    if (!clockGraphActive) return undefined;
+    let frame = 0;
+    const tick = () => {
+      scheduleEmitAudioGraph();
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [clockGraphActive, scheduleEmitAudioGraph]);
+
+  useEffect(() => {
+    emitAudioGraph();
+  }, [emitAudioGraph, runtimeGraphKey]);
+
+  useEffect(() => {
+    props.onRenderInputs(renderInputsFromEdges(nodesRef.current, edgesRef.current));
+  }, [props.onRenderInputs, runtimeGraphKey]);
 
   const onConnect = useCallback((connection: Connection) => {
     if (!isValidGraphConnection(connection, nodes)) return;
     setEdges(current => {
-      const next = current.filter(edge => !(edge.target === connection.target && edge.targetHandle === connection.targetHandle));
+      const next = current.filter(edge => {
+        if (edge.target === connection.target && edge.targetHandle === connection.targetHandle) return false;
+        if (isMaterialLaneSource(connection) && edge.source === 'material' && edge.sourceHandle === connection.sourceHandle) return false;
+        return true;
+      });
       return addEdge({ ...connection, animated: true }, next);
     });
   }, [nodes, setEdges]);
@@ -1243,7 +1447,10 @@ export function ControlGraph(props: ControlGraphProps) {
     if (!isValidGraphConnection(connection, nodes)) return;
     setEdges(current => {
       const withoutTargetConflict = current.filter(edge => (
-        edge.id === oldEdge.id || !(edge.target === connection.target && edge.targetHandle === connection.targetHandle)
+        edge.id === oldEdge.id || (
+          !(edge.target === connection.target && edge.targetHandle === connection.targetHandle)
+          && !(isMaterialLaneSource(connection) && edge.source === 'material' && edge.sourceHandle === connection.sourceHandle)
+        )
       ));
       return reconnectEdge(oldEdge, connection, withoutTargetConflict);
     });
@@ -1256,6 +1463,11 @@ export function ControlGraph(props: ControlGraphProps) {
     setEdges(current => {
       let next = current;
       for (const id of deletableNodeIds) {
+        const deletedNode = nodeOf(id);
+        if (deletedNode?.id === 'postfx' || deletedNode?.type === 'fieldSource') {
+          next = spliceMaterialFieldBypasses(next, id);
+          continue;
+        }
         // Type-aware heal (§0 revised). Frame chain: bridge a deleted FX/tone-map
         // node's frame-in.source → frame-out.target so removing an effect splices
         // its neighbours instead of black-screening the render.
@@ -1274,7 +1486,6 @@ export function ControlGraph(props: ControlGraphProps) {
         // single signal-out, but never collapse into a raw feature → target-uniform
         // mainline (that must be a deliberate rewire). Multi-input operators with
         // more than one wired inlet are ambiguous and drop without bridging.
-        const deletedNode = nodeOf(id);
         if (deletedNode?.type !== 'operator') continue;
         const signalIn = next.filter(edge => edge.target === id && isSignalTarget(deletedNode, edge.targetHandle ?? null));
         const signalOut = next.filter(edge => edge.source === id && isSignalSource(deletedNode, edge.sourceHandle ?? null));
@@ -1327,9 +1538,10 @@ export function ControlGraph(props: ControlGraphProps) {
   }, [selectedEdgeIds, setEdges]);
 
   const saveGraphPreset = useCallback(() => {
+    const currentViewport = viewportRef.current;
     const savedViewport = NORMALIZE_GRAPH_PRESET_VIEWPORT_ON_SAVE
-      ? alignedViewportForNodes(nodes, flowFitMetrics) ?? viewport
-      : viewport;
+      ? alignedViewportForNodes(nodes, flowFitMetrics) ?? currentViewport
+      : currentViewport;
     const preset = graphPresetFromState(nodes, edges, savedViewport, snapEnabled, graphPresetAppStateFromProps(props));
     const blob = new Blob([JSON.stringify(preset, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1338,7 +1550,7 @@ export function ControlGraph(props: ControlGraphProps) {
     anchor.download = 'penrose-graph-preset.json';
     anchor.click();
     URL.revokeObjectURL(url);
-  }, [edges, flowFitMetrics, nodes, props, snapEnabled, viewport]);
+  }, [edges, flowFitMetrics, nodes, props, snapEnabled]);
 
   const applyGraphPreset = useCallback((preset: GraphPreset) => {
     if (preset.appState) props.onGraphPresetState(preset.appState);
@@ -1367,9 +1579,9 @@ export function ControlGraph(props: ControlGraphProps) {
           presetNode.id,
           presetNode.position,
           props.settings,
-          props.onSetting,
-          props.onPreviewSetting,
-          props.onResetClock,
+          onClockSetting,
+          onClockPreviewSetting,
+          resetClock,
           editCallbacks,
         );
       }
@@ -1417,8 +1629,15 @@ export function ControlGraph(props: ControlGraphProps) {
     const pushRequiredEdge = (edge: Edge): void => {
       if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) return;
       if (!isValidGraphConnection(edge, nextNodes)) return;
-      const existingIndex = nextEdges.findIndex(item => item.target === edge.target && item.targetHandle === edge.targetHandle);
-      if (existingIndex >= 0) nextEdges.splice(existingIndex, 1);
+      for (let i = nextEdges.length - 1; i >= 0; i -= 1) {
+        const item = nextEdges[i]!;
+        if (
+          (item.target === edge.target && item.targetHandle === edge.targetHandle)
+          || (isMaterialLaneSource(edge) && item.source === 'material' && item.sourceHandle === edge.sourceHandle)
+        ) {
+          nextEdges.splice(i, 1);
+        }
+      }
       nextEdges.push(edge);
     };
     for (const edge of preset.edges) {
@@ -1443,12 +1662,6 @@ export function ControlGraph(props: ControlGraphProps) {
       }
       if (
         next.source === 'postprocess'
-        && next.target === 'renderer'
-      ) {
-        continue;
-      }
-      if (
-        next.source === 'postfx'
         && next.target === 'renderer'
       ) {
         continue;
@@ -1486,7 +1699,8 @@ export function ControlGraph(props: ControlGraphProps) {
     setNodes(nextNodes);
     setEdges(nextEdges);
     setSnapEnabled(preset.snapEnabled);
-    setViewport(preset.viewport);
+    viewportRef.current = preset.viewport;
+    void flowInstanceRef.current?.setViewport(preset.viewport, { duration: 0 });
     setSelection({ nodes: [], edges: [] });
 
     for (const presetNode of preset.nodes) {
@@ -1504,6 +1718,9 @@ export function ControlGraph(props: ControlGraphProps) {
       if (suffix !== null && presetNode.id.startsWith('fx-')) {
         fxIdRef.current = Math.max(fxIdRef.current, suffix + 1);
       }
+      if (suffix !== null && presetNode.id.startsWith('fieldSource-')) {
+        fieldIdRef.current = Math.max(fieldIdRef.current, suffix + 1);
+      }
     }
   }, [baseNodes, editCallbacks, onOperatorPreview, props, setEdges, setNodes]);
 
@@ -1514,9 +1731,14 @@ export function ControlGraph(props: ControlGraphProps) {
     void file.text()
       .then(text => {
         const preset = graphPresetFromText(text);
-        if (preset) applyGraphPreset(preset);
+        if (!preset) throw new Error('Invalid graph preset file');
+        applyGraphPreset(preset);
       })
-      .catch(() => {});
+      .catch(caught => {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        console.error('[graph-preset] load failed', caught);
+        window.alert(`Failed to load graph preset: ${message}`);
+      });
   }, [applyGraphPreset]);
 
   const nextAddPosition = useCallback(() => {
@@ -1524,11 +1746,12 @@ export function ControlGraph(props: ControlGraphProps) {
     addNodeCounterRef.current += 1;
     const column = index % 3;
     const row = Math.floor(index / 3);
+    const viewport = viewportRef.current;
     return {
       x: snapValue((160 - viewport.x) / Math.max(viewport.zoom, MIN_FLOW_ZOOM) + column * 96),
       y: snapValue((180 - viewport.y) / Math.max(viewport.zoom, MIN_FLOW_ZOOM) + column * 64 + row * 216),
     };
-  }, [viewport.x, viewport.y, viewport.zoom]);
+  }, []);
 
   const addOperatorNode = useCallback((kind: OperatorKind) => {
     const id = `operator-${kind}-${operatorIdRef.current}`;
@@ -1583,13 +1806,27 @@ export function ControlGraph(props: ControlGraphProps) {
         onFieldValue,
       },
     }]);
-    // Auto-wire all three field outlets to the renderer so it composes immediately.
-    setEdges(current => [
-      ...current,
-      { id: `${id}-renderer-relief`, source: id, sourceHandle: 'relief', target: 'renderer', targetHandle: 'relief', animated: true },
-      { id: `${id}-renderer-undulate`, source: id, sourceHandle: 'undulate', target: 'renderer', targetHandle: 'undulate', animated: true },
-      { id: `${id}-renderer-color`, source: id, sourceHandle: 'color', target: 'renderer', targetHandle: 'color', animated: true },
-    ]);
+    // Auto-wire the material lanes through the new field source and into the
+    // renderer so it composes immediately. Displace/undulate are independent
+    // field outputs; relief/color consume the material lane first.
+    setEdges(current => {
+      const replacedSceneHandles = new Set(['relief', 'color', 'undulate']);
+      const replacedMaterialHandles = new Set(['relief', 'color']);
+      const kept = current.filter(edge => {
+        if (edge.target === 'renderer' && replacedSceneHandles.has(edge.targetHandle ?? '')) return false;
+        if (edge.source === 'material' && replacedMaterialHandles.has(edge.sourceHandle ?? '')) return false;
+        return true;
+      });
+      return [
+        ...kept,
+        { id: `clock-${id}-phase`, source: 'clock', sourceHandle: 'out', target: id, targetHandle: FIELD_SOURCE_PHASE_INLET.id, animated: true },
+        { id: `material-${id}-relief`, source: 'material', sourceHandle: 'relief', target: id, targetHandle: 'relief', animated: true },
+        { id: `material-${id}-color`, source: 'material', sourceHandle: 'color', target: id, targetHandle: 'color', animated: true },
+        { id: `${id}-renderer-relief`, source: id, sourceHandle: 'relief', target: 'renderer', targetHandle: 'relief', animated: true },
+        { id: `${id}-renderer-undulate`, source: id, sourceHandle: 'undulate', target: 'renderer', targetHandle: 'undulate', animated: true },
+        { id: `${id}-renderer-color`, source: id, sourceHandle: 'color', target: 'renderer', targetHandle: 'color', animated: true },
+      ];
+    });
     setIsAddMenuOpen(false);
     setAddMenuCategory(null);
   }, [editCallbacks, nextAddPosition, onFieldValue, setEdges, setNodes]);
@@ -1634,11 +1871,11 @@ export function ControlGraph(props: ControlGraphProps) {
     clockIdRef.current += 1;
     setNodes(current => [
       ...current,
-      createClockNode(id, nextAddPosition(), props.settings, props.onSetting, props.onPreviewSetting, props.onResetClock, editCallbacks),
+      createClockNode(id, nextAddPosition(), props.settings, onClockSetting, onClockPreviewSetting, resetClock, editCallbacks),
     ]);
     setIsAddMenuOpen(false);
     setAddMenuCategory(null);
-  }, [editCallbacks, nextAddPosition, props.onPreviewSetting, props.onResetClock, props.onSetting, props.settings, setNodes]);
+  }, [editCallbacks, nextAddPosition, onClockPreviewSetting, onClockSetting, props.settings, resetClock, setNodes]);
 
   const toggleAddMenu = useCallback(() => {
     if (isAddMenuOpen) setAddMenuCategory(null);
@@ -1684,7 +1921,7 @@ export function ControlGraph(props: ControlGraphProps) {
           {EFFECT_CATALOG.filter(d => d.kind !== 'toneMap').map(d => {
             const Icon = fxIconComponent(d.icon);
             return (
-              <button key={d.kind} type="button" className="add-effect-button" data-tip={d.label} aria-label={d.label} onClick={() => addFxNode(d.kind)}>
+              <button key={d.kind} type="button" className="add-effect-button" title={d.label} aria-label={d.label} onClick={() => addFxNode(d.kind)}>
                 <Icon size={16} />
               </button>
             );
@@ -1731,9 +1968,21 @@ export function ControlGraph(props: ControlGraphProps) {
     setEdges(current => {
       const nodeIds = new Set(nodes.map(node => node.id));
       for (const node of baseNodes) nodeIds.add(node.id);
-      return initialEdges
-        .filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target))
-        .concat(current.filter(edge => !initialEdges.some(item => item.id === edge.id) && !isObsoletePipelineEdge(edge)));
+      // Keep the user's extra wiring (e.g. FX nodes spliced into the frame chain).
+      const kept = current.filter(edge => !initialEdges.some(item => item.id === edge.id) && !isObsoletePipelineEdge(edge));
+      // A kept edge means the user rewired that connection point. Restoring a default
+      // edge that shares either endpoint handle would re-add the scene→tonemap bypass
+      // alongside the inserted FX and short it out — so skip those. Each chain handle
+      // drives/receives a single wire, so a handle collision is a genuine conflict.
+      const handle = (node: string, port: string | null | undefined): string => `${node}:${port ?? ''}`;
+      const usedSource = new Set(kept.map(edge => handle(edge.source, edge.sourceHandle)));
+      const usedTarget = new Set(kept.map(edge => handle(edge.target, edge.targetHandle)));
+      const restored = initialEdges.filter(edge => {
+        if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) return false;
+        return !usedSource.has(handle(edge.source, edge.sourceHandle))
+          && !usedTarget.has(handle(edge.target, edge.targetHandle));
+      });
+      return restored.concat(kept);
     });
     setSelection({ nodes: [], edges: [] });
     setLayoutRequest(request => request + 1);
@@ -1747,8 +1996,8 @@ export function ControlGraph(props: ControlGraphProps) {
     if (event.button !== 1) return;
     event.preventDefault();
     event.stopPropagation();
-    setMiddleZoom({ y: event.clientY, zoom: viewport.zoom });
-  }, [viewport.zoom]);
+    setMiddleZoom({ y: event.clientY, zoom: viewportRef.current.zoom });
+  }, []);
 
   const suppressMiddleAuxClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (event.button !== 1) return;
@@ -1762,7 +2011,9 @@ export function ControlGraph(props: ControlGraphProps) {
       event.preventDefault();
       const delta = (middleZoom.y - event.clientY) * 0.004;
       const zoom = clampFlowZoom(middleZoom.zoom * Math.exp(delta));
-      setViewport(current => ({ ...current, zoom }));
+      const next = { ...viewportRef.current, zoom };
+      viewportRef.current = next;
+      void flowInstanceRef.current?.setViewport(next, { duration: 0 });
     };
     const end = () => setMiddleZoom(null);
     window.addEventListener('mousemove', move, { passive: false });
@@ -1772,6 +2023,14 @@ export function ControlGraph(props: ControlGraphProps) {
       window.removeEventListener('mouseup', end);
     };
   }, [middleZoom]);
+
+  const handleMoveEnd = useCallback<OnMove>((_event, nextViewport) => {
+    viewportRef.current = nextViewport;
+  }, []);
+
+  const handleFlowInit = useCallback((instance: ReactFlowInstance<Node, Edge>) => {
+    flowInstanceRef.current = instance;
+  }, []);
 
   useEffect(() => {
     const shell = flowShellRef.current;
@@ -1831,8 +2090,9 @@ export function ControlGraph(props: ControlGraphProps) {
         onNodesChange={onNodesChange}
         onBeforeDelete={onBeforeDelete}
         onSelectionChange={onSelectionChange}
-        viewport={viewport}
-        onViewportChange={setViewport}
+        onInit={handleFlowInit}
+        defaultViewport={DEFAULT_VIEWPORT}
+        onMoveEnd={handleMoveEnd}
         nodesDraggable
         nodesConnectable
         connectOnClick
@@ -1862,7 +2122,7 @@ export function ControlGraph(props: ControlGraphProps) {
           setNodes={setNodes}
         />
         <Panel ref={flowToolbarRef} position="top-left" className="flow-panel nodrag nopan">
-          <button type="button" onClick={resetLayout} data-tip="Reset graph" aria-label="Reset graph">
+          <button type="button" onClick={resetLayout} title="Reset graph" aria-label="Reset graph">
             <RotateCcw size={14} />
           </button>
           <FlowFitButton metrics={flowFitMetrics} />
@@ -1870,12 +2130,12 @@ export function ControlGraph(props: ControlGraphProps) {
             type="button"
             className={snapEnabled ? 'active' : ''}
             onClick={() => setSnapEnabled(value => !value)}
-            data-tip={`Snap ${snapEnabled ? 'on' : 'off'}`}
+            title={`Snap ${snapEnabled ? 'on' : 'off'}`}
             aria-label={`Snap ${snapEnabled ? 'on' : 'off'}`}
           >
             <Grid3x3 size={14} />
           </button>
-          <button type="button" onClick={snapCurrentLayout} data-tip="Snap now" aria-label="Snap now">
+          <button type="button" onClick={snapCurrentLayout} title="Snap now" aria-label="Snap now">
             <AlignStartVertical size={14} />
           </button>
           <div className="drag-mode-toggle" role="group" aria-label="Slider drag behavior">
@@ -1883,7 +2143,7 @@ export function ControlGraph(props: ControlGraphProps) {
               type="button"
               className={props.dragMode === 'ride' ? 'active' : ''}
               onClick={() => props.onDragMode('ride')}
-              data-tip="Ride — slider rides live audio while you drag"
+              title="Ride — slider rides live audio while you drag"
               aria-label="Ride"
             >
               <Activity size={14} />
@@ -1892,19 +2152,19 @@ export function ControlGraph(props: ControlGraphProps) {
               type="button"
               className={props.dragMode === 'hold' ? 'active' : ''}
               onClick={() => props.onDragMode('hold')}
-              data-tip="Hold — freeze the param from audio while you tune it"
+              title="Hold — freeze the param from audio while you tune it"
               aria-label="Hold"
             >
               <Lock size={14} />
             </button>
           </div>
-          <button type="button" onClick={saveGraphPreset} data-tip="Save graph" aria-label="Save graph">
+          <button type="button" onClick={saveGraphPreset} title="Save graph" aria-label="Save graph">
             <Save size={14} />
           </button>
           <button
             type="button"
             onClick={() => graphPresetInputRef.current?.click()}
-            data-tip="Load graph"
+            title="Load graph"
             aria-label="Load graph"
           >
             <Upload size={14} />
@@ -1916,7 +2176,7 @@ export function ControlGraph(props: ControlGraphProps) {
             accept="application/json,.json"
             onChange={loadGraphPresetFile}
           />
-          <button type="button" onClick={restoreLinks} data-tip="Restore links" aria-label="Restore links">
+          <button type="button" onClick={restoreLinks} title="Restore links" aria-label="Restore links">
             <Link2 size={14} />
           </button>
           <button
@@ -1924,7 +2184,7 @@ export function ControlGraph(props: ControlGraphProps) {
             className={hasSelectedEdges ? 'link-delete-ready' : ''}
             aria-disabled={!hasSelectedEdges}
             onClick={deleteSelectedLinks}
-            data-tip="Delete link"
+            title="Delete link"
             aria-label="Delete link"
           >
             <Unlink size={14} />
@@ -1933,7 +2193,7 @@ export function ControlGraph(props: ControlGraphProps) {
             type="button"
             className={isAddMenuOpen ? 'active' : ''}
             onClick={toggleAddMenu}
-            data-tip="Add"
+            title="Add"
             aria-label="Add"
           >
             <Plus size={14} />
@@ -2015,7 +2275,7 @@ function FlowFitButton({ metrics }: { metrics: FlowFitMetrics }) {
   const fit = useCallback(() => {
     void applyAlignedFlowFit(flow, flow.getNodes(), metrics, 180);
   }, [flow, metrics]);
-  return <button type="button" onClick={fit} data-tip="Fit" aria-label="Fit"><Maximize2 size={14} /></button>;
+  return <button type="button" onClick={fit} title="Fit" aria-label="Fit"><Maximize2 size={14} /></button>;
 }
 
 function FlowControls({ metrics }: { metrics: FlowFitMetrics }) {
@@ -2036,4 +2296,3 @@ function FlowControls({ metrics }: { metrics: FlowFitMetrics }) {
     </Controls>
   );
 }
-

@@ -188,6 +188,8 @@ export function evaluateSignals(
   edges: readonly Edge[],
   state: AudioOperatorRuntimeState,
   liveOperators: LiveOperatorDataMap,
+  nowMs = performance.now(),
+  clockEpochMs = 0,
 ): Map<string, number> {
   const signals = new Map<string, number>();
   const analysisLive = edges.some(edge => edge.source === 'transport' && edge.target === 'analysis');
@@ -200,7 +202,7 @@ export function evaluateSignals(
   for (const edge of edges) {
     const source = nodeLookup.get(edge.source);
     if (source?.type === 'clock' && edge.sourceHandle === 'out') {
-      signals.set(signalKey(source.id, 'out'), clockSignalValue(source));
+      signals.set(signalKey(source.id, 'out'), clockSignalValue(source, nowMs, clockEpochMs));
     }
   }
   const operatorNodes = nodes.filter(node => node.type === 'operator');

@@ -28,16 +28,20 @@ npm run web:preview
 npm run quality:local
 ```
 
-The gate runs:
+The aggregate gate runs `quality:web`, `quality:native`, and `quality:android`.
+Those cover:
 
 - `js:policy`: rejects owned `.js`, `.jsx`, `.mjs`, and `.cjs` files.
 - `ts:policy`: rejects `any`, `unknown`, and `as` in owned TypeScript.
 - `typecheck`: `tsc --noEmit`.
 - `atlas:verify`: validates `atlas/tiling_atlas.json`.
+- `border:verify`: proves the per-tile border rings stay inside their tiles and
+  remain single-coverage across the supported join controls.
 - `tilings:verify`: compiles and runs the host tiling verifier.
 - `shaders:validate`: compiles GLSL to SPIR-V and runs `spirv-val`.
 - `cpp:tidy`: runs clang-tidy through the native tiling/export sources.
 - `web:build`: builds the Three WebGPU app.
+- `graph:contract`: checks graph schema wiring and renderer contract invariants.
 
 ## Android from WSL2
 

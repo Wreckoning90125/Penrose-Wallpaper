@@ -32,9 +32,10 @@ Local quality gate:
 npm run quality:local
 ```
 
-That gate enforces no owned plain JavaScript files, TypeScript policy,
-typecheck, atlas validation, render health probes, tiling verification,
-shader validation, clang-tidy, and the WebGPU build.
+That gate composes the web, native, and Android gates: no owned plain JavaScript
+files, TypeScript policy, typecheck, atlas validation, border-join proof, tiling
+verification, shader validation, clang-tidy, the WebGPU build, and the
+graph/render contract.
 
 Graph and renderer regression rules live in
 [`docs/platform/control-graph-regressions.md`](docs/platform/control-graph-regressions.md).

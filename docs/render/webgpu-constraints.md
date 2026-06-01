@@ -6,9 +6,10 @@ black-tile regression five times; this file exists so they don't recur.
 ## 1. The material must reference ≤ 8 vertex attributes (hard WebGPU limit)
 
 `maxVertexBuffers` is **8** (W3C WebGPU spec, mirrored in `docs/webGpuW3Spec/`).
-A `MeshPhysicalNodeMaterial` already implicitly binds `position`, `normal`, `uv`,
-`color`, plus a tangent when anisotropy is on — so the custom attributes
-(`tileType`, `tileRing`, `tileOrient`, `tileCenter`) put it at the ceiling.
+The surface material references `position`, `normal`, `uv`, `color`, and the custom
+attributes (`tileType`, `tileRing`, `tileOrient`, `tileCenter`). Keep standard
+`uv` present on geometry even when our own nodes do not sample it directly;
+Three's physical WebGPU material path assumes the standard geometry layout.
 
 Adding a **ninth** referenced attribute (e.g. `attribute('edgeDistance')` in the
 edge-profile emissive) makes the pipeline invalid → the tiles render **black**.
@@ -32,16 +33,20 @@ so a NaN factor poisons an otherwise-zero term.
 
 ## 3. Verification reality in this repo
 
-- `npm run render:check` loads the dev server (`localhost:5174`) in chromium and
-  prints the WebGPU **adapter** + flagged console messages. It is a reliable
-  **console-error oracle** (catches §1/§2 errors).
+- A browser probe can be useful as a **console-error oracle** (catches §1/§2
+  invalid-pipeline / shader / vertex-buffer errors), but this repo does not keep
+  a committed package script for it because browser availability is local-machine
+  dependent.
 - It is **not** a pixel oracle in a headless/agent shell: with no display the
-  adapter is `swiftshader` (software) and the canvas is black with spurious
-  `createBuffer size too large` noise that does **not** occur on a real GPU.
-- For true pixels run it where WSLg's display is reachable: `RENDER_HEADED=1
-  npm run render:check` → `output/playwright/render-check.png`.
-- The standing gate is unchanged: `npm run typecheck && npm run ts:policy &&
-  npm run js:policy && npm run web:build && npm run render:health`. Green gates
+  adapter is often `swiftshader` (software) and the canvas can be black with
+  spurious `createBuffer size too large` noise that does **not** occur on a real
+  GPU.
+- For true pixels, use the user's running preview or a headed local browser where
+  WSLg's display is reachable. Write any screenshots/traces under
+  `output/playwright/`.
+- The standing web gate is `npm run quality:web` (or, expanded:
+  `npm run typecheck && npm run ts:policy && npm run js:policy &&
+  npm run web:build && npm run graph:contract`). Green gates
   are necessary but **not** sufficient for render correctness — confirm visually.
 
 ## 4. The render is downstream of the graph (the data-flow contract)
@@ -59,9 +64,9 @@ props alone. The two walks that enforce this (`web/src/flow/renderInputs.ts`):
   genuinely on that wire path (toneMap included). Reference model:
   `.local/procedural-morphology-lab` (`walkPostFxChain` / `getModulation`).
 
-**Acceptance test:** cut a wire → the thing it represents stops.
-`web/bullshitGraphTest.json` (no functional wires) must render nothing of
-consequence.
+**Acceptance test:** cut a wire → the thing it represents stops. The standing
+form of this is `npm run graph:contract`, which exercises the canonical graph
+wires and verifies that removing each one drops the represented render input.
 
 ## 5. Module map (pure, non-React schema — reusable, contract-ready)
 
@@ -71,12 +76,13 @@ consequence.
 - `web/src/flow/renderInputs.ts` — edge→render-input derivation
 - `web/src/flow/nodeData.ts` — typed accessors for node `data`
 
-A future `tools/check_graph_contract.mts` should import these and assert: every
-control exposes an inlet · every inlet is a valid signal target · the FX chain
-reaches the sink · material attribute refs ≤ `maxVertexBuffers`. Hold it until
-the graph logic is final so it isn't locked against not-yet-100% behavior.
+`tools/check_graph_contract.mts` imports these and asserts the stable schema and
+wire-contract invariants: controls map to setting keys and preset keys, the
+surface material stays within the allowed vertex attributes, the FX catalog is
+complete, and the material/field/source/scene-pass wires cut the render inputs
+they claim to represent.
 
-## 5. Post-pipeline rebuilds must free the old node tree's render targets
+## 6. Post-pipeline rebuilds must free the old node tree's render targets
 
 three's `RenderPipeline.dispose()` frees **only** its quad material; base
 `Node.dispose()` just fires an event. So a naive `rebuildPostPipeline` that makes

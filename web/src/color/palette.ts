@@ -35,6 +35,9 @@ const PRESETS: PalettePreset[] = [
   { name: 'Custom', bg: [0.04, 0.005, 280], colors: k => even([0.18, 0.02, 280], [0.78, 0.13, 80], k) },
 ];
 
+export const CUSTOM_PALETTE_PRESET = 11;
+export const MAX_PALETTE_PRESET = PRESETS.length - 1;
+
 function lerp(a: Oklch, b: Oklch, t: number): Oklch {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 }
@@ -52,14 +55,14 @@ function pad(colors: Oklch[]): Oklch[] {
 
 export function buildPalette(presetIndex: number, colorCount: number, customColors: Oklch[] | null = null): Palette {
   const k = Math.max(1, Math.min(MAX_COLORS, colorCount | 0));
-  if (presetIndex === 11 && customColors) {
+  if (presetIndex === CUSTOM_PALETTE_PRESET && customColors) {
     return {
       name: 'Custom',
-      bg: customColors[0] ?? PRESETS[11]!.bg,
+      bg: customColors[0] ?? PRESETS[CUSTOM_PALETTE_PRESET]!.bg,
       colors: pad(customColors),
     };
   }
-  const preset = PRESETS[Math.max(0, Math.min(PRESETS.length - 1, presetIndex | 0))] ?? PRESETS[4]!;
+  const preset = PRESETS[Math.max(0, Math.min(MAX_PALETTE_PRESET, presetIndex | 0))] ?? PRESETS[4]!;
   return {
     name: preset.name,
     bg: preset.bg,

@@ -1,6 +1,6 @@
 import { BufferAttribute, BufferGeometry } from 'three/webgpu';
 import { intSetting, numberSetting, type Settings } from '../settings/androidSettings';
-import { buildPalette, oklchToLinearSrgb, type Oklch } from '../color/palette';
+import { buildPalette, MAX_PALETTE_PRESET, oklchToLinearSrgb, type Oklch } from '../color/palette';
 import type { AtlasItem, GeometryBuild, Patch, Point, Point3, Tile } from '../types';
 import { buildTileRing, type TileBorder } from './borderJoin';
 
@@ -38,15 +38,6 @@ type MeshBuffers = {
   tileRing: Float32Array;
   tileOrient: Float32Array;
   tileCenter: Float32Array;
-  edgeDistance: Float32Array;
-};
-
-type VisibleEdge = {
-  a: Point;
-  b: Point;
-  ring: number;
-  orient: Point;
-  center: Point;
 };
 
 type Snapper = (point: Point) => Point;
@@ -54,15 +45,19 @@ type EdgeKind = 'base' | 'leg' | 'edge';
 type EdgeSide = {
   type: number;
   kind: EdgeKind;
-  ring: number;
-  orient: Point;
-  center: Point;
 };
 type EdgeEntry = {
   a: Point;
   b: Point;
   first: EdgeSide;
   second: EdgeSide | null;
+};
+type BorderLayoutTile = {
+  edges: TileBorder['edges'];
+  centroid: Point;
+  ring: number;
+  orient: Point;
+  center: Point;
 };
 
 const FAMILY: FamilySpec[] = [
@@ -82,6 +77,81 @@ const FAMILY: FamilySpec[] = [
 ];
 const BORDER_RELIEF_LIFT = 0.018;
 const BORDER_SURFACE_BIAS = 0.00035;
+const BORDER_LAYOUT_CACHE = new WeakMap<Patch, Map<string, BorderLayoutTile[]>>();
+// Subdivision detail is useful on sparse patches and pathological on dense
+// live-generated patches. These caps keep allocations bounded without changing
+// normal atlas presets; dense patches still render, just with less per-tile
+// tessellation where the extra vertices would be visually redundant.
+const MAX_FILL_VERTEX_COUNT = 3_200_000;
+const MAX_BORDER_VERTEX_COUNT = 2_400_000;
+
+function patchVertexCount(tiles: readonly Tile[]): number {
+  let count = 0;
+  for (const tile of tiles) count += tile.verts.length;
+  return count;
+}
+
+function clampQuadraticSubdivision(requested: number, edgeFanCount: number, maxVertices: number): number {
+  if (edgeFanCount <= 0) return requested;
+  const maxSub = Math.max(1, Math.floor(Math.sqrt(maxVertices / (edgeFanCount * 3))));
+  return Math.max(1, Math.min(requested, maxSub));
+}
+
+function clampLinearSubdivision(
+  requested: number,
+  edgeFanCount: number,
+  maxVertices: number,
+  verticesPerSegment: number,
+): number {
+  if (edgeFanCount <= 0 || verticesPerSegment <= 0) return requested;
+  const maxSub = Math.max(1, Math.floor(maxVertices / (edgeFanCount * verticesPerSegment)));
+  return Math.max(1, Math.min(requested, maxSub));
+}
+
+class Float32Builder {
+  private data: Float32Array;
+  length: number;
+
+  constructor(capacity = 1024) {
+    this.data = new Float32Array(capacity);
+    this.length = 0;
+  }
+
+  private ensure(extra: number): void {
+    const required = this.length + extra;
+    if (required <= this.data.length) return;
+    let capacity = this.data.length;
+    while (capacity < required) capacity *= 2;
+    const next = new Float32Array(capacity);
+    next.set(this.data);
+    this.data = next;
+  }
+
+  push1(a: number): void {
+    this.ensure(1);
+    this.data[this.length] = a;
+    this.length += 1;
+  }
+
+  push2(a: number, b: number): void {
+    this.ensure(2);
+    this.data[this.length] = a;
+    this.data[this.length + 1] = b;
+    this.length += 2;
+  }
+
+  push3(a: number, b: number, c: number): void {
+    this.ensure(3);
+    this.data[this.length] = a;
+    this.data[this.length + 1] = b;
+    this.data[this.length + 2] = c;
+    this.length += 3;
+  }
+
+  view(): Float32Array {
+    return this.data.subarray(0, this.length);
+  }
+}
 
 export async function loadPatch(item: AtlasItem): Promise<Patch> {
   if (!item.geometry) throw new Error(`atlas target has no geometry: ${item.id}`);
@@ -150,7 +220,7 @@ export function buildMeshGeometry(patch: Patch, settings: Settings, customColors
   // "follow Slots" (appliedStops === colorCount), which is the historical look.
   const colorSpread = intSetting(settings, 'color_spread', 0, 16);
   const appliedStops = colorSpread > 0 ? colorSpread : colorCount;
-  const preset = intSetting(settings, 'preset', 0, 11);
+  const preset = intSetting(settings, 'preset', 0, MAX_PALETTE_PRESET);
   const palette = buildPalette(preset, appliedStops, customColors);
   const classes = classify(patch.tiles, patch.family, colorMode, colorCount);
   const relief = averageTileRadius(patch.tiles) * 0.34;
@@ -162,7 +232,12 @@ export function buildMeshGeometry(patch: Patch, settings: Settings, customColors
   // (only the curved projection needed it), but the per-vertex surface displacement
   // (undulate/relief/field) needs the extra vertices to bend smoothly in Euclidean
   // too — gating it there left flat-mode undulation coarse no matter the setting.
-  const fillSub = intSetting(settings, 'hyp_fill_subdiv', 1, 8);
+  const tileVertexCount = patchVertexCount(patch.tiles);
+  const fillSub = clampQuadraticSubdivision(
+    intSetting(settings, 'hyp_fill_subdiv', 1, 8),
+    tileVertexCount,
+    MAX_FILL_VERTEX_COUNT,
+  );
 
   let triCount = 0;
   for (const tile of patch.tiles) triCount += tile.verts.length * fillSub * fillSub;
@@ -174,7 +249,6 @@ export function buildMeshGeometry(patch: Patch, settings: Settings, customColors
   const tileRing = new Float32Array(vertexCount);
   const tileOrient = new Float32Array(vertexCount * 2);
   const tileCenter = new Float32Array(vertexCount * 2);
-  const edgeDistance = new Float32Array(vertexCount);
 
   let cursor = 0;
   for (let tileIndex = 0; tileIndex < patch.tiles.length; tileIndex++) {
@@ -196,7 +270,7 @@ export function buildMeshGeometry(patch: Patch, settings: Settings, customColors
       const b = tile.verts[(i + 1) % tile.verts.length]!;
       cursor = emitTriangle(
         cursor,
-        { position, color, paletteSlot, tileType, tileRing, tileOrient, tileCenter, edgeDistance },
+        { position, color, paletteSlot, tileType, tileRing, tileOrient, tileCenter },
         projector,
         snap,
         fillSub,
@@ -223,11 +297,20 @@ export function buildMeshGeometry(patch: Patch, settings: Settings, customColors
   geometry.setAttribute('tileRing', new BufferAttribute(tileRing, 1));
   geometry.setAttribute('tileOrient', new BufferAttribute(tileOrient, 2));
   geometry.setAttribute('tileCenter', new BufferAttribute(tileCenter, 2));
-  geometry.setAttribute('edgeDistance', new BufferAttribute(edgeDistance, 1));
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   const edgeGeometry = buildEdgeGeometry(patch, settings, projector, snap, relief);
   return { geometry, edgeGeometry, palette };
+}
+
+function buildUv(position: Float32Array): Float32Array {
+  const count = position.length / 3;
+  const uv = new Float32Array(count * 2);
+  for (let i = 0; i < count; i++) {
+    uv[i * 2] = position[i * 3] ?? 0;
+    uv[i * 2 + 1] = position[i * 3 + 1] ?? 0;
+  }
+  return uv;
 }
 
 function familySpec(family: number): FamilySpec {
@@ -274,21 +357,19 @@ function emitTriangle(
   // for faceDirection to reliably tell front from back (the DoubleSide normal flip).
   flip: boolean,
 ): number {
-  const emitTri = (
-    p0: Point3, w0: number, p1: Point3, w1: number, p2: Point3, w2: number,
-  ): void => {
+  const emitTri = (p0: Point3, p1: Point3, p2: Point3): void => {
     if (flip) {
-      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p0, rgb, typeValue, ringValue, orient, center, paletteIndex, w0);
-      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p2, rgb, typeValue, ringValue, orient, center, paletteIndex, w2);
-      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p1, rgb, typeValue, ringValue, orient, center, paletteIndex, w1);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p0, rgb, typeValue, ringValue, orient, center, paletteIndex);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p2, rgb, typeValue, ringValue, orient, center, paletteIndex);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p1, rgb, typeValue, ringValue, orient, center, paletteIndex);
     } else {
-      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p0, rgb, typeValue, ringValue, orient, center, paletteIndex, w0);
-      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p1, rgb, typeValue, ringValue, orient, center, paletteIndex, w1);
-      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p2, rgb, typeValue, ringValue, orient, center, paletteIndex, w2);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p0, rgb, typeValue, ringValue, orient, center, paletteIndex);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p1, rgb, typeValue, ringValue, orient, center, paletteIndex);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p2, rgb, typeValue, ringValue, orient, center, paletteIndex);
     }
   };
   if (fillSub <= 1) {
-    emitTri(a, 1, b, 0, c, 0);
+    emitTri(a, b, c);
     return cursor;
   }
   const invN = 1 / fillSub;
@@ -305,9 +386,9 @@ function emitTriangle(
   };
   for (let i = 0; i < fillSub; i++) {
     for (let j = 0; j < fillSub - i; j++) {
-      emitTri(point(i, j), i / fillSub, point(i + 1, j), (i + 1) / fillSub, point(i, j + 1), i / fillSub);
+      emitTri(point(i, j), point(i + 1, j), point(i, j + 1));
       if (j < fillSub - i - 1) {
-        emitTri(point(i + 1, j), (i + 1) / fillSub, point(i + 1, j + 1), (i + 1) / fillSub, point(i, j + 1), i / fillSub);
+        emitTri(point(i + 1, j), point(i + 1, j + 1), point(i, j + 1));
       }
     }
   }
@@ -326,7 +407,6 @@ function emitProjectedVertex(
   orient: Point,
   center: Point,
   paletteIndex: number,
-  edgeDist: number,
 ): number {
   const [x, y] = snap(projector.map(vertex[0], vertex[1]));
   return emitVertex(
@@ -338,7 +418,6 @@ function emitProjectedVertex(
     buffers.tileRing,
     buffers.tileOrient,
     buffers.tileCenter,
-    buffers.edgeDistance,
     x,
     y,
     vertex[2],
@@ -348,7 +427,6 @@ function emitProjectedVertex(
     orient,
     center,
     paletteIndex,
-    edgeDist,
   );
 }
 
@@ -361,7 +439,6 @@ function emitVertex(
   tileRing: Float32Array,
   tileOrient: Float32Array,
   tileCenter: Float32Array,
-  edgeDistance: Float32Array,
   x: number,
   y: number,
   z: number,
@@ -371,7 +448,6 @@ function emitVertex(
   orient: Point,
   center: Point,
   paletteIndex: number,
-  edgeDist: number,
 ): number {
   const p = cursor * 3;
   position[p] = x;
@@ -381,7 +457,6 @@ function emitVertex(
   color[p + 1] = rgb[1];
   color[p + 2] = rgb[2];
   paletteSlot[cursor] = paletteIndex;
-  edgeDistance[cursor] = edgeDist;
   tileType[cursor] = typeValue;
   tileRing[cursor] = ringValue;
   const o = cursor * 2;
@@ -400,46 +475,102 @@ function buildEdgeGeometry(
   relief: number,
 ): BufferGeometry | null {
   const borderOn = String(settings.border_on) !== 'false';
-  const borderAlpha = intSetting(settings, 'border_a', 0, 100) / 100;
   const radius = averageTileRadius(patch.tiles);
   const width = radius * intSetting(settings, 'border_width', 0, 600) / 600 * 0.16;
-  if (!borderOn || borderAlpha <= 0 || width <= 1e-7) return null;
+  if (!borderOn || width <= 1e-7) return null;
 
   // border_join: 0 miter · 1 round · 2 bevel. border_fill (0..1) pulls each corner
   // from the sharp miter toward the centroid so border segments meet more fully.
   const joinStyle = intSetting(settings, 'border_join', 0, 2);
   const borderFill = intSetting(settings, 'border_fill', 0, 100) / 100;
-  const borderPoint = intSetting(settings, 'border_point', -100, 100) / 100;
-  // Which tile edges carry a visible border (shared same-type edges are hidden).
-  const visibleKeys = new Set(collectVisibleEdges(patch, projector, snap).map((e) => edgeKey(e.a, e.b)));
-  const sub = intSetting(settings, 'hyp_border_subdiv', 1, 32);
+  const borderPoint = intSetting(settings, 'border_point', 0, 100) / 100;
+  // border_gap (0..1) pulls deeply-inset sharp corner tips back toward their vertex,
+  // closing the inter-tile star hole without collapsing the band.
+  const borderGap = intSetting(settings, 'border_gap', 0, 100) / 100;
+  const sub = clampLinearSubdivision(
+    intSetting(settings, 'hyp_border_subdiv', 1, 32),
+    patchVertexCount(patch.tiles),
+    MAX_BORDER_VERTEX_COUNT,
+    6,
+  );
   const halfWidth = width * 0.5;
   const edgeZ = relief * BORDER_RELIEF_LIFT + radius * BORDER_SURFACE_BIAS;
-  const positions: number[] = [];
-  const tileRing: number[] = [];
-  const tileOrient: number[] = [];
-  const tileCenter: number[] = [];
+  const positions = new Float32Builder();
+  const tileRing = new Float32Builder();
+  const tileOrient = new Float32Builder();
+  const tileCenter = new Float32Builder();
+
+  const pushBorderVertex = (p: Point, ring: number, orient: Point, center: Point): void => {
+    positions.push3(p[0], p[1], edgeZ);
+    tileRing.push1(ring);
+    tileOrient.push2(orient[0], orient[1]);
+    tileCenter.push2(center[0], center[1]);
+  };
 
   const pushTri = (p0: Point, p1: Point, p2: Point, ring: number, orient: Point, center: Point): void => {
-    for (const p of [p0, p1, p2]) {
-      positions.push(p[0], p[1], edgeZ);
-      tileRing.push(ring);
-      tileOrient.push(orient[0], orient[1]);
-      tileCenter.push(center[0], center[1]);
-    }
+    pushBorderVertex(p0, ring, orient, center);
+    pushBorderVertex(p1, ring, orient, center);
+    pushBorderVertex(p2, ring, orient, center);
   };
 
   // Per-tile inset ring: each tile strokes its own border inside itself, so borders
   // can't overlap (disjoint tiles) or gap (tiles share edges exactly), and each
   // vertex join is just the tile's own convex corner. (borderJoin.ts owns the
   // geometry + its headless single-coverage proof, tools/verify_border_joins.mts.)
+  for (const border of borderLayout(patch, settings, projector, snap, sub)) {
+    buildTileRing(border, halfWidth, joinStyle, borderFill, borderPoint, borderGap, pushTri);
+  }
+
+  if (positions.length === 0) return null;
+  const geometry = new BufferGeometry();
+  const position = positions.view();
+  geometry.setAttribute('position', new BufferAttribute(position, 3));
+  geometry.setAttribute('uv', new BufferAttribute(buildUv(position), 2));
+  geometry.setAttribute('tileRing', new BufferAttribute(tileRing.view(), 1));
+  geometry.setAttribute('tileOrient', new BufferAttribute(tileOrient.view(), 2));
+  geometry.setAttribute('tileCenter', new BufferAttribute(tileCenter.view(), 2));
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+export function buildEdgeGeometryForPatch(patch: Patch, settings: Settings): BufferGeometry | null {
+  const projector = createProjector(settings);
+  const snap = createVertexSnapper(projector.enabled ? 1e-5 : 1e-7);
+  return buildEdgeGeometry(patch, settings, projector, snap, averageTileRadius(patch.tiles) * 0.34);
+}
+
+function borderLayoutKey(settings: Settings, sub: number): string {
+  const projection = intSetting(settings, 'projection', 0, 1);
+  const scale = projection === 1 ? intSetting(settings, 'hyp_scale', 0, 100) : 0;
+  return `${projection}:${scale}:${sub}`;
+}
+
+function borderLayout(
+  patch: Patch,
+  settings: Settings,
+  projector: Projector,
+  snap: Snapper,
+  sub: number,
+): BorderLayoutTile[] {
+  const key = borderLayoutKey(settings, sub);
+  let byKey = BORDER_LAYOUT_CACHE.get(patch);
+  if (!byKey) {
+    byKey = new Map();
+    BORDER_LAYOUT_CACHE.set(patch, byKey);
+  }
+  const cached = byKey.get(key);
+  if (cached) return cached;
+
+  // Which tile edges carry a visible border (shared same-type edges are hidden).
+  const visibleKeys = collectVisibleEdgeKeys(patch);
   const spec = familySpec(patch.family);
   const rings = tileRings(patch.tiles, spec);
+  const layout: BorderLayoutTile[] = [];
   for (let tileIndex = 0; tileIndex < patch.tiles.length; tileIndex++) {
     const tile = patch.tiles[tileIndex]!;
     const cen = centroid(tile.verts);
     const projCentroid = snap(projector.map(cen[0], cen[1]));
-    const tileEdges = [];
+    const tileEdges: TileBorder['edges'] = [];
     for (let i = 0; i < tile.verts.length; i++) {
       const a = tile.verts[i]!;
       const b = tile.verts[(i + 1) % tile.verts.length]!;
@@ -450,48 +581,22 @@ function buildEdgeGeometry(
       }
       tileEdges.push({ pts, visible: visibleKeys.has(edgeKey(a, b)) });
     }
-    const border: TileBorder = {
+    layout.push({
       edges: tileEdges,
       centroid: projCentroid,
       ring: rings[tileIndex] ?? 0,
       orient: orientation(tile, patch.family),
       center: projCentroid,
-    };
-    buildTileRing(border, halfWidth, joinStyle, borderFill, borderPoint, pushTri);
+    });
   }
-
-  if (positions.length === 0) return null;
-  const geometry = new BufferGeometry();
-  const position = new Float32Array(positions);
-  geometry.setAttribute('position', new BufferAttribute(position, 3));
-  geometry.setAttribute('uv', new BufferAttribute(buildUv(position), 2));
-  geometry.setAttribute('tileRing', new BufferAttribute(new Float32Array(tileRing), 1));
-  geometry.setAttribute('tileOrient', new BufferAttribute(new Float32Array(tileOrient), 2));
-  geometry.setAttribute('tileCenter', new BufferAttribute(new Float32Array(tileCenter), 2));
-  geometry.computeBoundingSphere();
-  return geometry;
+  byKey.set(key, layout);
+  return layout;
 }
 
-function buildUv(position: Float32Array): Float32Array {
-  const count = position.length / 3;
-  const uv = new Float32Array(count * 2);
-  for (let i = 0; i < count; i++) {
-    uv[i * 2] = position[i * 3] ?? 0;
-    uv[i * 2 + 1] = position[i * 3 + 1] ?? 0;
-  }
-  return uv;
-}
-
-function collectVisibleEdges(patch: Patch, projector: Projector, snap: Snapper): VisibleEdge[] {
+function collectVisibleEdgeKeys(patch: Patch): Set<string> {
   const map = new Map<string, EdgeEntry>();
-  const spec = familySpec(patch.family);
-  const rings = tileRings(patch.tiles, spec);
   for (let tileIndex = 0; tileIndex < patch.tiles.length; tileIndex++) {
     const tile = patch.tiles[tileIndex]!;
-    const center = centroid(tile.verts);
-    const sideCenter = snap(projector.map(center[0], center[1]));
-    const sideOrient = orientation(tile, patch.family);
-    const sideRing = rings[tileIndex] ?? 0;
     for (let i = 0; i < tile.verts.length; i++) {
       const j = (i + 1) % tile.verts.length;
       const a = tile.verts[i]!;
@@ -499,7 +604,7 @@ function collectVisibleEdges(patch: Patch, projector: Projector, snap: Snapper):
       const key = edgeKey(a, b);
       const entry = map.get(key);
       const kind = edgeKind(patch.family, tile, i);
-      const side = { type: tile.type, kind, ring: sideRing, orient: sideOrient, center: sideCenter };
+      const side = { type: tile.type, kind };
       if (entry) {
         entry.second = side;
       } else {
@@ -507,20 +612,14 @@ function collectVisibleEdges(patch: Patch, projector: Projector, snap: Snapper):
       }
     }
   }
-  const edges: VisibleEdge[] = [];
+  const keys = new Set<string>();
   for (const edge of map.values()) {
     if (edge.second && edge.first.type === edge.second.type && hiddenEdge(patch.family, edge.first.kind, edge.second.kind)) {
       continue;
     }
-    edges.push({
-      a: edge.a,
-      b: edge.b,
-      ring: edge.first.ring,
-      orient: edge.first.orient,
-      center: edge.first.center,
-    });
+    keys.add(edgeKey(edge.a, edge.b));
   }
-  return edges;
+  return keys;
 }
 
 function edgeKind(family: number, tile: Tile, edgeIndex: number): EdgeKind {

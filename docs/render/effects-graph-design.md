@@ -148,8 +148,8 @@ material/position/attribute nodes (per `tsl-post-fx-model.md` surface layer).
 ## 8. Constraints / preservation
 
 - **Cost tiers** (keep continuous controls in the uniform tier): live uniform (mat*\*, light*\_, brightness, depth, ripple\_\_, fx\_\*, boost) · buffer update (palette colors) · CPU rebuild (family/seed/generation, projection mode, Poincaré hyp_scale, subdivisions, color_count/mode, border) · pipeline rebuild.
-- **r184 correctness:** color-space domains respected via the tone-map node (Sobel/FXAA after, Bloom/SMAA before); multi-pass/MRT effects (TAA/GTAO/SSR/DOF…) + health checks (`tsl-post-fx-model.md`).
-- **Render health** probes must still pass (no false black/occlusion).
+- **r184 correctness:** color-space domains respected via the tone-map node (Sobel/FXAA after, Bloom/SMAA before); multi-pass/MRT effects (TAA/GTAO/SSR/DOF…) follow the stateful-pass ownership rules in `tsl-post-fx-model.md`.
+- **Render verification** is visual/headed-browser work, not center-pixel polling. Device loss uses the canonical WebGPU path.
 
 ## 9. Sequence
 

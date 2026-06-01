@@ -148,7 +148,7 @@ for (const shape of SHAPES) {
       for (const h of WIDTHS) {
         const tile = tileFromPoly(shape.poly, sd.sub, null, sd.bow);
         const tris: P[][] = [];
-        buildTileRing(tile, h, style.s, 0, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
+        buildTileRing(tile, h, style.s, 0, 0, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
         const real = tris.filter((t) => triArea(t[0]!, t[1]!, t[2]!) > 1e-10);
         // outline polygon (for inside test + band-core sampling)
         const outline: P[] = [];
@@ -197,7 +197,7 @@ for (const shape of SHAPES) {
 {
   const tile = tileFromPoly(SQUARE, 2, [true, false, true, true], 0);
   const tris: P[][] = [];
-  buildTileRing(tile, 0.12, 0, 0, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
+  buildTileRing(tile, 0.12, 0, 0, 0, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
   const mid: P = [1, 0]; // middle of the hidden right edge
   let cover = 0;
   for (const t of tris) if (inTri(mid, t)) cover++;
@@ -212,7 +212,7 @@ for (const shape of SHAPES) {
     for (const fill of [0, 0.4, 0.8, 1]) {
       const tile = tileFromPoly(shape.poly, 4, null, 0);
       const tris: P[][] = [];
-      buildTileRing(tile, 0.1, style.s, fill, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
+      buildTileRing(tile, 0.1, style.s, fill, 0, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
       const real = tris.filter((t) => triArea(t[0]!, t[1]!, t[2]!) > 1e-10);
       const ov = anyOverlap(real);
       if (ov > 0) { failures++; console.log(`  FILL overlap ${shape.name}/${style.n} fill=${fill}: ${(ov * 100).toFixed(0)}%`); }
@@ -232,7 +232,7 @@ for (const shape of SHAPES) {
     for (const point of [0, 0.3, 0.6, 1]) {
       const tile = tileFromPoly(shape.poly, 4, null, 0);
       const tris: P[][] = [];
-      buildTileRing(tile, 0.1, style.s, 0, point, (p0, p1, p2) => tris.push([p0, p1, p2]));
+      buildTileRing(tile, 0.1, style.s, 0, point, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
       const real = tris.filter((t) => triArea(t[0]!, t[1]!, t[2]!) > 1e-10);
       const ov = anyOverlap(real);
       if (ov > 0) { failures++; console.log(`  POINT overlap ${shape.name}/${style.n} point=${point}: ${(ov * 100).toFixed(0)}%`); }
@@ -243,11 +243,38 @@ for (const shape of SHAPES) {
   }
 }
 
+// Close-gap sweep: pulling the sharp corner tips back toward the vertex must never
+// self-overlap and must stay inside the tile (the unassailable property — borders of
+// different tiles still can't cross). It grows coverage toward the vertices, so only
+// overlap + inside-tile are checked. Across every shape/style.
+for (const shape of SHAPES) {
+  for (const style of STYLES) {
+    for (const g of [0, 0.4, 0.8, 1]) {
+      const tile = tileFromPoly(shape.poly, 4, null, 0);
+      const tris: P[][] = [];
+      buildTileRing(tile, 0.1, style.s, 0, 0, g, (p0, p1, p2) => tris.push([p0, p1, p2]));
+      const real = tris.filter((t) => triArea(t[0]!, t[1]!, t[2]!) > 1e-10);
+      const ov = anyOverlap(real);
+      if (ov > 0) { failures++; console.log(`  GAP overlap ${shape.name}/${style.n} gap=${g}: ${(ov * 100).toFixed(0)}%`); }
+      const outline: P[] = [];
+      for (const e of tile.edges) for (let i = 0; i < e.pts.length - 1; i++) outline.push(e.pts[i]!);
+      let outside = 0;
+      for (const t of real) for (const v of t) {
+        if (!inPoly(v, outline)) {
+          const d = Math.min(...outline.map((a, i) => distToSeg(v, a, outline[(i + 1) % outline.length]!).d));
+          if (d > 0.004) outside++;
+        }
+      }
+      if (outside > 0) { failures++; console.log(`  GAP outside-tile ${shape.name}/${style.n} gap=${g}: ${outside}`); }
+    }
+  }
+}
+
 // styles must differ
 function area(style: number): number {
   const tile = tileFromPoly(PENT, 2, null, 0);
   const tris: P[][] = [];
-  buildTileRing(tile, 0.12, style, 0, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
+  buildTileRing(tile, 0.12, style, 0, 0, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
   return tris.reduce((s, t) => s + triArea(t[0]!, t[1]!, t[2]!), 0);
 }
 if (!(Math.abs(area(0) - area(2)) > 1e-4 && Math.abs(area(1) - area(2)) > 1e-4)) {
@@ -302,7 +329,7 @@ if (existsSync(ATLAS_DIR)) {
       };
       for (const style of [0, 1, 2]) {
         const tris: P[][] = [];
-        buildTileRing(tile, radius * 0.08, style, 0, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
+        buildTileRing(tile, radius * 0.08, style, 0, 0, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
         const real = tris.filter((tt) => triArea(tt[0]!, tt[1]!, tt[2]!) > 1e-12);
         if (anyOverlap(real) > 0) { failures++; console.log(`  REAL overlap ${file} tile#${realTiles} style=${style}`); break; }
         for (const tt of real) for (const v of tt) {
@@ -353,7 +380,7 @@ if (existsSync(ATLAS_DIR)) {
       const tile: TileBorder = { edges, centroid: [cx, cy], ring: 0, orient: [1, 0], center: [cx, cy] };
       for (const style of [0, 1, 2]) {
         const tris: P[][] = [];
-        buildTileRing(tile, radius * 0.08, style, 0, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
+        buildTileRing(tile, radius * 0.08, style, 0, 0, 0, (p0, p1, p2) => tris.push([p0, p1, p2]));
         const real = tris.filter((tt) => triArea(tt[0]!, tt[1]!, tt[2]!) > 1e-12);
         if (anyOverlap(real) > 0) { failures++; console.log(`  PROJ overlap ${file} tile#${projTiles} style=${style}`); break; }
         for (const tt of real) for (const v of tt) {

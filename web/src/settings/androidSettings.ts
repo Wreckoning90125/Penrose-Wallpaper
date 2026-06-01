@@ -16,12 +16,12 @@ export type Settings = {
   border_a: SettingValue;
   border_fill: SettingValue;
   border_point: SettingValue;
+  border_gap: SettingValue;
   edge_profile_width: SettingValue;
   edge_profile_glow: SettingValue;
   edge_profile_l: SettingValue;
   edge_profile_c: SettingValue;
   edge_profile_h: SettingValue;
-  bg_mode: SettingValue;
   bg_l: SettingValue;
   bg_c: SettingValue;
   bg_h: SettingValue;
@@ -55,12 +55,6 @@ export type Settings = {
   mat_irid_thick_max: SettingValue;
   mat_rough_mod: SettingValue;
   mat_metal_mod: SettingValue;
-  fx_pixel_size: SettingValue;
-  fx_posterize: SettingValue;
-  fx_grain: SettingValue;
-  fx_rgb_shift: SettingValue;
-  fx_sobel: SettingValue;
-  fx_afterimage: SettingValue;
   projection: SettingValue;
   proj_blend: SettingValue;
   hyp_scale: SettingValue;
@@ -88,12 +82,12 @@ export const DEFAULT_SETTINGS: Settings = {
   border_a: 42,
   border_fill: 0,
   border_point: 0,
+  border_gap: 0,
   edge_profile_width: 0,
   edge_profile_glow: 0,
   edge_profile_l: 100,
   edge_profile_c: 0,
   edge_profile_h: 0,
-  bg_mode: '0',
   bg_l: 4,
   bg_c: 1,
   bg_h: 280,
@@ -127,12 +121,6 @@ export const DEFAULT_SETTINGS: Settings = {
   mat_irid_thick_max: 420,
   mat_rough_mod: 20,
   mat_metal_mod: 20,
-  fx_pixel_size: 1,
-  fx_posterize: 256,
-  fx_grain: 0,
-  fx_rgb_shift: 0,
-  fx_sobel: 0,
-  fx_afterimage: 0,
   projection: '0',
   proj_blend: 0,
   hyp_scale: 50,

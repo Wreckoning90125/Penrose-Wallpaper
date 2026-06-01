@@ -1,6 +1,30 @@
 # tools
 
-Host-side utilities. Not shipped in the APK; built and run standalone.
+Host-side utilities. These are not app runtime code; they either generate checked
+assets or verify contracts across the web and Android implementations.
+
+## Inventory and ownership
+
+| Tool | Scope | Purpose |
+|---|---|---|
+| `generate_web_geometry.py` | web generated data | Converts the native tiling catalogue into compact browser geometry before Vite dev/build. |
+| `verify_atlas.py` | shared atlas data | Validates `atlas/tiling_atlas.json`. |
+| `verify_border_joins.mts` | web geometry | Headless proof for the per-tile border ring tessellator. |
+| `check_graph_contract.mts` | web graph/render | Checks graph schema wiring and renderer contract invariants. |
+| `check_typescript_policy.mts` | web/source policy | Rejects forbidden TypeScript escape hatches in owned source. |
+| `check_plain_js.py` | web/source policy | Keeps owned source out of plain JavaScript. |
+| `validate_shaders.sh` | Android Vulkan | Compiles and validates GLSL/SPIR-V shader assets. |
+| `run_clang_tidy.sh` | Android/native | Runs clang-tidy over native tiling/export sources. |
+| `verify_tilings.cpp` | shared/native tiling | Links the production C++ tiling core and proves substitution closure. |
+| `export_tiling_geometry.cpp` | shared/native tiling | Host exporter used by web geometry generation. |
+| `bake_preset_thumbnails.py` | Android assets | Bakes preset thumbnail metadata for the Android picker. |
+| `static_analysis_ratchet.py` | Android CI | Enforces the native/static-analysis warning budget. |
+
+The directory is intentionally mixed because several checks bridge Android's C++
+tiling source and the web viewer. Keep tool names explicit about their scope;
+don't add ad-hoc browser probes here — browser/debug artifacts belong under
+`output/playwright/` and long-running dev-server helpers belong under
+`scripts/dev/`.
 
 ## `verify_tilings.cpp`
 
@@ -10,7 +34,7 @@ the production `tiling/penrose.cpp` directly. No figure, screenshot, or
 rendered image is consulted.
 
 ```
-g++ -std=c++17 -O2 -I android/app/src/main/cpp \
+g++ -std=c++20 -O2 -I android/app/src/main/cpp \
     tools/verify_tilings.cpp android/app/src/main/cpp/tiling/penrose.cpp \
     -o /tmp/verify_tilings && /tmp/verify_tilings
 ```

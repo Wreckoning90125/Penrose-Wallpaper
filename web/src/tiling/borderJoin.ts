@@ -15,7 +15,6 @@ function unit2(x: number, y: number): Point {
   return len <= 1e-9 ? [1, 0] : [x / len, y / len];
 }
 
-
 // A tile ready to stroke: each boundary edge as a projected polyline (>= 2 points,
 // corner→corner; consecutive edges share a corner), a per-edge visible flag, the
 // projected centroid (for the inward direction), and per-tile shading attributes.
@@ -36,6 +35,7 @@ export function buildTileRing(
   joinStyle: number,
   fill: number,
   point: number,
+  gap: number,
   pushTri: (p0: Point, p1: Point, p2: Point, ring: number, orient: Point, center: Point) => void,
 ): void {
   const { centroid, ring, orient, center } = tile;
@@ -98,6 +98,12 @@ export function buildTileRing(
   // Fill (pull corners toward the centroid) is for convex tilings like the P3 sun;
   // on non-convex tiles it would fold the inset, so it is disabled there.
   const f = anyReflex ? 0 : Math.max(0, Math.min(1, fill));
+  // "Close gap" (applied in the band loop below, independent of Fill/Point) pulls each
+  // band's INNER edge up to its tile vertex at the corner tips only — the band keeps
+  // full width along the edge but tapers to a point at the shared vertex, so the outline
+  // tips of every tile around a vertex meet there and the inter-tile star hole closes.
+  // The already-meeting midline edge is untouched. Reflex tiles are left alone (would fold).
+  const g = anyReflex ? 0 : Math.max(0, Math.min(1, gap));
   const apex: Point[] = [];
   for (let i = 0; i < k; i++) {
     const c = corners[i]!;
@@ -156,18 +162,14 @@ export function buildTileRing(
     innerEnd.push(a1);
   }
 
-  // Point reshapes only the edge ENDS at each convex vertex (never the long edge,
-  // independent of Fill). point > 0 TRIMS the corner spike back to a blunt oblique
-  // cut; point < 0 EXTENDS the segment end forward — parallel to its own midline,
-  // past the vertex — so the ends push toward each other and close the gap (this
-  // intentionally pushes outside the tile / overlaps, which is the look being asked
-  // for). Reflex notches are left alone. point is -1..1.
-  const pt = Math.max(-1, Math.min(1, point));
-  const trim = Math.max(0, pt) * h * 2.2;
-  const extend = Math.max(0, -pt) * h * 2.2;
+  // Point trims the corner SPIKE at each convex vertex — the band stops a short
+  // distance back from the vertex (a blunt oblique cut) instead of tapering to a
+  // sharp point. It only touches the edge ENDS (proportional to half-width), never
+  // the long edge, and is independent of Fill. Reflex notches are left alone.
+  const trim = Math.max(0, Math.min(1, point)) * h * 2.2;
 
   // Band per visible edge: outer = outline points; inner = the straight inset segment
-  // innerStart→innerEnd. outerAt/innerAt extrapolate past the corners so extend works.
+  // innerStart→innerEnd, sampled per outline point (a convex inset-polygon edge).
   for (let e = 0; e < k; e++) {
     if (!tile.edges[e]!.visible) continue;
     const ep = tile.edges[e]!.pts;
@@ -176,10 +178,9 @@ export function buildTileRing(
     const last = ep.length - 1;
     let edgeLen = 0;
     for (let j = 0; j < last; j++) edgeLen += Math.hypot(ep[j + 1]![0] - ep[j]![0], ep[j + 1]![1] - ep[j]![1]);
-    const endShift = (corner: number): number => {
-      if (reflex[corner]) return 0;
-      return (edgeLen > 0 ? Math.min(0.45, trim / edgeLen) - extend / edgeLen : 0);
-    };
+    const endShift = (corner: number): number => (
+      reflex[corner] || edgeLen <= 0 ? 0 : Math.min(0.45, trim / edgeLen)
+    );
     const tA = endShift(e);
     const tB = 1 - endShift((e + 1) % k);
     const outerAt = (t: number): Point => {
@@ -188,10 +189,31 @@ export function buildTileRing(
       const f = s - j;
       return [ep[j]![0] + (ep[j + 1]![0] - ep[j]![0]) * f, ep[j]![1] + (ep[j + 1]![1] - ep[j]![1]) * f];
     };
-    const innerAt = (t: number): Point => [a0[0] + (a1[0] - a0[0]) * t, a0[1] + (a1[1] - a0[1]) * t];
-    const params: number[] = [tA];
-    for (let j = 1; j < last; j++) { const t = j / last; if (t > tA + 1e-9 && t < tB - 1e-9) params.push(t); }
-    params.push(tB);
+    // Close gap: near each corner, pull the inner edge up toward the tile vertex over a
+    // short zone (~1.5·halfWidth of the edge), tapering the band to a point at the
+    // shared vertex while keeping full width in the middle. The tip then coincides with
+    // every other tile's tip at that vertex, closing the inter-tile gap. The pinch is
+    // skipped at a reflex corner. Extra knee samples localise it so the body is intact.
+    const gapZone = g > 0 && edgeLen > 0 ? Math.min(0.45, (h * 1.5) / edgeLen) : 0;
+    const innerAt = (t: number): Point => {
+      let px = a0[0] + (a1[0] - a0[0]) * t;
+      let py = a0[1] + (a1[1] - a0[1]) * t;
+      if (gapZone > 1e-6) {
+        if (!reflex[e]) {
+          const w = g * Math.max(0, Math.min(1, (tA + gapZone - t) / gapZone));
+          if (w > 0) { const c = corners[e]!; px += (c[0] - px) * w; py += (c[1] - py) * w; }
+        }
+        if (!reflex[(e + 1) % k]) {
+          const w = g * Math.max(0, Math.min(1, (t - (tB - gapZone)) / gapZone));
+          if (w > 0) { const c = corners[(e + 1) % k]!; px += (c[0] - px) * w; py += (c[1] - py) * w; }
+        }
+      }
+      return [px, py];
+    };
+    const ts = new Set<number>([tA, tB]);
+    for (let j = 1; j < last; j++) { const t = j / last; if (t > tA + 1e-9 && t < tB - 1e-9) ts.add(t); }
+    if (gapZone > 1e-6) for (const knee of [tA + gapZone, tB - gapZone]) if (knee > tA + 1e-9 && knee < tB - 1e-9) ts.add(knee);
+    const params = [...ts].sort((a, b) => a - b);
     for (let i = 0; i < params.length - 1; i++) {
       const t0 = params[i]!;
       const t1 = params[i + 1]!;
@@ -216,8 +238,8 @@ export function buildTileRing(
     const cOut = innerStart[i]!; // outgoing edge's inner endpoint at corner i
     if (reflex[i]) {
       pushTri(v, cIn, cOut, ring, orient, center); // reflex notch (untouched by Point)
-    } else if (trim > 1e-9 || extend > 1e-9) {
-      continue; // convex corner reshaped by Point (trim/extend) — no apex fill
+    } else if (trim > 1e-9) {
+      continue; // convex spike trimmed flat — no apex fill
     } else if (cut > 0 && joinStyle === 1) {
       const m = apex[i]!;
       const segs = 4;

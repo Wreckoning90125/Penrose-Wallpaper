@@ -45,14 +45,13 @@ import {
   vec2,
   vec3,
 } from 'three/tsl';
-import type { FieldSlot, PostChainSpec, RenderInputs } from '../types';
+import type { FieldSlot, PostChainNode, PostChainSpec, RenderInputs } from '../types';
 import { fxBuilder, afterImageDamp, type FxUniforms, type FxContext } from './postFxRegistry';
 import { fxDescriptor, fxStructuralSignature } from './postFxCatalog';
 import { intSetting, lightSettings, materialSettings, type MaterialSettings, type Settings } from '../settings/androidSettings';
 import { oklchToLinearSrgb } from '../color/palette';
 import type { Palette } from '../color/palette';
 import type { AudioDriveEditState, AudioModulationValues, ProjectionGesture } from '../types';
-import { CenterHealthTracker } from './renderHealth';
 import { clampNumber } from '../util/clamp';
 
 type RendererUniforms = ReturnType<typeof createRendererUniforms>;
@@ -68,16 +67,6 @@ type DragState = {
   bx: number;
   by: number;
 };
-type HealthSamplePoint = {
-  sourceX: number;
-  sourceY: number;
-  viewportX: number;
-  viewportY: number;
-};
-type HealthSampleRegion = {
-  points: HealthSamplePoint[];
-};
-
 function clampLinearColor(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
@@ -91,6 +80,8 @@ function createFieldSlots() {
   return Array.from({ length: 3 }, () => ({
     freq: uniform(4),
     speed: uniform(0),
+    phase: uniform(0),
+    phaseMix: uniform(0),
     relief: uniform(0),
     undulate: uniform(0),
     undulateFreq: uniform(2.5),
@@ -113,11 +104,13 @@ function createRendererUniforms() {
     emissive: uniform(0),
     colorMix: uniform(1),
     materialMix: uniform(1),
+    materialReliefMix: uniform(1),
     projectionMix: uniform(1),
     displaceMix: uniform(1),
     reliefMix: uniform(1),
     colorFieldMix: uniform(1),
     undulateMix: uniform(1),
+    fieldPhaseMix: uniform(1),
     projBlend: uniform(0),
     projScale: uniform(1.525),
     shadeFloor: uniform(0.04),
@@ -129,10 +122,10 @@ function createRendererUniforms() {
     rippleFreq: uniform(4),
     undulateFreq: uniform(2.5),
     fieldSpeed: uniform(0.8),
+    fieldPhase: uniform(0),
     depthScale: uniform(0.42),
     reliefScale: uniform(0.55),
     edgeDepthBias: uniform(0.0015),
-    time: uniform(0),
     boostX: uniform(0),
     boostY: uniform(0),
   };
@@ -170,6 +163,8 @@ export class WallpaperRenderer {
   // trail reads it for its surface mask); updated when the background changes.
   postBgUniform: UniformNode<'vec3', Vector3>;
   postFxContext: FxContext;
+  paletteSignature: string;
+  paletteColorAttribute: BufferAttribute | null;
   uniforms: RendererUniforms;
   material: MeshPhysicalNodeMaterial;
   edgeMaterial: MeshBasicNodeMaterial;
@@ -186,29 +181,22 @@ export class WallpaperRenderer {
   settings: Partial<Settings>;
   audioBoostX: number | null;
   audioBoostY: number | null;
+  audioDriveActive: boolean;
+  audioProjectionActive: boolean;
   audioEditMode: AudioDriveEditState['dragMode'];
   dragBoostX: number;
   dragBoostY: number;
   viewZoom: number;
   initialized: boolean;
-  clockEnabled: boolean;
-  clockRate: number;
-  clockTime: number;
-  clockFrame: number;
-  clockLast: number;
+  renderFrame: number;
+  renderRequested: boolean;
   drag: DragState | null;
   projectionGesture: ProjectionGesture | null;
   resizeObserver: ResizeObserver;
-  healthCanvas: HTMLCanvasElement;
-  healthContext: CanvasRenderingContext2D | null;
-  healthTracker: CenterHealthTracker;
-  healthFrame: number;
   warmupFrame: number;
   warmupFramesRemaining: number;
-  lastHealthCheck: number;
-  healthReadbackFailed: boolean;
-  forceCenterBlackHealthProbe: boolean;
-  forceCenterOcclusionHealthProbe: boolean;
+  lastResizeWidth: number;
+  lastResizeHeight: number;
   deviceLost: boolean;
   onDeviceLost: ((message: string) => void) | null;
 
@@ -247,6 +235,8 @@ export class WallpaperRenderer {
     this.scenePassNode = null;
     this.postOutputNode = null;
     this.postBg = [0, 0, 0];
+    this.paletteSignature = '';
+    this.paletteColorAttribute = null;
 
     this.uniforms = createRendererUniforms();
 
@@ -271,30 +261,21 @@ export class WallpaperRenderer {
     this.settings = {};
     this.audioBoostX = null;
     this.audioBoostY = null;
+    this.audioDriveActive = false;
+    this.audioProjectionActive = false;
     this.audioEditMode = 'ride';
     this.dragBoostX = 50;
     this.dragBoostY = 50;
     this.viewZoom = 1;
     this.initialized = false;
-    this.clockEnabled = false;
-    this.clockRate = 1;
-    this.clockTime = 0;
-    this.clockFrame = 0;
-    this.clockLast = 0;
+    this.renderFrame = 0;
+    this.renderRequested = false;
     this.drag = null;
     this.projectionGesture = null;
-    this.healthCanvas = document.createElement('canvas');
-    this.healthCanvas.width = 1;
-    this.healthCanvas.height = 1;
-    this.healthContext = this.healthCanvas.getContext('2d', { willReadFrequently: true });
-    this.healthTracker = new CenterHealthTracker();
-    this.healthFrame = 0;
     this.warmupFrame = 0;
     this.warmupFramesRemaining = 0;
-    this.lastHealthCheck = 0;
-    this.healthReadbackFailed = false;
-    this.forceCenterBlackHealthProbe = new URLSearchParams(window.location.search).has('penroseForceCenterBlack');
-    this.forceCenterOcclusionHealthProbe = new URLSearchParams(window.location.search).has('penroseForceCenterOccluded');
+    this.lastResizeWidth = 0;
+    this.lastResizeHeight = 0;
     this.deviceLost = false;
     this.onDeviceLost = null;
     this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -311,9 +292,10 @@ export class WallpaperRenderer {
     await this.renderer.init();
     this.initialized = true;
     // WebGPU can drop the device (alt-tab / GPU process change / memory
-    // pressure). Without this listener the next render after a loss throws and
-    // cascades ("Instance dropped in popErrorScope") on the next click. Detect
-    // it, stop the render/clock/health loops, and surface it cleanly.
+    // pressure). The canonical signal is the GPUDevice.lost promise (reached via
+    // three's backend below) — deterministic, no per-frame pixel polling. Without
+    // it the next render after a loss throws and cascades ("Instance dropped in
+    // popErrorScope"). Detect it, stop the render/clock loops, surface it cleanly.
     const lost = this.deviceLostPromise();
     // Disposing the renderer calls device.destroy(), which resolves device.lost
     // with reason 'destroyed' — an intentional teardown, NOT a real loss. Ignore
@@ -326,7 +308,6 @@ export class WallpaperRenderer {
     this.scene.environment = this.createEnvironmentTexture();
     this.rebuildPostPipeline();
     this.resize();
-    this.render();
   }
 
   deviceLostPromise(): Promise<{ message?: string; reason?: string }> | null {
@@ -343,11 +324,6 @@ export class WallpaperRenderer {
   handleDeviceLost(message: string): void {
     if (this.deviceLost) return;
     this.deviceLost = true;
-    this.stopClock();
-    if (this.healthFrame) {
-      cancelAnimationFrame(this.healthFrame);
-      this.healthFrame = 0;
-    }
     // Fail hard and visibly — losing the device should NOT happen in this app,
     // so surface it (App shows a fatal screen) rather than silently degrade or
     // recover, to force fixing the root cause.
@@ -380,8 +356,31 @@ export class WallpaperRenderer {
 
   postChainSignatureOf(spec: PostChainSpec): string {
     return spec
-      .map(node => `${node.id}:${node.kind}:${node.bypass ? 1 : 0}:${fxStructuralSignature(node.kind, node.params, node.selects)}`)
+      .map(node => `${node.id}:${node.kind}:${node.bypass ? 1 : 0}:${this.postNodeIsNoop(node) ? 1 : 0}:${fxStructuralSignature(node.kind, node.params, node.selects)}`)
       .join('|');
+  }
+
+  postNodeIsNoop(node: PostChainNode): boolean {
+    const p = (key: string, fallback: number): number => {
+      const value = node.params[key];
+      return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+    };
+    switch (node.kind) {
+      case 'pixelate': return p('size', 1) <= 1;
+      case 'posterize': return p('steps', 256) >= 256;
+      case 'filmGrain': return p('amount', 0) <= 0;
+      case 'rgbShift': return p('amount', 0) <= 0;
+      case 'sobel': return p('mix', 0) <= 0;
+      case 'afterImage': return p('trail', 0) <= 0;
+      case 'chromaticAberration': return p('strength', 0) <= 0;
+      case 'sepia': return p('mix', 0) <= 0;
+      case 'bleach': return p('opacity', 0) <= 0;
+      case 'blur': return p('amount', 0) <= 0;
+      case 'feedback': return p('trail', 0) <= 0;
+      case 'aa': return (node.selects['mode'] ?? 'off') === 'off';
+      case 'contours': return p('mix', 0) <= 0;
+      default: return false;
+    }
   }
 
   // Free every render target the discarded post-node tree owns. three's
@@ -450,6 +449,7 @@ export class WallpaperRenderer {
     let hasToneMap = false;
     for (const node of this.postChainSpec) {
       if (node.bypass) continue;
+      if (this.postNodeIsNoop(node)) continue;
       const descriptor = fxDescriptor(node.kind);
       if (!descriptor) continue;
       if (node.kind === 'toneMap') {
@@ -480,15 +480,18 @@ export class WallpaperRenderer {
   setPostChain(spec: PostChainSpec): void {
     this.postChainSpec = spec;
     const signature = this.postChainSignatureOf(spec);
+    let rebuilt = false;
     if (signature !== this.postChainSignature) {
       this.postChainSignature = signature;
       this.rebuildPostPipeline();
+      rebuilt = true;
     }
-    this.writePostChainUniforms();
-    this.render();
+    const uniformsChanged = this.writePostChainUniforms();
+    if (rebuilt || uniformsChanged) this.render();
   }
 
-  writePostChainUniforms(): void {
+  writePostChainUniforms(): boolean {
+    let changed = false;
     for (const node of this.postChainSpec) {
       const uniforms = this.postChainUniforms.get(node.id);
       if (!uniforms) continue;
@@ -498,16 +501,19 @@ export class WallpaperRenderer {
       for (const [key, value] of Object.entries(node.params)) {
         const target = uniforms[key];
         if (!target) continue;
-        if (feedbackDomain && key === 'trail') {
-          target.value = afterImageDamp(value);
-          continue;
-        }
+        let next = value;
+        if (feedbackDomain && key === 'trail') next = afterImageDamp(value);
         // Dot-screen scale is a normalized 0..1 control mapped to raw scale 8*v^2,
         // so the coarse/useful range gets most of the slider and the degenerate
         // ultra-fine bottom is compressed into the first ~11% of travel.
-        target.value = node.kind === 'dotScreen' && key === 'scale' ? value * value * 8 : value;
+        if (node.kind === 'dotScreen' && key === 'scale') next = value * value * 8;
+        if (target.value !== next) {
+          target.value = next;
+          changed = true;
+        }
       }
     }
+    return changed;
   }
 
   boostCoordinateNodes(x: Node<'float'>, y: Node<'float'>) {
@@ -541,15 +547,21 @@ export class WallpaperRenderer {
     return { x: boostedX, y: boostedY };
   }
 
-  // A unit sine wave parameterized by spatial frequency and temporal speed, so
-  // each field source can carry its own independent wave. The global clock drives
-  // `time`; each source scales it by its own speed (slot 0 reproduces the old
-  // global animation exactly: clockRate dropped the field_speed factor and the
-  // `speed` argument re-applies it).
-  rippleWaveNode(x: Node<'float'>, y: Node<'float'>, freq: Node<'float'>, speed: Node<'float'>): Node<'float'> {
+  // A unit sine wave parameterized by spatial frequency plus an optional clock
+  // phase. The Clock node emits normalized 0..1 phase. Field speed is interpreted
+  // as an integer number of cycles per clock loop; arbitrary fractional
+  // multipliers make phase wrap discontinuous.
+  rippleWaveNode(
+    x: Node<'float'>,
+    y: Node<'float'>,
+    freq: Node<'float'>,
+    speed: Node<'float'>,
+    phaseValue: Node<'float'>,
+    phaseMix: Node<'float'>,
+  ): Node<'float'> {
     const phase = x.mul(freq)
       .add(y.mul(freq.mul(0.73)))
-      .add(this.uniforms.time.mul(speed));
+      .add(phaseValue.mul(float(Math.PI * 2)).mul(speed.round()).mul(phaseMix));
     return sin(phase);
   }
 
@@ -570,8 +582,10 @@ export class WallpaperRenderer {
     return directionalDepth.add(contourDepth);
   }
 
-  // The surface z-displacement. The scalar relief (positionLocal.z * reliefScale)
-  // is always present. Three distinct fields ride on top, each on its own §0 wire:
+  // The surface z-displacement. The scalar material relief
+  // (positionLocal.z * reliefScale) is a routed Surface Material lane: material
+  // relief can go straight to the Scene Pass or through a Field Source. Three
+  // distinct fields ride on top, each on its own §0 wire:
   //  - DISPLACE (per-tile bulge, gated by displaceMix),
   //  - RELIEF   (a wave that modulates the baked relief, gated by reliefMix),
   //  - UNDULATE (an ADDITIVE wave across the whole atlas — z += sin*amp — so flat
@@ -584,16 +598,19 @@ export class WallpaperRenderer {
     tileOrient: Node<'vec2'>,
     tileCenter: Node<'vec2'>,
   ): Node<'float'> {
-    const reliefZ = positionLocal.z.mul(this.uniforms.reliefScale);
+    const reliefZ = positionLocal.z
+      .mul(this.uniforms.reliefScale)
+      .mul(this.uniforms.materialMix)
+      .mul(this.uniforms.materialReliefMix);
     const displaceField = this.surfaceDepthNode(boostedX, boostedY, tileRing, tileOrient, tileCenter);
-    const wave = this.rippleWaveNode(boostedX, boostedY, this.uniforms.rippleFreq, this.uniforms.fieldSpeed);
+    const wave = this.rippleWaveNode(boostedX, boostedY, this.uniforms.rippleFreq, this.uniforms.fieldSpeed, this.uniforms.fieldPhase, this.uniforms.fieldPhaseMix);
     const reliefField = reliefZ.mul(wave).mul(this.uniforms.rippleAmp);
     // Undulate is the whole-sheet wave: a 1-D plane wave displacing z (up), so the
     // flat atlas bends like paper. No relief term — any real relief just rides the
     // bent sheet (z heights add). Its frequency is its own driven control; shading
     // stays smooth at ANY frequency because the normal is analytic (surfaceNormalNode),
     // not the polygon face. Frequency sets the bend scale; it does NOT cause faceting.
-    const undulateWave = this.rippleWaveNode(boostedX, boostedY, this.uniforms.undulateFreq, this.uniforms.fieldSpeed);
+    const undulateWave = this.rippleWaveNode(boostedX, boostedY, this.uniforms.undulateFreq, this.uniforms.fieldSpeed, this.uniforms.fieldPhase, this.uniforms.fieldPhaseMix);
     const undulateField = undulateWave.mul(this.uniforms.undulateAmp);
     let z = reliefZ
       .add(displaceField.mul(this.uniforms.displaceMix))
@@ -601,8 +618,8 @@ export class WallpaperRenderer {
       .add(undulateField.mul(this.uniforms.undulateMix));
     // Extra independent field sources: each adds its own wave's relief + undulate.
     for (const slot of this.uniforms.fieldSlots) {
-      const slotWave = this.rippleWaveNode(boostedX, boostedY, slot.freq, slot.speed);
-      const slotUndulate = this.rippleWaveNode(boostedX, boostedY, slot.undulateFreq, slot.speed);
+      const slotWave = this.rippleWaveNode(boostedX, boostedY, slot.freq, slot.speed, slot.phase, slot.phaseMix);
+      const slotUndulate = this.rippleWaveNode(boostedX, boostedY, slot.undulateFreq, slot.speed, slot.phase, slot.phaseMix);
       z = z.add(reliefZ.mul(slotWave).mul(slot.relief)).add(slotUndulate.mul(slot.undulate));
     }
     return z;
@@ -639,10 +656,22 @@ export class WallpaperRenderer {
     // finely across the tent), giving back the "proper" relief shading. The xy/z
     // ratio is invariant to the cross product's winding sign, so DoubleSide is fine.
     // (Local/object space; exact in Euclidean, an approximation under Poincaré boost.)
-    const bakedPos = vec3(positionLocal.x, positionLocal.y, positionLocal.z.mul(this.uniforms.reliefScale));
+    const bakedPos = vec3(
+      positionLocal.x,
+      positionLocal.y,
+      positionLocal.z
+        .mul(this.uniforms.reliefScale)
+        .mul(this.uniforms.materialMix)
+        .mul(this.uniforms.materialReliefMix),
+    );
     const nBaked = normalize(cross(dFdx(bakedPos), dFdy(bakedPos)));
-    const bgx = clamp(nBaked.x.div(nBaked.z), float(-8), float(8));
-    const bgy = clamp(nBaked.y.div(nBaked.z), float(-8), float(8));
+    // Very high relief can make the baked face nearly vertical in screen
+    // derivatives. Dividing by a near-zero z normal produces extreme/invalid
+    // slopes, which shows up as black physical-material faces. Keep the same
+    // relief geometry but bound the shading normal's slope extraction.
+    const bakedZ = max(nBaked.z, float(0.08));
+    const bgx = clamp(nBaked.x.div(bakedZ), float(-4), float(4));
+    const bgy = clamp(nBaked.y.div(bakedZ), float(-4), float(4));
     const localNormal = normalize(vec3(gx.add(bgx), gy.add(bgy), float(1)));
     // DoubleSide two-sided normal. The geometry now has consistent CCW winding (see
     // emitTriangle flip), so frontFacing reliably tells front from back: the front
@@ -686,9 +715,9 @@ export class WallpaperRenderer {
     const tileType = attribute<'float'>('tileType', 'float');
     const tileRing = attribute<'float'>('tileRing', 'float');
     const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
-    let rippleColor = this.rippleWaveNode(positionLocal.x, positionLocal.y, this.uniforms.rippleFreq, this.uniforms.fieldSpeed).mul(this.uniforms.rippleColorAmp).mul(this.uniforms.colorFieldMix);
+    let rippleColor = this.rippleWaveNode(positionLocal.x, positionLocal.y, this.uniforms.rippleFreq, this.uniforms.fieldSpeed, this.uniforms.fieldPhase, this.uniforms.fieldPhaseMix).mul(this.uniforms.rippleColorAmp).mul(this.uniforms.colorFieldMix);
     for (const slot of this.uniforms.fieldSlots) {
-      rippleColor = rippleColor.add(this.rippleWaveNode(positionLocal.x, positionLocal.y, slot.freq, slot.speed).mul(slot.color));
+      rippleColor = rippleColor.add(this.rippleWaveNode(positionLocal.x, positionLocal.y, slot.freq, slot.speed, slot.phase, slot.phaseMix).mul(slot.color));
     }
     const material = new MeshPhysicalNodeMaterial({
       side: DoubleSide,
@@ -700,8 +729,9 @@ export class WallpaperRenderer {
     // brightness lives on the material node; gate it by matMix so a disconnected
     // material has zero effect (matMix 0 -> neutral 1.0). The colour ripple field
     // is gated separately by colorFieldMix.
+    const materialColor = mix(vec3(1.0, 1.0, 1.0), vertexColor(), this.uniforms.colorMix);
     material.colorNode = clamp(
-      mix(vec3(1.0, 1.0, 1.0), vertexColor(), this.uniforms.colorMix)
+      mix(vec3(1.0, 1.0, 1.0), materialColor, this.uniforms.materialMix)
         .mul(mix(float(1.0), this.uniforms.brightness, this.uniforms.materialMix).add(rippleColor)),
       0.0,
       1.0,
@@ -743,23 +773,30 @@ export class WallpaperRenderer {
     const colorAttribute = this.mesh.geometry.getAttribute('color');
     const slotAttribute = this.mesh.geometry.getAttribute('paletteSlot');
     if (!(colorAttribute instanceof BufferAttribute) || !(slotAttribute instanceof BufferAttribute)) return;
+    const signature = palette.colors.map(color => color.join(',')).join('|');
+    if (this.paletteSignature === signature && this.paletteColorAttribute === colorAttribute) return;
     const colorArray = colorAttribute.array;
     const slotArray = slotAttribute.array;
     if (!(colorArray instanceof Float32Array) || !(slotArray instanceof Float32Array)) return;
+    const rgbBySlot = palette.colors.map(color => {
+      const rgb = oklchToLinearSrgb(color);
+      return [clampLinearColor(rgb[0]), clampLinearColor(rgb[1]), clampLinearColor(rgb[2])] as const;
+    });
+    const fallback = rgbBySlot[0] ?? ([1, 1, 1] as const);
     for (let i = 0; i < slotArray.length; i += 1) {
       const slot = Math.max(0, Math.min(palette.colors.length - 1, Math.round(slotArray[i] ?? 0)));
-      const source = palette.colors[slot] ?? palette.colors[0];
-      if (!source) continue;
-      const rgb = oklchToLinearSrgb(source);
+      const rgb = rgbBySlot[slot] ?? fallback;
       const p = i * 3;
-      colorArray[p] = clampLinearColor(rgb[0]);
-      colorArray[p + 1] = clampLinearColor(rgb[1]);
-      colorArray[p + 2] = clampLinearColor(rgb[2]);
+      colorArray[p] = rgb[0];
+      colorArray[p + 1] = rgb[1];
+      colorArray[p + 2] = rgb[2];
     }
     colorAttribute.needsUpdate = true;
+    this.paletteSignature = signature;
+    this.paletteColorAttribute = colorAttribute;
   }
 
-  setGeometry(geometry: BufferGeometry, edgeGeometry: BufferGeometry | null = null): void {
+  setGeometry(geometry: BufferGeometry, edgeGeometry: BufferGeometry | null = null, options: { frame?: boolean; warmup?: boolean } = {}): void {
     if (this.mesh) {
       this.group.remove(this.mesh);
       this.mesh.geometry.dispose();
@@ -770,6 +807,7 @@ export class WallpaperRenderer {
       this.edgeMesh = null;
     }
     this.mesh = new Mesh(geometry, this.material);
+    this.paletteColorAttribute = null;
     this.group.add(this.mesh);
     if (edgeGeometry) {
       this.edgeMesh = new Mesh(edgeGeometry, this.edgeMaterial);
@@ -777,9 +815,24 @@ export class WallpaperRenderer {
       this.group.add(this.edgeMesh);
     }
     this.applyRenderConnected();
-    this.frameMesh();
+    if (options.frame !== false) this.frameMesh();
     this.render();
-    this.requestWarmupFrames(10);
+    if (options.warmup !== false) this.requestWarmupFrames(10);
+  }
+
+  setEdgeGeometry(edgeGeometry: BufferGeometry | null): void {
+    if (this.edgeMesh) {
+      this.group.remove(this.edgeMesh);
+      this.edgeMesh.geometry.dispose();
+      this.edgeMesh = null;
+    }
+    if (edgeGeometry) {
+      this.edgeMesh = new Mesh(edgeGeometry, this.edgeMaterial);
+      this.edgeMesh.renderOrder = 2;
+      this.group.add(this.edgeMesh);
+    }
+    this.applyRenderConnected();
+    this.render();
   }
 
   applyRenderConnected(): void {
@@ -790,35 +843,45 @@ export class WallpaperRenderer {
   }
 
   setRenderInputs(inputs: RenderInputs): void {
+    // Palette color is the Surface Material's own color inlet. The newer
+    // material-color lane controls whether that color/field lane reaches the
+    // Scene Pass or a Field Source; it must not retroactively turn the base
+    // material white when an older/partial graph lacks that lane.
     const colorMix = inputs.color ? 1 : 0;
     const materialMix = inputs.material ? 1 : 0;
+    const materialReliefMix = inputs.materialRelief ? 1 : 0;
     const projectionMix = inputs.projection ? 1 : 0;
     const displaceMix = inputs.fieldDisplace ? 1 : 0;
-    const reliefMix = inputs.fieldRelief ? 1 : 0;
-    const colorFieldMix = inputs.fieldColor ? 1 : 0;
+    const reliefMix = inputs.fieldRelief && inputs.materialRelief ? 1 : 0;
+    const colorFieldMix = inputs.fieldColor && inputs.color && inputs.materialColor ? 1 : 0;
     const undulateMix = inputs.fieldUndulate ? 1 : 0;
+    const fieldPhaseMix = inputs.fieldPhase ? 1 : 0;
     const changed =
       this.renderConnected !== inputs.geometry ||
       this.borderConnected !== inputs.border ||
       this.lightingConnected !== inputs.lighting ||
       this.uniforms.colorMix.value !== colorMix ||
       this.uniforms.materialMix.value !== materialMix ||
+      this.uniforms.materialReliefMix.value !== materialReliefMix ||
       this.uniforms.projectionMix.value !== projectionMix ||
       this.uniforms.displaceMix.value !== displaceMix ||
       this.uniforms.reliefMix.value !== reliefMix ||
       this.uniforms.colorFieldMix.value !== colorFieldMix ||
-      this.uniforms.undulateMix.value !== undulateMix;
+      this.uniforms.undulateMix.value !== undulateMix ||
+      this.uniforms.fieldPhaseMix.value !== fieldPhaseMix;
     if (!changed) return;
     this.renderConnected = inputs.geometry;
     this.borderConnected = inputs.border;
     this.lightingConnected = inputs.lighting;
     this.uniforms.colorMix.value = colorMix;
     this.uniforms.materialMix.value = materialMix;
+    this.uniforms.materialReliefMix.value = materialReliefMix;
     this.uniforms.projectionMix.value = projectionMix;
     this.uniforms.displaceMix.value = displaceMix;
     this.uniforms.reliefMix.value = reliefMix;
     this.uniforms.colorFieldMix.value = colorFieldMix;
     this.uniforms.undulateMix.value = undulateMix;
+    this.uniforms.fieldPhaseMix.value = fieldPhaseMix;
     this.applyRenderConnected();
     this.applyLights(this.settings);
     this.render();
@@ -831,15 +894,21 @@ export class WallpaperRenderer {
     let changed = false;
     this.uniforms.fieldSlots.forEach((target, index) => {
       const input = slots[index];
-      const next = input ?? { freq: 4, speed: 0, relief: 0, undulate: 0, undulateFreq: 2.5, color: 0 };
+      const next = input ?? { freq: 4, speed: 0, phase: 0, phaseConnected: false, relief: 0, undulate: 0, undulateFreq: 2.5, color: 0 };
+      const phase = Math.max(0, Math.min(1, next.phase));
+      const phaseMix = next.phaseConnected ? 1 : 0;
       if (
         target.freq.value !== next.freq || target.speed.value !== next.speed
+        || target.phase.value !== phase
+        || target.phaseMix.value !== phaseMix
         || target.relief.value !== next.relief || target.undulate.value !== next.undulate
         || target.undulateFreq.value !== next.undulateFreq || target.color.value !== next.color
       ) {
         changed = true;
         target.freq.value = next.freq;
         target.speed.value = next.speed;
+        target.phase.value = phase;
+        target.phaseMix.value = phaseMix;
         target.relief.value = next.relief;
         target.undulate.value = next.undulate;
         target.undulateFreq.value = next.undulateFreq;
@@ -847,6 +916,13 @@ export class WallpaperRenderer {
       }
     });
     if (changed) this.render();
+  }
+
+  setFieldPhase(phase: number): void {
+    const next = Math.max(0, Math.min(1, Number.isFinite(phase) ? phase : 0));
+    if (this.uniforms.fieldPhase.value === next) return;
+    this.uniforms.fieldPhase.value = next;
+    this.render();
   }
 
   setSettings(settings: Settings, palette: Palette): void {
@@ -907,9 +983,7 @@ export class WallpaperRenderer {
     this.renderer.setClearColor(new Color(bg[0], bg[1], bg[2]), 1);
     this.postBg = [bg[0], bg[1], bg[2]];
     this.postBgUniform.value.set(bg[0], bg[1], bg[2]);
-    this.setClockFromSettings(settings);
     this.render();
-    if (this.mesh) this.requestWarmupFrames(4);
   }
 
   setProjectionBoost(x: number, y: number, enabled = true, shouldRender = true): void {
@@ -936,6 +1010,17 @@ export class WallpaperRenderer {
     editState: AudioDriveEditState,
     modulations: AudioModulationValues = {},
   ): void {
+    const hasLiveModulation = Object.entries(modulations).some(([key, value]) => (
+      typeof value === 'number'
+      && Number.isFinite(value)
+      && !(editState.dragMode === 'hold' && editState.heldParams[key] === true)
+    ));
+    if (!hasLiveModulation && !this.audioDriveActive) {
+      this.audioEditMode = editState.dragMode;
+      return;
+    }
+    const hadProjectionModulation = this.audioProjectionActive;
+    this.audioDriveActive = hasLiveModulation;
     this.audioEditMode = editState.dragMode;
     const held = (key: string) => editState.dragMode === 'hold' && editState.heldParams[key] === true;
     const hasModulation = (key: string): boolean => {
@@ -1023,26 +1108,33 @@ export class WallpaperRenderer {
     ) {
       this.applyLights(audioSettings);
     }
-    this.projectionScale = displayScaleFromSettings(audioSettings);
-    this.uniforms.projBlend.value = intSetting(audioSettings, 'proj_blend', 0, 100) / 100;
-    this.uniforms.projScale.value = 0.05 + intSetting(audioSettings, 'hyp_scale', 0, 100) / 100 * 2.95;
-    this.applyGroupScale();
+    const hasProjectionModulation = hasModulation('hyp_scale')
+      || hasModulation('proj_blend')
+      || hasModulation('hyp_boost_x')
+      || hasModulation('hyp_boost_y');
+    this.audioProjectionActive = hasProjectionModulation;
     this.audioBoostX = hasModulation('hyp_boost_x') ? modulatedDelta('hyp_boost_x', 0, 100) : null;
     this.audioBoostY = hasModulation('hyp_boost_y') ? modulatedDelta('hyp_boost_y', 0, 100) : null;
-    if (this.drag?.mode === 'boost') {
-      this.setProjectionBoost(
-        this.effectiveDragBoost('x', this.dragBoostX),
-        this.effectiveDragBoost('y', this.dragBoostY),
-        true,
-        false,
-      );
-    } else {
-      this.setProjectionBoost(
-        modulatedValue('hyp_boost_x', 0, 100),
-        modulatedValue('hyp_boost_y', 0, 100),
-        String(audioSettings.projection) === '1',
-        false,
-      );
+    if (hasProjectionModulation || hadProjectionModulation) {
+      this.projectionScale = displayScaleFromSettings(audioSettings);
+      this.uniforms.projBlend.value = intSetting(audioSettings, 'proj_blend', 0, 100) / 100;
+      this.uniforms.projScale.value = 0.05 + intSetting(audioSettings, 'hyp_scale', 0, 100) / 100 * 2.95;
+      this.applyGroupScale();
+      if (this.drag?.mode === 'boost') {
+        this.setProjectionBoost(
+          this.effectiveDragBoost('x', this.dragBoostX),
+          this.effectiveDragBoost('y', this.dragBoostY),
+          true,
+          false,
+        );
+      } else {
+        this.setProjectionBoost(
+          modulatedValue('hyp_boost_x', 0, 100),
+          modulatedValue('hyp_boost_y', 0, 100),
+          String(audioSettings.projection) === '1',
+          false,
+        );
+      }
     }
     this.render();
   }
@@ -1051,45 +1143,22 @@ export class WallpaperRenderer {
     this.projectionGesture = config;
   }
 
-  setClockFromSettings(settings: Settings): void {
-    this.clockEnabled = String(settings.clock_enabled ?? '1') !== '0';
-    // The clock is now field-source-independent (clock_rate only). Each field
-    // source scales `time` by its own speed in the wave, so the per-source speed
-    // lives on the field uniform, not the global clock.
-    this.clockRate = Math.max(0, intSetting(settings, 'clock_rate', 0, 240) / 100);
-    if (this.clockEnabled) {
-      this.startClock();
-    } else {
-      this.stopClock();
-    }
-  }
-
   resetClock(): void {
-    this.clockTime = 0;
-    this.uniforms.time.value = 0;
-    this.render();
+    this.setFieldPhase(0);
   }
 
-  startClock(): void {
-    if (this.clockFrame || !this.initialized) return;
-    this.clockLast = performance.now();
-    const tick = (now: number) => {
-      this.clockFrame = 0;
-      if (!this.clockEnabled) return;
-      const delta = Math.min(0.05, Math.max(0, (now - this.clockLast) / 1000));
-      this.clockLast = now;
-      this.clockTime += delta * this.clockRate;
-      this.uniforms.time.value = this.clockTime;
-      this.render();
-      this.clockFrame = requestAnimationFrame(tick);
-    };
-    this.clockFrame = requestAnimationFrame(tick);
+  scheduleRenderFrame(): void {
+    if (this.renderFrame || !this.initialized || this.deviceLost) return;
+    this.renderFrame = requestAnimationFrame(now => this.flushRenderFrame(now));
   }
 
-  stopClock(): void {
-    if (!this.clockFrame) return;
-    cancelAnimationFrame(this.clockFrame);
-    this.clockFrame = 0;
+  flushRenderFrame(now: number): void {
+    this.renderFrame = 0;
+    if (!this.initialized || this.deviceLost) return;
+    const shouldRender = this.renderRequested;
+    this.renderRequested = false;
+    void now;
+    if (shouldRender) this.renderNow();
   }
 
   applyLights(settings: Settings | Partial<Settings>): void {
@@ -1118,6 +1187,9 @@ export class WallpaperRenderer {
   resize(): void {
     const width = Math.max(1, this.container.clientWidth);
     const height = Math.max(1, this.container.clientHeight);
+    if (width === this.lastResizeWidth && height === this.lastResizeHeight) return;
+    this.lastResizeWidth = width;
+    this.lastResizeHeight = height;
     this.renderer.setSize(width, height, false);
     const aspect = width / height;
     this.camera.left = -aspect;
@@ -1212,9 +1284,9 @@ export class WallpaperRenderer {
         const dy = (event.clientY - this.drag.y) / Math.max(1, this.container.clientHeight);
         const bx = Math.max(0, Math.min(100, this.drag.bx + dx * 100));
         // Screen Y is top-down but the camera/world Y is up, so a raw +dy makes
-      // the boost drag feel inverted on Y only (X is naturally aligned). Negate
-      // dy here so dragging down moves the projection down, matching X.
-      const by = Math.max(0, Math.min(100, this.drag.by - dy * 100));
+        // the boost drag feel inverted on Y only (X is naturally aligned). Negate
+        // dy here so dragging down moves the projection down, matching X.
+        const by = Math.max(0, Math.min(100, this.drag.by - dy * 100));
         this.dragBoostX = bx;
         this.dragBoostY = by;
         this.projectionGesture?.onBoostCommit?.(bx, by);
@@ -1230,19 +1302,19 @@ export class WallpaperRenderer {
     this.render();
   }
 
-  render(): void {
+  renderNow(): void {
     if (!this.initialized || this.deviceLost) return;
     if (this.postPipeline) {
       this.postPipeline.render();
     } else {
       this.renderer.render(this.scene, this.camera);
     }
-    if (!this.healthFrame) {
-      this.healthFrame = requestAnimationFrame(() => {
-        this.healthFrame = 0;
-        this.checkCenterPixel();
-      });
-    }
+  }
+
+  render(): void {
+    if (!this.initialized || this.deviceLost) return;
+    this.renderRequested = true;
+    this.scheduleRenderFrame();
   }
 
   requestWarmupFrames(frames: number): void {
@@ -1260,126 +1332,8 @@ export class WallpaperRenderer {
     this.warmupFrame = requestAnimationFrame(tick);
   }
 
-  healthSampleRegion(canvas: HTMLCanvasElement): HealthSampleRegion | null {
-    const rect = canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0 || canvas.width <= 0 || canvas.height <= 0) return null;
-    const controls = document.getElementById('controls');
-    const controlsRect = controls?.getBoundingClientRect() ?? null;
-    let visibleLeft = rect.left;
-    let visibleRight = rect.right;
-    let visibleTop = rect.top;
-    let visibleBottom = rect.bottom;
-
-    if (controlsRect && controlsRect.width > 0 && controlsRect.height > 0) {
-      const overlapsVertically = controlsRect.bottom > visibleTop && controlsRect.top < visibleBottom;
-      const overlapsHorizontally = controlsRect.right > visibleLeft && controlsRect.left < visibleRight;
-      if (overlapsVertically && controlsRect.left > visibleLeft && controlsRect.left < visibleRight) {
-        visibleRight = controlsRect.left;
-      }
-      if (overlapsHorizontally && controlsRect.top > visibleTop && controlsRect.top < visibleBottom) {
-        visibleBottom = controlsRect.top;
-      }
-    }
-
-    if (visibleRight - visibleLeft < 2 || visibleBottom - visibleTop < 2) return null;
-
-    const sampleColumns = [0.18, 0.34, 0.5, 0.66, 0.82];
-    const sampleRows = [0.25, 0.5, 0.75];
-    const points: HealthSamplePoint[] = [];
-    for (const row of sampleRows) {
-      for (const column of sampleColumns) {
-        const viewportX = visibleLeft + (visibleRight - visibleLeft) * column;
-        const viewportY = visibleTop + (visibleBottom - visibleTop) * row;
-        points.push({
-          sourceX: Math.max(0, Math.min(canvas.width - 1, Math.floor((viewportX - rect.left) / rect.width * canvas.width))),
-          sourceY: Math.max(0, Math.min(canvas.height - 1, Math.floor((viewportY - rect.top) / rect.height * canvas.height))),
-          viewportX,
-          viewportY,
-        });
-      }
-    }
-    return { points };
-  }
-
-  checkCenterPixel(): void {
-    if (!this.mesh || !this.healthContext) return;
-    const now = performance.now();
-    if (now - this.lastHealthCheck < 500) return;
-    this.lastHealthCheck = now;
-    const canvas = this.renderer.domElement;
-    const sourceWidth = canvas.width;
-    const sourceHeight = canvas.height;
-    if (sourceWidth <= 0 || sourceHeight <= 0) return;
-    const sampleRegion = this.healthSampleRegion(canvas);
-    if (!sampleRegion) return;
-
-    try {
-      let red = 0;
-      let green = 0;
-      let blue = 0;
-      let alpha = 0;
-      let strongestSample = -1;
-      let visibleSamples = 0;
-      let centerX = sampleRegion.points[0]?.viewportX ?? 0;
-      let centerY = sampleRegion.points[0]?.viewportY ?? 0;
-      for (const sample of sampleRegion.points) {
-        this.healthContext.clearRect(0, 0, 1, 1);
-        this.healthContext.drawImage(canvas, sample.sourceX, sample.sourceY, 1, 1, 0, 0, 1, 1);
-        const pixel = this.healthContext.getImageData(0, 0, 1, 1).data;
-        const sampleRed = pixel[0] ?? 0;
-        const sampleGreen = pixel[1] ?? 0;
-        const sampleBlue = pixel[2] ?? 0;
-        const sampleAlpha = pixel[3] ?? 0;
-        const sampleStrength = sampleRed + sampleGreen + sampleBlue;
-        if (sampleStrength > strongestSample) {
-          strongestSample = sampleStrength;
-          red = sampleRed;
-          green = sampleGreen;
-          blue = sampleBlue;
-          alpha = sampleAlpha;
-          centerX = sample.viewportX;
-          centerY = sample.viewportY;
-        }
-        const centerElement = document.elementFromPoint(sample.viewportX, sample.viewportY);
-        if (centerElement === canvas || Boolean(centerElement?.closest?.('#viewport'))) {
-          visibleSamples += 1;
-        }
-      }
-      const topElementIsCanvas = visibleSamples > 0;
-      const report = this.healthTracker.sample(
-        { alpha, blue, green, red },
-        this.forceCenterBlackHealthProbe,
-        topElementIsCanvas,
-        this.forceCenterOcclusionHealthProbe,
-      );
-      if (report) {
-        console.warn(report.message, {
-          alpha,
-          blue,
-          forced: this.forceCenterBlackHealthProbe,
-          forcedOcclusion: this.forceCenterOcclusionHealthProbe,
-          reason: report.reason,
-          boostX: this.projectionGesture?.settings.hyp_boost_x,
-          boostY: this.projectionGesture?.settings.hyp_boost_y,
-          centerX,
-          centerY,
-          green,
-          red,
-          rotationX: this.group.rotation.x,
-          rotationY: this.group.rotation.y,
-          viewZoom: this.viewZoom,
-        });
-      }
-    } catch {
-      if (this.healthReadbackFailed) return;
-      this.healthReadbackFailed = true;
-      console.warn('[render-health] center pixel check failed');
-    }
-  }
-
   dispose(): void {
-    this.stopClock();
-    if (this.healthFrame) cancelAnimationFrame(this.healthFrame);
+    if (this.renderFrame) cancelAnimationFrame(this.renderFrame);
     if (this.warmupFrame) cancelAnimationFrame(this.warmupFrame);
     this.resizeObserver.disconnect();
     this.mesh?.geometry.dispose();

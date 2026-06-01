@@ -53,16 +53,17 @@ export const BORDER_SETTING_KEYS: readonly SettingKey[] = [
   'border_a',
   'border_fill',
   'border_point',
+  'border_gap',
 ];
 export const CLOCK_SETTING_KEYS: readonly SettingKey[] = ['clock_enabled', 'clock_rate'];
 export const GRAPH_PRESET_SETTING_KEYS: readonly SettingKey[] = [
   'bg_c',
   'bg_h',
   'bg_l',
-  'bg_mode',
   'border_a',
   'border_fill',
   'border_point',
+  'border_gap',
   'border_c',
   'border_h',
   'border_join',

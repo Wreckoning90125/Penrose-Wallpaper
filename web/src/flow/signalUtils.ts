@@ -40,7 +40,7 @@ export function audioFeatureValue(features: AudioFeatures, handle: string | null
   }
 }
 
-export function clockSignalValue(node: Node): number {
+export function clockSignalValue(node: Node, nowMs = performance.now(), epochMs = 0): number {
   const settings = dataObject(node.data, 'settings');
   const enabled = settings ? Object.getOwnPropertyDescriptor(settings, 'clock_enabled')?.value : undefined;
   if (String(enabled ?? '1') === '0') return 0;
@@ -48,7 +48,7 @@ export function clockSignalValue(node: Node): number {
   const parsedRate = Number.parseInt(String(rateValue ?? '100'), 10);
   const rate = clampNumber(Number.isFinite(parsedRate) ? parsedRate : 100, 0, 240) / 100;
   if (rate <= 0) return 0;
-  const phase = (performance.now() * 0.001 * rate) % 1;
+  const phase = (Math.max(0, nowMs - epochMs) * 0.001 * rate) % 1;
   return phase < 0 ? phase + 1 : phase;
 }
 

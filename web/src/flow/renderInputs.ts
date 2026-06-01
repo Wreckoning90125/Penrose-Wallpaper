@@ -6,6 +6,8 @@
 import type { Edge, Node } from '@xyflow/react';
 import type { RenderInputs } from '../types';
 
+const FIELD_SOURCE_PHASE_HANDLE = 'phase';
+
 export function renderChainConnected(nodes: readonly Node[], edges: readonly Edge[]): boolean {
   const link = (source: string, sourceHandle: string, target: string, targetHandle: string): boolean =>
     edges.some(edge => edge.source === source && edge.sourceHandle === sourceHandle
@@ -40,14 +42,37 @@ export function renderInputsFromEdges(nodes: readonly Node[], edges: readonly Ed
   const color = link('palette', 'color', 'material', 'color');
   const material = link('material', 'surface', 'renderer', 'surface');
   const projection = link('projection', 'out', 'palette', 'in');
-  // The field-source node emits three fields on three outlets; each wires into
-  // its own renderer inlet. Cut one and only that field stops at the surface.
-  const fieldDisplace = link('postfx', 'displace', 'renderer', 'displace');
-  const fieldRelief = link('postfx', 'relief', 'renderer', 'relief');
-  const fieldColor = link('postfx', 'color', 'renderer', 'color');
-  const fieldUndulate = link('postfx', 'undulate', 'renderer', 'undulate');
+  const fieldSourceIds = nodes
+    .filter(node => node.id === 'postfx' || node.type === 'fieldSource')
+    .map(node => node.id);
+  const fieldOutput = (handle: string): boolean =>
+    fieldSourceIds.some(id => link(id, handle, 'renderer', handle));
+  const fieldOutputFrom = (id: string, handle: string): boolean =>
+    link(id, handle, 'renderer', handle);
+  const materialDirect = (handle: string): boolean =>
+    link('material', handle, 'renderer', handle);
+  const materialViaFieldFrom = (id: string, handle: string): boolean =>
+    link('material', handle, id, handle) && link(id, handle, 'renderer', handle);
+  const materialViaField = (handle: string): boolean =>
+    fieldSourceIds.some(id => materialViaFieldFrom(id, handle));
+  // Color and relief are real Surface Material lanes. A Field Source can sit in
+  // the middle and add modulation, but deleting it may be bypassed by wiring the
+  // material lane straight into the Scene Pass.
+  const materialColor = materialDirect('color') || materialViaField('color');
+  const materialRelief = materialDirect('relief') || materialViaField('relief');
+  // Field-source outlets are the procedural fields. Cut one and only that field
+  // stops at the surface; material color/relief can still bypass separately.
+  const fieldDisplace = fieldOutput('displace');
+  const fieldRelief = materialViaField('relief');
+  const fieldColor = materialViaField('color');
+  const fieldUndulate = fieldOutput('undulate');
+  const defaultFieldActive = fieldOutputFrom('postfx', 'displace')
+    || materialViaFieldFrom('postfx', 'relief')
+    || materialViaFieldFrom('postfx', 'color')
+    || fieldOutputFrom('postfx', 'undulate');
+  const fieldPhase = link('clock', 'out', 'postfx', FIELD_SOURCE_PHASE_HANDLE) && defaultFieldActive;
   // The Border node wires its single outlet to the renderer; cut it and the edge
   // mesh stops rendering.
   const border = link('edgeProfile', 'border', 'renderer', 'border');
-  return { geometry: renderChainConnected(nodes, edges), lighting, color, material, projection, fieldDisplace, fieldRelief, fieldColor, fieldUndulate, border };
+  return { geometry: renderChainConnected(nodes, edges), lighting, color, material, materialColor, materialRelief, projection, fieldDisplace, fieldRelief, fieldColor, fieldUndulate, fieldPhase, border };
 }

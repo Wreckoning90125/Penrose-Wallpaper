@@ -13,6 +13,7 @@ const EMPTY_FEATURES: AudioFeatures = {
 };
 
 const DEFAULT_OUTPUT_VOLUME = 0.5;
+const UI_NOTIFY_INTERVAL_MS = 33;
 
 const EMPTY_TRANSPORT: AudioTransport = {
   duration: 0,
@@ -106,13 +107,43 @@ export function useWebAudioGraph(): WebAudioGraph {
   const snapshotRef = useRef<AudioSnapshot>(EMPTY_SNAPSHOT);
   const volumeRef = useRef(DEFAULT_OUTPUT_VOLUME);
   const listenersRef = useRef(new Set<() => void>());
+  const uiListenersRef = useRef(new Set<() => void>());
+  const lastUiNotifyRef = useRef(0);
+  const uiNotifyTimerRef = useRef(0);
+
+  const flushUiListeners = useCallback(() => {
+    if (uiNotifyTimerRef.current) {
+      window.clearTimeout(uiNotifyTimerRef.current);
+      uiNotifyTimerRef.current = 0;
+    }
+    lastUiNotifyRef.current = performance.now();
+    for (const listener of uiListenersRef.current) listener();
+  }, []);
 
   const publish = useCallback((updater: (snapshot: AudioSnapshot) => AudioSnapshot) => {
-    const next = updater(snapshotRef.current);
-    if (next === snapshotRef.current) return;
+    const previous = snapshotRef.current;
+    const next = updater(previous);
+    if (next === previous) return;
     snapshotRef.current = next;
     for (const listener of listenersRef.current) listener();
-  }, []);
+    const forceUi = next.status !== previous.status
+      || next.transport.playing !== previous.transport.playing
+      || next.transport.loop !== previous.transport.loop
+      || next.transport.volume !== previous.transport.volume
+      || next.transport.duration !== previous.transport.duration
+      || next.transport.sourceName !== previous.transport.sourceName;
+    if (forceUi) {
+      flushUiListeners();
+      return;
+    }
+    const now = performance.now();
+    const elapsed = now - lastUiNotifyRef.current;
+    if (elapsed >= UI_NOTIFY_INTERVAL_MS) {
+      flushUiListeners();
+    } else if (!uiNotifyTimerRef.current) {
+      uiNotifyTimerRef.current = window.setTimeout(flushUiListeners, UI_NOTIFY_INTERVAL_MS - elapsed);
+    }
+  }, [flushUiListeners]);
 
   const getSnapshot = useCallback(() => snapshotRef.current, []);
 
@@ -120,6 +151,13 @@ export function useWebAudioGraph(): WebAudioGraph {
     listenersRef.current.add(listener);
     return () => {
       listenersRef.current.delete(listener);
+    };
+  }, []);
+
+  const subscribeUi = useCallback((listener: () => void) => {
+    uiListenersRef.current.add(listener);
+    return () => {
+      uiListenersRef.current.delete(listener);
     };
   }, []);
 
@@ -190,7 +228,10 @@ export function useWebAudioGraph(): WebAudioGraph {
           weightTotal += weight;
         }
       }
-      prevFreqRef.current = new Uint8Array(freq);
+      if (!prevFreqRef.current || prevFreqRef.current.length !== freq.length) {
+        prevFreqRef.current = new Uint8Array(freq.length);
+      }
+      prevFreqRef.current.set(freq);
       const spectralFlux = clamp01((flux / Math.max(1, freq.length)) * 8);
       const onsetStrength = updateZ(weightedFlux / Math.max(1, weightTotal), onsetStatRef.current);
       const cwtTransient = updateZ(waveletTransient(timeDomain), cwtStatRef.current);
@@ -321,6 +362,7 @@ export function useWebAudioGraph(): WebAudioGraph {
 
   useEffect(() => () => {
     cancelAnimationFrame(rafRef.current);
+    if (uiNotifyTimerRef.current) window.clearTimeout(uiNotifyTimerRef.current);
     disconnectSource();
     void contextRef.current?.close();
   }, [disconnectSource]);
@@ -336,5 +378,6 @@ export function useWebAudioGraph(): WebAudioGraph {
     startMic,
     stop,
     subscribe,
-  }), [getSnapshot, loadFile, pause, play, seek, setLoop, setVolume, startMic, stop, subscribe]);
+    subscribeUi,
+  }), [getSnapshot, loadFile, pause, play, seek, setLoop, setVolume, startMic, stop, subscribe, subscribeUi]);
 }

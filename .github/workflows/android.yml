@@ -194,7 +194,7 @@ jobs:
 
       - name: Compile the tiling core and the verifier
         run: |
-          g++ -std=c++17 -O2 -Wall -Wextra -I android/app/src/main/cpp \
+          g++ -std=c++20 -O2 -Wall -Wextra -I android/app/src/main/cpp \
             tools/verify_tilings.cpp \
             android/app/src/main/cpp/tiling/penrose.cpp \
             -o verify_tilings

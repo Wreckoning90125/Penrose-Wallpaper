@@ -117,6 +117,34 @@ select option {
   transform: translateX(calc(100% + 12px));
 }
 
+#controls.resizing {
+  transition: transform 180ms ease;
+}
+
+#controls.resizing > header,
+#controls.resizing .control-flow-shell,
+#controls.resizing .flow-panel,
+#controls.resizing .react-flow__minimap,
+#controls.resizing .flow-controls.react-flow__controls,
+#controls.resizing .drawer-toggle,
+#controls.resizing .drawer-resize {
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+#controls.resizing::before {
+  content: "";
+  position: fixed;
+  top: 16px;
+  bottom: 16px;
+  left: var(--resize-guide-left);
+  z-index: 30;
+  width: 1px;
+  background: color-mix(in oklch, var(--accent) 72%, white);
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--bg) 82%, transparent);
+  pointer-events: none;
+}
+
 .drawer-toggle,
 .drawer-resize {
   position: absolute;
@@ -265,6 +293,8 @@ h1 {
   --node-accent-2: var(--accent);
   --node-content-pad: 8px;
   --node-frame-pad: 12px;
+  --node-port-width: 96px;
+  --node-port-handle-offset: 8px;
   position: relative;
   inline-size: clamp(18rem, 44cqw, 23rem);
   max-inline-size: min(26rem, calc(100vw - 5rem));
@@ -367,41 +397,10 @@ h1 {
   opacity: 0.92;
 }
 
-/* Low-delay tooltip for icon-only / non-obvious affordances. Native `title` only
-   appears after a long browser hover delay; this CSS variant shows after ~120ms
-   so the icons (which may not be self-evident) explain themselves quickly. Any
-   element with a non-empty data-tip participates. */
-[data-tip] {
-  position: relative;
-}
-
-[data-tip]:hover::after {
-  content: attr(data-tip);
-  position: absolute;
-  left: 50%;
-  top: calc(100% + 5px);
-  z-index: 1000;
-  max-width: 240px;
-  width: max-content;
-  padding: 4px 8px;
-  border-radius: 5px;
-  background: color-mix(in oklch, black 86%, var(--node-accent, #222) 14%);
-  border: 1px solid color-mix(in oklch, white 16%, transparent);
-  color: #eef0f6;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.3;
-  white-space: normal;
-  text-align: center;
-  pointer-events: none;
-  opacity: 0;
-  transform: translateX(-50%);
-  animation: data-tip-fade 0s linear 0.12s forwards;
-}
-
-@keyframes data-tip-fade {
-  to { opacity: 1; }
-}
+/* Tooltips use the native `title` attribute (set on the toolbar icons, node-header
+   icons, add-effect buttons and slider rows). A styled CSS ::after tooltip was tried
+   but rendered unreliably (composited under the WebGPU canvas / React Flow layers in
+   real use), so it was dropped for the browser-native tooltip, which always shows. */
 
 .node-port-rail {
   position: absolute;
@@ -416,20 +415,20 @@ h1 {
 }
 
 .node-inlet-rail {
-  left: -76px;
+  left: calc(-1 * (var(--node-port-width) + var(--node-port-handle-offset)));
   align-items: flex-end;
 }
 
 .node-outlet-rail {
-  right: -76px;
+  right: calc(-1 * (var(--node-port-width) + var(--node-port-handle-offset)));
   align-items: flex-start;
 }
 
 .node-port {
   position: relative;
-  width: 68px;
+  width: var(--node-port-width);
   min-height: 24px;
-  max-width: 68px;
+  max-width: var(--node-port-width);
   pointer-events: none;
 }
 
@@ -437,7 +436,7 @@ h1 {
   display: grid;
   width: 100%;
   min-height: 24px;
-  max-width: 68px;
+  max-width: var(--node-port-width);
   align-items: center;
   padding: 3px 12px;
   border: 1px solid color-mix(in oklch, var(--node-accent) 36%, transparent);
@@ -472,7 +471,7 @@ h1 {
 
 .node-port-label span {
   overflow: hidden;
-  max-width: 44px;
+  max-width: 72px;
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
@@ -488,9 +487,10 @@ h1 {
 }
 
 .ports-collapsed .node-port-label {
-  width: 14px;
+  width: 0;
   min-height: 14px;
   padding: 0;
+  border: 0;
   color: transparent;
   border-color: transparent;
   background: transparent;
@@ -505,17 +505,17 @@ h1 {
 }
 
 .ports-collapsed .node-inlet-rail {
-  left: -18px;
+  left: calc(-1 * var(--node-port-handle-offset));
 }
 
 .ports-collapsed .node-outlet-rail {
-  right: -18px;
+  right: calc(-1 * var(--node-port-handle-offset));
 }
 
 .ports-collapsed .node-port {
-  width: 18px;
+  width: 0;
   min-height: 14px;
-  max-width: 18px;
+  max-width: 0;
 }
 
 .rail-handle {
@@ -529,12 +529,12 @@ h1 {
 
 .node-inlet-handle {
   right: auto;
-  left: 0;
+  left: calc(-1 * var(--node-port-handle-offset));
   transform: translate(-50%, -50%);
 }
 
 .node-outlet-handle {
-  right: 0;
+  right: calc(-1 * var(--node-port-handle-offset));
   left: auto;
   transform: translate(50%, -50%);
 }

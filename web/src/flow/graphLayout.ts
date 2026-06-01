@@ -15,13 +15,14 @@ import {
 } from './flowLayout';
 
 export const LAYOUT_COLUMN_GAP = 120;
-export const LAYOUT_RAIL_CLEARANCE = 48;
-export const LAYOUT_ROW_GAP = 72;
-export const OPERATOR_ROW_GAP = GRID_SIZE;
-export const TARGET_ROW_GAP = 144;
+// Port labels sit outside the node card. Keep this in sync with the rail/pill
+// width in CSS so measured auto-layout reserves enough room between columns.
+export const LAYOUT_RAIL_CLEARANCE = GRID_SIZE * 5;
 export const FLOW_CHROME_GAP = GRID_SIZE;
 export const FLOW_SIDE_PADDING = GRID_SIZE;
 export const FLOW_BOTTOM_PADDING = 42;
+// Column membership for the default layout. Each column packs top-to-bottom with one
+// grid cell between every node (see measuredLayoutPositions).
 export const LAYOUT_COLUMNS: readonly (readonly string[])[] = [
   ['atlas', 'transport'],
   ['tiling', 'analysis', 'clock'],
@@ -29,25 +30,6 @@ export const LAYOUT_COLUMNS: readonly (readonly string[])[] = [
   ['palette', 'material', 'postfx', 'lighting', 'edgeProfile'],
   ['renderer', 'tonemap', 'display'],
 ];
-export const OPERATOR_COLUMN_IDS = [
-  'operator-gain-glow',
-  'operator-gain-metal',
-  'operator-gain-film',
-  'operator-invert-1',
-  'operator-gain-relief',
-];
-export const TARGET_COLUMN_IDS = [
-  'material',
-  'postfx',
-  'lighting',
-  'edgeProfile',
-];
-export const PASS_COLUMN_IDS = [
-  'renderer',
-  'tonemap',
-  'display',
-];
-
 
 export function nodeFitBounds(nodes: readonly Node[]): FlowBounds | null {
   if (nodes.length === 0) return null;
@@ -161,69 +143,43 @@ export function measuredLayoutPositions(nodes: readonly Node[]): Map<string, { x
   }
 
   const positions = new Map<string, { x: number; y: number }>();
-  const nodeAdvance = (id: string): number => {
-    const node = byId.get(id);
-    return node ? layoutAdvanceHeight(id, node) : 0;
-  };
-  const place = (id: string, columnIndex: number, y: number): void => {
-    if (!byId.has(id)) return;
-    positions.set(id, { x: columnX[columnIndex] ?? 0, y: snapValue(y) });
-  };
-
-  place('atlas', 0, 0);
-  place('tiling', 1, 0);
-  place('projection', 2, 0);
-  place('palette', 3, 0);
-
-  const transportY = nodeAdvance('atlas') + LAYOUT_ROW_GAP;
-  const analysisY = nodeAdvance('tiling') + LAYOUT_ROW_GAP;
-  const clockY = analysisY + nodeAdvance('analysis') + LAYOUT_ROW_GAP;
-  place('transport', 0, transportY);
-  place('analysis', 1, analysisY);
-  place('clock', 1, clockY);
-
-  const operatorColumnX = columnX[2] ?? 0;
-  let operatorY = analysisY + GRID_SIZE * 2;
-  for (const id of OPERATOR_COLUMN_IDS) {
-    const node = byId.get(id);
-    if (!node) continue;
-    positions.set(id, { x: operatorColumnX, y: snapValue(operatorY) });
-    operatorY += layoutAdvanceHeight(id, node) + OPERATOR_ROW_GAP;
-  }
-  const targetColumnX = columnX[3] ?? 0;
-  const paletteNode = byId.get('palette');
-  let targetY = analysisY;
-  if (paletteNode) targetY = (positions.get('palette')?.y ?? 0) + layoutAdvanceHeight('palette', paletteNode) + TARGET_ROW_GAP;
-  for (const id of TARGET_COLUMN_IDS) {
-    const node = byId.get(id);
-    if (!node) continue;
-    positions.set(id, { x: targetColumnX, y: snapValue(targetY) });
-    targetY += layoutAdvanceHeight(id, node) + TARGET_ROW_GAP;
-  }
-  const passColumnX = columnX[4] ?? 0;
-  let passY = 0;
-  for (const id of PASS_COLUMN_IDS) {
-    const node = byId.get(id);
-    if (!node) continue;
-    positions.set(id, { x: passColumnX, y: snapValue(passY) });
-    passY += layoutAdvanceHeight(id, node) + LAYOUT_ROW_GAP;
+  // Pack each column top-to-bottom with the SAME minimal grid-snapped gap between
+  // every node — no per-section spacing — so columns read as evenly stacked, the way
+  // a hand-tidied layout does. Each node advances by its grid-snapped measured height
+  // plus one grid cell, so the gaps stay consistent regardless of node heights.
+  const columnNextY: number[] = LAYOUT_COLUMNS.map(() => 0);
+  for (let columnIndex = 0; columnIndex < LAYOUT_COLUMNS.length; columnIndex += 1) {
+    let y = 0;
+    for (const id of LAYOUT_COLUMNS[columnIndex] ?? []) {
+      const node = byId.get(id);
+      if (!node) continue;
+      positions.set(id, { x: columnX[columnIndex] ?? 0, y: snapValue(y) });
+      y += layoutAdvanceHeight(id, node) + GRID_SIZE;
+    }
+    columnNextY[columnIndex] = y;
   }
 
+  // Dynamically-added nodes (e.g. post-FX) aren't in the fixed columns; append each
+  // under the column best matching its type, with the same gap. FX nodes live in the
+  // frame/post chain, so they belong in the render-sink column (renderer / tonemap /
+  // display), not at the bottom of the surface + colour-mapper column.
+  const renderSinkColumn = LAYOUT_COLUMNS.length - 1;
   const placed = new Set(positions.keys());
-  const extraColumnY = [
-    transportY + nodeAdvance('transport') + LAYOUT_ROW_GAP,
-    clockY + nodeAdvance('clock') + LAYOUT_ROW_GAP,
-    operatorY,
-    targetY,
-    passY,
-  ];
   for (const node of nodes) {
     if (placed.has(node.id)) continue;
     const type = String(node.type ?? '');
-    const columnIndex = type === 'clock' ? 1 : type === 'operator' ? 2 : 3;
-    const y = snapValue(extraColumnY[columnIndex] ?? 0);
+    const columnIndex = type === 'clock' ? 1 : type === 'operator' ? 2 : type === 'fx' ? renderSinkColumn : 3;
+    const y = snapValue(columnNextY[columnIndex] ?? 0);
     positions.set(node.id, { x: columnX[columnIndex] ?? 0, y });
-    extraColumnY[columnIndex] = y + layoutAdvanceHeight(node.id, node) + LAYOUT_ROW_GAP;
+    columnNextY[columnIndex] = y + layoutAdvanceHeight(node.id, node) + GRID_SIZE;
   }
   return positions;
+}
+
+export function autoLayoutNodes<T extends Node>(nodes: readonly T[]): T[] {
+  const positions = measuredLayoutPositions(nodes);
+  return nodes.map(node => ({
+    ...node,
+    position: positions.get(node.id) ?? node.position,
+  }));
 }

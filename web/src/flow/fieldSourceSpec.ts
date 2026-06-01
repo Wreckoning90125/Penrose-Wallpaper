@@ -27,6 +27,11 @@ export const FIELD_SOURCE_OUTLETS = [
   { id: 'color', label: 'Color' },
 ];
 
+// A Clock source drives this inlet as a normalized cyclic phase source for the
+// field wave. It is intentionally NOT an audio-modulation target: no phase wire,
+// no procedural time.
+export const FIELD_SOURCE_PHASE_INLET = { id: 'phase', label: 'Phase' } as const;
+
 export const FIELD_SLOT_LIMIT = 3;
 
 export function fieldParamDefaults(): Record<string, number> {
@@ -48,22 +53,31 @@ export function deriveFieldSlots(
   nodes: readonly Node[],
   edges: readonly Edge[],
   valuesFor: (node: Node) => Record<string, number>,
+  phaseFor: (node: Node) => number = () => 0,
 ): FieldSlot[] {
   const wiredToRenderer = (id: string, handle: string): boolean =>
     edges.some(edge => edge.source === id && edge.sourceHandle === handle
       && edge.target === 'renderer' && edge.targetHandle === handle);
+  const wiredFromMaterial = (id: string, handle: string): boolean =>
+    edges.some(edge => edge.source === 'material' && edge.sourceHandle === handle
+      && edge.target === id && edge.targetHandle === handle);
+  const wiredPhase = (id: string): boolean =>
+    edges.some(edge => edge.source === 'clock' && edge.sourceHandle === 'out'
+      && edge.target === id && edge.targetHandle === FIELD_SOURCE_PHASE_INLET.id);
   const slots: FieldSlot[] = [];
   for (const node of nodes) {
     if (node.type !== 'fieldSource') continue;
     if (slots.length >= FIELD_SLOT_LIMIT) break;
-    const reliefWired = wiredToRenderer(node.id, 'relief');
+    const reliefWired = wiredFromMaterial(node.id, 'relief') && wiredToRenderer(node.id, 'relief');
     const undulateWired = wiredToRenderer(node.id, 'undulate');
-    const colorWired = wiredToRenderer(node.id, 'color');
+    const colorWired = wiredFromMaterial(node.id, 'color') && wiredToRenderer(node.id, 'color');
     if (!reliefWired && !undulateWired && !colorWired) continue;
     const values = valuesFor(node);
     slots.push({
       freq: paramValue(values, 'freq', 65) / 10,
       speed: paramValue(values, 'speed', 40) / 50,
+      phase: wiredPhase(node.id) ? phaseFor(node) : 0,
+      phaseConnected: wiredPhase(node.id),
       relief: reliefWired ? paramValue(values, 'amp_relief', 0) / 100 * 0.075 : 0,
       undulate: undulateWired ? paramValue(values, 'amp_undulate', 0) / 100 * 0.075 : 0,
       undulateFreq: paramValue(values, 'undulate_freq', 25) / 10,

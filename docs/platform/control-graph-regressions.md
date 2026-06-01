@@ -178,6 +178,6 @@ Primary references:
 - Do not treat depth drive as a renamed relief multiplier. If changing depth
   and relief produce the same visual response, the surface attributes or
   displacement shader are wrong.
-- Do not mark render health as passing unless forced black-pixel and occlusion
-  probes warn, normal page load avoids false positives, and boost/slider drags
-  leave both the renderer and graph mounted.
+- Do not reintroduce pixel-polling render-health probes. Actual WebGPU device
+  loss must surface through the canonical device-loss path, and visual render
+  correctness needs a real preview or headed browser check.

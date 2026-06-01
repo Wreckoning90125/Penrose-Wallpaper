@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import type { Edge, Node } from '@xyflow/react';
 import { EFFECT_CATALOG } from '../web/src/render/postFxCatalog.ts';
 import { renderInputsFromEdges } from '../web/src/flow/renderInputs.ts';
+import { spliceMaterialFieldBypasses } from '../web/src/flow/materialLanes.ts';
 import {
   CLOCK_CONTROLS,
   BORDER_CONTROLS,
@@ -101,9 +102,11 @@ const contractNodes: Node[] = [
   wireNode('material', 'material'),
   wireNode('lighting', 'lighting'),
   wireNode('renderer', 'renderer'),
+  wireNode('tonemap', 'fx'),
   wireNode('display', 'display'),
   wireNode('postfx', 'postfx'),
   wireNode('edgeProfile', 'edgeProfile'),
+  wireNode('clock', 'clock'),
 ];
 const canonicalWires = {
   atlasTiling: wire('w1', 'atlas', 'out', 'tiling', 'in'),
@@ -111,8 +114,12 @@ const canonicalWires = {
   projectionPalette: wire('w3', 'projection', 'out', 'palette', 'in'),
   paletteMaterial: wire('w4', 'palette', 'color', 'material', 'color'),
   materialRenderer: wire('w5', 'material', 'surface', 'renderer', 'surface'),
+  materialPostfxRelief: wire('w5r', 'material', 'relief', 'postfx', 'relief'),
+  materialPostfxColor: wire('w5c', 'material', 'color', 'postfx', 'color'),
+  clockPostfxPhase: wire('w5p', 'clock', 'out', 'postfx', 'phase'),
   lightingRenderer: wire('w6', 'lighting', 'out', 'renderer', 'lighting'),
-  rendererDisplay: wire('w7', 'renderer', 'frame', 'display', 'frame'),
+  rendererTonemap: wire('w7a', 'renderer', 'frame', 'tonemap', 'frame'),
+  tonemapDisplay: wire('w7b', 'tonemap', 'frame', 'display', 'frame'),
   displaceRenderer: wire('w8', 'postfx', 'displace', 'renderer', 'displace'),
   reliefRenderer: wire('w9', 'postfx', 'relief', 'renderer', 'relief'),
   colorFieldRenderer: wire('w10', 'postfx', 'color', 'renderer', 'color'),
@@ -120,8 +127,8 @@ const canonicalWires = {
   borderRenderer: wire('w12', 'edgeProfile', 'border', 'renderer', 'border'),
 };
 const allWires: Edge[] = Object.values(canonicalWires);
-type RenderInput = 'geometry' | 'lighting' | 'color' | 'material' | 'projection' | 'fieldDisplace' | 'fieldRelief' | 'fieldColor' | 'fieldUndulate' | 'border';
-const RENDER_INPUTS: readonly RenderInput[] = ['geometry', 'lighting', 'color', 'material', 'projection', 'fieldDisplace', 'fieldRelief', 'fieldColor', 'fieldUndulate', 'border'];
+type RenderInput = 'geometry' | 'lighting' | 'color' | 'material' | 'materialColor' | 'materialRelief' | 'projection' | 'fieldDisplace' | 'fieldRelief' | 'fieldColor' | 'fieldUndulate' | 'fieldPhase' | 'border';
+const RENDER_INPUTS: readonly RenderInput[] = ['geometry', 'lighting', 'color', 'material', 'materialColor', 'materialRelief', 'projection', 'fieldDisplace', 'fieldRelief', 'fieldColor', 'fieldUndulate', 'fieldPhase', 'border'];
 
 const fullyWired = renderInputsFromEdges(contractNodes, allWires);
 for (const key of RENDER_INPUTS) {
@@ -134,12 +141,20 @@ for (const key of RENDER_INPUTS) {
 const cutDrops: { wire: keyof typeof canonicalWires; input: RenderInput }[] = [
   { wire: 'displaceRenderer', input: 'fieldDisplace' },
   { wire: 'reliefRenderer', input: 'fieldRelief' },
+  { wire: 'reliefRenderer', input: 'materialRelief' },
   { wire: 'colorFieldRenderer', input: 'fieldColor' },
+  { wire: 'colorFieldRenderer', input: 'materialColor' },
   { wire: 'undulateRenderer', input: 'fieldUndulate' },
+  { wire: 'clockPostfxPhase', input: 'fieldPhase' },
   { wire: 'borderRenderer', input: 'border' },
+  { wire: 'materialPostfxRelief', input: 'materialRelief' },
+  { wire: 'materialPostfxRelief', input: 'fieldRelief' },
+  { wire: 'materialPostfxColor', input: 'materialColor' },
+  { wire: 'materialPostfxColor', input: 'fieldColor' },
   { wire: 'atlasTiling', input: 'geometry' },
   { wire: 'tilingProjection', input: 'geometry' },
-  { wire: 'rendererDisplay', input: 'geometry' },
+  { wire: 'rendererTonemap', input: 'geometry' },
+  { wire: 'tonemapDisplay', input: 'geometry' },
   { wire: 'projectionPalette', input: 'projection' },
   { wire: 'paletteMaterial', input: 'color' },
   { wire: 'materialRenderer', input: 'material' },
@@ -150,6 +165,49 @@ for (const { wire: cutId, input } of cutDrops) {
   if (renderInputsFromEdges(contractNodes, remaining)[input]) {
     violations.push(`wire-contract: cutting ${cutId} must drop '${input}', but renderInputsFromEdges still reports it connected`);
   }
+}
+
+const bypassWires: Edge[] = [
+  canonicalWires.atlasTiling,
+  canonicalWires.tilingProjection,
+  canonicalWires.projectionPalette,
+  canonicalWires.paletteMaterial,
+  canonicalWires.materialRenderer,
+  wire('b1', 'material', 'relief', 'renderer', 'relief'),
+  wire('b2', 'material', 'color', 'renderer', 'color'),
+  canonicalWires.lightingRenderer,
+  canonicalWires.rendererTonemap,
+  canonicalWires.tonemapDisplay,
+  canonicalWires.borderRenderer,
+];
+const bypassInputs = renderInputsFromEdges(contractNodes, bypassWires);
+if (!bypassInputs.materialRelief || !bypassInputs.materialColor) {
+  violations.push('wire-contract: material relief/color must be routable directly to the Scene Pass when Field Source is removed');
+}
+if (bypassInputs.fieldRelief || bypassInputs.fieldColor || bypassInputs.fieldDisplace || bypassInputs.fieldUndulate) {
+  violations.push('wire-contract: material->renderer bypass must not imply Field Source procedural outputs');
+}
+const splicedWires = spliceMaterialFieldBypasses(allWires, 'postfx');
+const splicedInputs = renderInputsFromEdges(contractNodes, splicedWires);
+if (!splicedInputs.materialRelief || !splicedInputs.materialColor) {
+  violations.push('wire-contract: deleting Field Source must preserve material relief/color via direct Scene Pass bypass wires');
+}
+if (splicedInputs.fieldRelief || splicedInputs.fieldColor) {
+  violations.push('wire-contract: deleting Field Source must remove procedural relief/color while preserving material lanes');
+}
+if (splicedInputs.fieldPhase) {
+  violations.push('wire-contract: deleting Field Source must also remove the clock phase input');
+}
+
+const graphPresetSrc = readFileSync('web/src/flow/graphPreset.ts', 'utf8');
+if (!graphPresetSrc.includes("!isCurrentDefaultFieldEdge(edge)")) {
+  violations.push('wire-contract: graphPreset obsolete-edge migration must preserve current postfx->renderer field wires');
+}
+if (!graphPresetSrc.includes('isCurrentClockPhaseEdge')) {
+  violations.push('wire-contract: graphPreset obsolete-edge migration must preserve current clock->field-source phase wire');
+}
+if (/\|\|\s*\(edge\.source === 'postfx' && edge\.target === 'renderer'\)\s*(?:\n|$)/.test(graphPresetSrc)) {
+  violations.push('wire-contract: graphPreset must not treat every postfx->renderer edge as obsolete; current field wires are canonical');
 }
 
 if (violations.length > 0) {

@@ -162,6 +162,7 @@ function renderPortRail(
   activePorts: readonly string[],
   onPortPick: ((direction: 'in' | 'out', portId: string) => void) | undefined,
   registerPortRow: PortRowRegistrar,
+  labelsVisible: boolean,
 ): ReactNode {
   if (ports.length === 0) return null;
   const active = new Set(activePorts);
@@ -179,9 +180,10 @@ function renderPortRail(
               type="button"
               className="node-port-label nodrag nopan"
               disabled={!populated}
+              aria-label={port.label}
               onClick={() => onPortPick?.(direction, port.id)}
             >
-              <span>{port.label}</span>
+              {labelsVisible ? <span>{port.label}</span> : null}
             </button>
           </div>
         );
@@ -300,8 +302,8 @@ export function NodeFrame({
   }, [flow, nodeId]);
   return (
     <div ref={containerRef} className={`flow-node control-node node-kind-${kind} node-variant-${variant}${wide ? ' wide-node' : ''}${railClass}${portLabelClass}`} style={autoMinHeight > 0 ? { minHeight: autoMinHeight } : undefined}>
-      {renderPortRail('in', inlets, activeInputs, pickPortEdge, registerRow)}
-      {renderPortRail('out', outlets, activeOutputs, pickPortEdge, registerRow)}
+      {renderPortRail('in', inlets, activeInputs, pickPortEdge, registerRow, portLabelsVisible)}
+      {renderPortRail('out', outlets, activeOutputs, pickPortEdge, registerRow, portLabelsVisible)}
       {renderPortHandles('in', inlets, rowY, expandedRowY, portLabelsVisible)}
       {renderPortHandles('out', outlets, rowY, expandedRowY, portLabelsVisible)}
       <div className="flow-node-title">
@@ -316,7 +318,7 @@ export function NodeFrame({
             IO
           </button>
         ) : null}
-        {icon ? <span className="flow-node-icon" data-tip={title} aria-hidden="true">{icon}</span> : null}
+        {icon ? <span className="flow-node-icon" title={title} aria-hidden="true">{icon}</span> : null}
         <strong>{title}</strong>
       </div>
       {children}
@@ -328,7 +330,7 @@ export function NodeFrame({
 // nodes — referenced by both those node components and the layout port counter.
 export const SCENE_PASS_INLETS: PortSpec[] = [
   { id: 'surface', label: 'Surface' },
-  { id: 'lighting', label: 'Light' },
+  { id: 'lighting', label: 'Lighting' },
   { id: 'displace', label: 'Displace' },
   { id: 'relief', label: 'Relief' },
   { id: 'color', label: 'Color' },

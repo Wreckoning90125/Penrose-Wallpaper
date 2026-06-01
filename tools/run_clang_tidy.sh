@@ -22,7 +22,7 @@ for source in "${SOURCES[@]}"; do
     -- \
     -std=c++20 \
     -I "$ROOT/android/app/src/main/cpp" \
-    2>&1 | tee -a "$LOG" || status=1
+    2>&1 | sed '/^[0-9][0-9]* warnings generated\.$/d' | tee -a "$LOG" || status=1
 done
 
 python3 "$ROOT/tools/static_analysis_ratchet.py" --clang-tidy-log "$LOG"

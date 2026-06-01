@@ -169,6 +169,11 @@ export const FX_BUILDERS: Record<FxKind, FxBuilder> = {
       const mode: TrailsMode = node.selects['mode'] === 'afterimage' ? 'afterimage'
         : node.selects['mode'] === 'both' ? 'both' : 'trails';
       const maskMode = node.selects['mask'] === 'surface' ? 1 : node.selects['mask'] === 'inverse' ? 2 : 0;
+      // Unmasked afterimage should be exactly as cheap as the dedicated Afterimage
+      // node. Trails/Both must still build the custom node even when the current
+      // transform params are zero, because those params are uniforms and can be
+      // dragged or audio-driven later without a structural rebuild.
+      if (maskMode === 0 && mode === 'afterimage') return afterImage(input, u['trail']!);
       return trails(input, mode, { decay: u['trail']!, zoom: u['zoom']!, rotate: u['rotate']!, hue: u['hue']!, maskMode, bg: ctx.bg });
     },
   },

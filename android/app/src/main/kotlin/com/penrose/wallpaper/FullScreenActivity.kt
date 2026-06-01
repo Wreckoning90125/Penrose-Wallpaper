@@ -12,6 +12,7 @@ import android.view.SurfaceView
 import android.view.WindowManager
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.edit
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import java.io.File
@@ -298,9 +299,9 @@ class FullScreenActivity : AppCompatActivity(),
             // wallpaper engine reloads the file it was just handed.
             // Without this, edits made in the editor never reached the
             // live wallpaper — only a preset load bumped the revision.
-            prefs.edit()
-                .putLong(Settings.KEY_GRAPH_REVISION, System.currentTimeMillis())
-                .apply()
+            prefs.edit {
+                putLong(Settings.KEY_GRAPH_REVISION, System.currentTimeMillis())
+            }
         }
         super.onStop()
         // The node editor does not survive backgrounding: resuming a

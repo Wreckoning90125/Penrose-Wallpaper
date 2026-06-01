@@ -22,7 +22,7 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     permissions:
@@ -90,6 +90,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+          queries: security-extended,security-and-quality
 
       - name: Build Java/Kotlin
         if: matrix.build-mode == 'manual'

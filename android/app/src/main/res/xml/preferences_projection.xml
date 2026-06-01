@@ -40,13 +40,13 @@
             android:key="hyp_border_subdiv"
             android:title="Border arc subdivision"
             android:summary="Splits each tile-edge border into N straight sub-segments before projection. Cost is linear in N. 1 = single chord; 8–16 reads as a smooth geodesic arc near the disk boundary; 32 caps it. Triggers a geometry rebuild."
-            android:min="1" android:max="32" android:defaultValue="1"
+            android:min="1" android:max="32" android:defaultValue="16"
             app:showSeekBarValue="true" />
         <SeekBarPreference
             android:key="hyp_fill_subdiv"
             android:title="Fill arc subdivision"
             android:summary="Splits each fill triangle into N² child triangles (barycentric grid; bevels stay on parent edges via linear-interpolated barycentrics). Cost is N², so the slider caps lower than the border. 1 = chord-filled tile; 4 reads as smooth; 8 is the ceiling — past that vertex memory grows uncomfortably at high tile counts. Triggers a geometry rebuild."
-            android:min="1" android:max="8" android:defaultValue="1"
+            android:min="1" android:max="8" android:defaultValue="4"
             app:showSeekBarValue="true" />
     </PreferenceCategory>
 </PreferenceScreen>

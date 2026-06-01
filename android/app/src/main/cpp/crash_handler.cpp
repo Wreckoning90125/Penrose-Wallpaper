@@ -36,7 +36,7 @@ namespace {
 
 constexpr const char* kTag        = "PenroseCrash";
 constexpr int         kMaxFrames  = 64;
-constexpr size_t      kAltStackSz = 64 * 1024;
+constexpr size_t      kAltStackSz = static_cast<size_t>(64) * 1024;
 
 // Single-shot install guard.
 std::atomic<bool> installed_{false};
@@ -60,7 +60,7 @@ _Unwind_Reason_Code captureFrame(struct _Unwind_Context* ctx, void* arg) {
     uintptr_t pc = _Unwind_GetIP(ctx);
     if (pc == 0) return _URC_END_OF_STACK;
     if (s->count >= s->capacity) return _URC_END_OF_STACK;
-    s->frames[s->count++] = reinterpret_cast<void*>(pc);
+    s->frames[s->count++] = reinterpret_cast<void*>(pc); // NOLINT(performance-no-int-to-ptr)
     return _URC_NO_REASON;
 }
 
@@ -123,8 +123,8 @@ void handler(int sig, siginfo_t* info, void* /*ucontext*/) {
             if (dli.dli_sname) sym = dli.dli_sname;
             if (dli.dli_fname) lib = dli.dli_fname;
             if (dli.dli_saddr) {
-                off = reinterpret_cast<uintptr_t>(frames[i])
-                    - reinterpret_cast<uintptr_t>(dli.dli_saddr);
+                off = reinterpret_cast<uintptr_t>(frames[i]) // NOLINT(performance-no-int-to-ptr)
+                    - reinterpret_cast<uintptr_t>(dli.dli_saddr); // NOLINT(performance-no-int-to-ptr)
             }
         }
         snprintf(buf, sizeof(buf), "  #%02d  pc %p  %s+0x%lx  (%s)",

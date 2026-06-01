@@ -2,13 +2,13 @@ package com.penrose.wallpaper
 
 import android.content.DialogInterface
 import android.graphics.Color
-import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import androidx.core.graphics.drawable.toDrawable
 import androidx.fragment.app.commit
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
@@ -73,7 +73,7 @@ class SettingsBottomSheetDialogFragment : BottomSheetDialogFragment() {
             // dialog window draws directly onto the wallpaper. Behind-
             // blur frosts the wallpaper where the sheet's tint is
             // semi-transparent. minSdk = 36 so this is unconditional.
-            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
             setBackgroundBlurRadius(20)
             addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
             attributes = attributes.apply {

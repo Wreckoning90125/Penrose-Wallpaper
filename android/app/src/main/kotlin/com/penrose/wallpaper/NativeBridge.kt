@@ -5,9 +5,8 @@ import android.view.Surface
 
 /**
  * Thin JNI surface. All calls operate on an opaque `nativePtr` and must be
- * invoked from the same thread per renderer instance (the WallpaperService's
- * render Handler, or the SettingsActivity's preview thread). The native
- * side does not lock.
+ * invoked through [RendererSession], whose single dispatcher owns the native
+ * renderer pointer for each host. The native side does not lock.
  */
 internal object NativeBridge {
 
@@ -37,10 +36,10 @@ internal object NativeBridge {
      * Push the current Settings to the renderer. Encoded as two flat arrays:
      *
      *   ints   = [family, seedIdx, generation, preset, colorCount, colorMode,
-     *             borderOn (0/1), bgMode, rippleMode, panMode]
-     *   floats = [borderWidth, borderL, borderC, borderH, borderAlpha,
-     *             bgL, bgC, bgH, rippleAmount,
-     *             zoom, rotation, panX, panY]
+     *             borderOn, bgMode, rippleMode, panMode, rippleKind,
+     *             projection, hypBorderSubdiv, hypFillSubdiv]
+     *   floats = [border/material/background/motion/projection controls,
+     *             followed by custom OKLCH palette triples]
      *
      * Both must match the layout the JNI bridge expects (jni_bridge.cpp).
      */

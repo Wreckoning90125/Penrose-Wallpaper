@@ -38,24 +38,20 @@ struct LiveView {
 };
 
 // THREADING CONTRACT
-//   Every public method except the constructor and the gesture pushers
-//   (touchPinch / touchMove / setPageOffset) must be called on the
-//   render thread that owns the Vulkan device. The Kotlin layer
-//   guarantees this by posting onto a per-Renderer HandlerThread (see
-//   PenroseWallpaperService.renderHandler, SettingsActivity.renderHandler,
-//   FullScreenActivity.renderHandler). Calling these from any other
-//   thread races vkQueueSubmit against vkDeviceWaitIdle and produces
-//   undefined behaviour. The Renderer does not lock.
+//   Every public method must be called on the render thread that owns the
+//   Vulkan device. The Kotlin layer guarantees this by funneling calls
+//   through RendererSession, whose single dispatcher privately owns the
+//   Renderer*. Calling these from any other thread races vkQueueSubmit
+//   against vkDeviceWaitIdle and produces undefined behaviour. The
+//   Renderer does not lock.
 //
 //   The constructor only sets up the VkInstance + spawns the modulation
 //   graph's default node set — no surface, no device, no swapchain.
 //   Safe to call from any thread that owns the resulting Renderer*.
 //
-//   The gesture pushers (touchPinch / touchMove / setPageOffset /
-//   setUiDensity / pushTouchEvent via imGuiHost()) only update plain
-//   data + atomic ring buffers, never touching Vulkan. They are safe
-//   from the UI thread and are intentionally NOT posted to the render
-//   handler so gestures don't queue behind a slow frame.
+//   Gesture/UI pushers only update plain data + ImGui's input queue, but
+//   they still enter through RendererSession so lifetime and ordering stay
+//   uniform across Activity and live-wallpaper hosts.
 class Renderer {
 public:
     explicit Renderer(AAssetManager* assets);

@@ -53,16 +53,18 @@ struct FillVertex {
     float    mtype, mox, moy, mring;
 };
 
-// Vertex-shader-expanded border quad. Each unique edge emits four
-// vertices; the shader extrudes each by halfWidth × miterScale along
-// the per-corner mitered direction so adjacent edges meeting at a
-// non-90° vertex join flush — no overlapping perpendicular-butt ends,
-// no outside-corner gap. The mitered direction is already signed for
-// this vertex's world side, so no per-vertex side flag is needed. In
-// disk mode the shader projects (mx, my) through the same
+// Vertex-shader-expanded border mesh. Each unique edge emits a stroked
+// quad; each convex endpoint sector can emit a small joint fan from the
+// shared graph vertex through the neighbouring edge offsets. The shader
+// extrudes each vertex by halfWidth × miterScale along the per-corner
+// mitered direction, so adjacent edges meeting at a non-90° vertex join
+// flush instead of stopping as independent perpendicular butt ends. The
+// mitered direction is already signed for this vertex's world side, so
+// no per-vertex side flag is needed. In disk mode the shader projects
+// (mx, my) through the same
 // projTangentRadial+boostTangent Jacobian as a tangent vector would
-// see — conformality preserves the bisector angle exactly, so the
-// joint closes in disk space at the same miterScale.
+// see — conformality preserves the local join angle, so the joint
+// closes in disk space at the same miterScale.
 //
 // Stride padded to 32 bytes (8 floats = 2 vec4). The five live
 // fields only need 20 bytes, but several mobile Vulkan drivers
@@ -70,13 +72,13 @@ struct FillVertex {
 // when the binding stride isn't a multiple of 16 — perpendicular
 // butt-end output regardless of what the source CPU data carries.
 // The Vulkan spec doesn't require vec4-multiple stride, but in
-// practice every reliable layout I've seen does it. Cost is 12
-// extra bytes per vertex × ~4 verts/edge × a few thousand edges =
-// <0.5 MB on the wire, invisible.
+// practice every reliable layout I've seen does it. Cost is 12 extra
+// bytes per border vertex, still comfortably below a megabyte for the
+// current generation caps.
 struct BorderVertex {
     float x, y;
     float mx, my;       // mitered corner direction (already signed for the world side)
-    float miterScale;   // halfWidth multiplier — bridges the angular gap
+    float miterScale;   // halfWidth multiplier to the offset-line intersection
     float _pad0, _pad1, _pad2;  // stride → 32 bytes for vec4-multiple alignment
 };
 

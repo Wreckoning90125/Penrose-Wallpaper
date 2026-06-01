@@ -25,23 +25,19 @@ endif()
 # -----------------------------------------------------------------------------
 # Third-party dependencies. FetchContent pulls Dear ImGui + ImNodeFlow at
 # configure time and stores them in ${CMAKE_BINARY_DIR}/_deps/, keeping the
-# repo lean and locking precise tags. Network access is needed at configure
+# repo lean and locking precise commits. Network access is needed at configure
 # time but only the first time — subsequent builds reuse the cached copies.
 # -----------------------------------------------------------------------------
 include(FetchContent)
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG        v1.92.8
-    GIT_SHALLOW    TRUE
+    GIT_TAG        8936b58fe26e8c3da834b8f60b06511d537b4c63 # v1.92.8
 )
 FetchContent_Declare(
     imnodeflow
     GIT_REPOSITORY https://github.com/Fattorino/ImNodeFlow.git
-    # master HEAD: typed pins, pull-based behaviour() eval, built-in pop-up
-    # node spawning, zoom + pan. The library vendors thedmd's math helpers
-    # which we patch below for ImGui 1.91+ compatibility.
-    GIT_TAG        master
+    GIT_TAG        e4cb0989c302e0ae324ff03ed1b3f0d2851ee630
 )
 FetchContent_GetProperties(imgui)
 if(NOT imgui_POPULATED)
@@ -176,11 +172,10 @@ set_source_files_properties(
         "-Wno-unused-function -Wno-unused-variable -Wno-pedantic -Wno-deprecated-declarations -Wno-extra-semi -Wno-unused-but-set-variable"
 )
 
-# clang-tidy — opt-in static analysis on the `penrose` target only.
-# Enabled with `-DPENROSE_TIDY=ON` (gradle property `-PpenroseTidy=true`
-# forwards through). Vendored ImGui/ImNodeFlow sources are filtered out
-# via .clang-tidy's HeaderFilterRegex so we only review our own code.
-# Off by default because tidy doubles native build time.
+# clang-tidy - opt-in static analysis on the penrose target.
+# Enabled with -DPENROSE_TIDY=ON through Gradle -PpenroseTidy=true. CI's
+# ratchet ignores diagnostics from CMake _deps; project diagnostics remain
+# gated. Off by default because tidy roughly doubles native build time.
 option(PENROSE_TIDY "Run clang-tidy on the penrose target" OFF)
 if(PENROSE_TIDY)
     find_program(CLANG_TIDY_EXE

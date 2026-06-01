@@ -551,7 +551,7 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
     // Beat envelope: instantaneous flash on either signal — PLL beat
     // boundary OR a strong off-beat percussive transient. Smooth with
     // fast attack so it pops, slow release so it lingers a few frames
-    // (matches the legacy beat scalar's feel so existing graph wiring
+    // (matches the earlier beat scalar's feel so existing graph wiring
     // keeps the same character but tracks far more accurately).
     const float beatFlash = beatBoundary ? 1.0f : 0.0f;
     const float transient = std::min(1.0f, cwtStrength * 0.7f);

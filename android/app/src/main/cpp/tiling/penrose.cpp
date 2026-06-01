@@ -1,7 +1,11 @@
 #include "tiling/penrose.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
 #include <utility>
 
@@ -13,6 +17,135 @@ constexpr double kPi    = 3.14159265358979323846;
 constexpr double kPhi   = 1.6180339887498949;
 constexpr double kPsi   = 1.0 / kPhi;
 constexpr double kPsi2  = kPsi * kPsi;
+constexpr double kHalfSqrt3 = 0.8660254037844386;
+
+struct Pt {
+    double x;
+    double y;
+};
+
+struct Xf {
+    double a, b, c, d, e, f;
+};
+
+constexpr Xf kIdent{1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+
+inline Pt pt(double x, double y) { return {x, y}; }
+inline Pt padd(Pt p, Pt q) { return {p.x + q.x, p.y + q.y}; }
+inline Pt psub(Pt p, Pt q) { return {p.x - q.x, p.y - q.y}; }
+
+inline Pt hexPt(double x, double y) {
+    return {x + 0.5 * y, kHalfSqrt3 * y};
+}
+
+inline Xf mul(Xf A, Xf B) {
+    return {
+        A.a * B.a + A.b * B.d,
+        A.a * B.b + A.b * B.e,
+        A.a * B.c + A.b * B.f + A.c,
+        A.d * B.a + A.e * B.d,
+        A.d * B.b + A.e * B.e,
+        A.d * B.c + A.e * B.f + A.f,
+    };
+}
+
+inline Xf inv(Xf T) {
+    const double det = T.a * T.e - T.b * T.d;
+    return {
+        T.e / det,
+        -T.b / det,
+        (T.b * T.f - T.c * T.e) / det,
+        -T.d / det,
+        T.a / det,
+        (T.c * T.d - T.a * T.f) / det,
+    };
+}
+
+inline Xf trot(double ang) {
+    const double c = std::cos(ang);
+    const double s = std::sin(ang);
+    return {c, -s, 0.0, s, c, 0.0};
+}
+
+inline Xf ttrans(double tx, double ty) {
+    return {1.0, 0.0, tx, 0.0, 1.0, ty};
+}
+
+inline Pt transPt(Xf M, Pt P) {
+    return {M.a * P.x + M.b * P.y + M.c,
+            M.d * P.x + M.e * P.y + M.f};
+}
+
+inline Xf rotAbout(Pt p, double ang) {
+    return mul(ttrans(p.x, p.y), mul(trot(ang), ttrans(-p.x, -p.y)));
+}
+
+inline Xf transTo(Pt p, Pt q) {
+    return ttrans(q.x - p.x, q.y - p.y);
+}
+
+inline Xf matchSeg(Pt p, Pt q) {
+    return {q.x - p.x, p.y - q.y, p.x,
+            q.y - p.y, q.x - p.x, p.y};
+}
+
+inline Xf matchTwo(Pt p1, Pt q1, Pt p2, Pt q2) {
+    return mul(matchSeg(p2, q2), inv(matchSeg(p1, q1)));
+}
+
+inline Pt intersect(Pt p1, Pt q1, Pt p2, Pt q2) {
+    const double d = (q2.y - p2.y) * (q1.x - p1.x)
+                   - (q2.x - p2.x) * (q1.y - p1.y);
+    const double uA = ((q2.x - p2.x) * (p1.y - p2.y)
+                    - (q2.y - p2.y) * (p1.x - p2.x)) / d;
+    return {p1.x + uA * (q1.x - p1.x),
+            p1.y + uA * (q1.y - p1.y)};
+}
+
+inline Tile polygonTile(const std::vector<Pt>& poly, Xf T, uint8_t type) {
+    Tile tile{};
+    const int n = static_cast<int>(std::min(poly.size(), static_cast<size_t>(kMaxTileVerts)));
+    tile.vcount = static_cast<uint8_t>(n);
+    tile.type = type;
+    for (int i = 0; i < n; ++i) {
+        const Pt p = transPt(T, poly[i]);
+        tile.x[i] = static_cast<float>(p.x);
+        tile.y[i] = static_cast<float>(p.y);
+    }
+    return tile;
+}
+
+inline void normalizeTiles(std::vector<Tile>& tiles) {
+    double maxR2 = 0.0;
+    double cx = 0.0;
+    double cy = 0.0;
+    int count = 0;
+    for (const Tile& t : tiles) {
+        for (int i = 0; i < t.vcount; ++i) {
+            cx += t.x[i];
+            cy += t.y[i];
+            ++count;
+        }
+    }
+    if (count > 0) {
+        cx /= static_cast<double>(count);
+        cy /= static_cast<double>(count);
+    }
+    for (const Tile& t : tiles) {
+        for (int i = 0; i < t.vcount; ++i) {
+            const double x = static_cast<double>(t.x[i]) - cx;
+            const double y = static_cast<double>(t.y[i]) - cy;
+            maxR2 = std::max(maxR2, x * x + y * y);
+        }
+    }
+    const double scale = maxR2 > 1e-12 ? 1.0 / std::sqrt(maxR2) : 1.0;
+    for (Tile& t : tiles) {
+        for (int i = 0; i < t.vcount; ++i) {
+            t.x[i] = static_cast<float>((static_cast<double>(t.x[i]) - cx) * scale);
+            t.y[i] = static_cast<float>((static_cast<double>(t.y[i]) - cy) * scale);
+        }
+    }
+}
 
 inline Tile mkTri(uint8_t type, float ax, float ay, float bx, float by, float cx, float cy) {
     Tile t{};
@@ -80,6 +213,364 @@ inline void recoverChair(const Tile& t, float& ox, float& oy, int& orient, float
     float dx = t.x[1] - t.x[0];
     float dy = t.y[1] - t.y[0];
     scale = std::sqrt(dx * dx + dy * dy) * 0.5f;
+}
+
+struct HatGeom;
+using HatPtr = std::shared_ptr<HatGeom>;
+
+struct HatChild {
+    Xf T;
+    HatPtr geom;
+};
+
+struct HatGeom {
+    std::vector<Pt> shape;
+    std::vector<HatChild> children;
+    uint8_t type = 0;
+    bool leaf = false;
+    double width = 1.0;
+};
+
+const std::vector<Pt>& hatOutline() {
+    static const std::vector<Pt> outline = {
+        hexPt(0, 0),  hexPt(-1,-1), hexPt(0,-2), hexPt(2,-2),
+        hexPt(2,-1), hexPt(4,-2),  hexPt(5,-1), hexPt(4, 0),
+        hexPt(3, 0), hexPt(2, 2),  hexPt(0, 3), hexPt(0, 2),
+        hexPt(-1, 2),
+    };
+    return outline;
+}
+
+HatPtr makeHatLeaf(uint8_t type) {
+    auto g = std::make_shared<HatGeom>();
+    g->shape = hatOutline();
+    g->type = type;
+    g->leaf = true;
+    return g;
+}
+
+HatPtr makeHatMeta(std::vector<Pt> shape, double width) {
+    auto g = std::make_shared<HatGeom>();
+    g->shape = std::move(shape);
+    g->width = width;
+    return g;
+}
+
+inline void addHatChild(const HatPtr& parent, Xf T, const HatPtr& child) {
+    parent->children.push_back({T, child});
+}
+
+Pt evalHatChild(const HatPtr& meta, int child, int vertex) {
+    const HatChild& ch = meta->children[child];
+    return transPt(ch.T, ch.geom->shape[vertex]);
+}
+
+void recenterHat(const HatPtr& meta) {
+    double cx = 0.0;
+    double cy = 0.0;
+    for (Pt p : meta->shape) { cx += p.x; cy += p.y; }
+    if (!meta->shape.empty()) {
+        cx /= static_cast<double>(meta->shape.size());
+        cy /= static_cast<double>(meta->shape.size());
+    }
+    const Xf M = ttrans(-cx, -cy);
+    for (Pt& p : meta->shape) {
+        p.x -= cx;
+        p.y -= cy;
+    }
+    for (HatChild& ch : meta->children) ch.T = mul(M, ch.T);
+}
+
+std::array<HatPtr, 4> initialHatMetatiles() {
+    const HatPtr H1_hat = makeHatLeaf(1);
+    const HatPtr H_hat  = makeHatLeaf(0);
+    const HatPtr T_hat  = makeHatLeaf(2);
+    const HatPtr P_hat  = makeHatLeaf(3);
+    const HatPtr F_hat  = makeHatLeaf(4);
+    const auto& ho = hatOutline();
+
+    const std::vector<Pt> H_outline = {
+        pt(0, 0), pt(4, 0), pt(4.5, kHalfSqrt3),
+        pt(2.5, 5 * kHalfSqrt3), pt(1.5, 5 * kHalfSqrt3),
+        pt(-0.5, kHalfSqrt3),
+    };
+    HatPtr H = makeHatMeta(H_outline, 2.0);
+    addHatChild(H, matchTwo(ho[5], ho[7], H_outline[5], H_outline[0]), H_hat);
+    addHatChild(H, matchTwo(ho[9], ho[11], H_outline[1], H_outline[2]), H_hat);
+    addHatChild(H, matchTwo(ho[5], ho[7], H_outline[3], H_outline[4]), H_hat);
+    addHatChild(H,
+        mul(ttrans(2.5, kHalfSqrt3),
+            mul(Xf{-0.5, -kHalfSqrt3, 0.0, kHalfSqrt3, -0.5, 0.0},
+                Xf{0.5, 0.0, 0.0, 0.0, -0.5, 0.0})),
+        H1_hat);
+
+    const std::vector<Pt> T_outline = {
+        pt(0, 0), pt(3, 0), pt(1.5, 3 * kHalfSqrt3),
+    };
+    HatPtr T = makeHatMeta(T_outline, 2.0);
+    addHatChild(T, Xf{0.5, 0.0, 0.5, 0.0, 0.5, kHalfSqrt3}, T_hat);
+
+    const std::vector<Pt> P_outline = {
+        pt(0, 0), pt(4, 0), pt(3, 2 * kHalfSqrt3), pt(-1, 2 * kHalfSqrt3),
+    };
+    HatPtr P = makeHatMeta(P_outline, 2.0);
+    addHatChild(P, Xf{0.5, 0.0, 1.5, 0.0, 0.5, kHalfSqrt3}, P_hat);
+    addHatChild(P,
+        mul(ttrans(0.0, 2 * kHalfSqrt3),
+            mul(Xf{0.5, kHalfSqrt3, 0.0, -kHalfSqrt3, 0.5, 0.0},
+                Xf{0.5, 0.0, 0.0, 0.0, 0.5, 0.0})),
+        P_hat);
+
+    const std::vector<Pt> F_outline = {
+        pt(0, 0), pt(3, 0), pt(3.5, kHalfSqrt3),
+        pt(3, 2 * kHalfSqrt3), pt(-1, 2 * kHalfSqrt3),
+    };
+    HatPtr F = makeHatMeta(F_outline, 2.0);
+    addHatChild(F, Xf{0.5, 0.0, 1.5, 0.0, 0.5, kHalfSqrt3}, F_hat);
+    addHatChild(F,
+        mul(ttrans(0.0, 2 * kHalfSqrt3),
+            mul(Xf{0.5, kHalfSqrt3, 0.0, -kHalfSqrt3, 0.5, 0.0},
+                Xf{0.5, 0.0, 0.0, 0.0, 0.5, 0.0})),
+        F_hat);
+
+    return {H, T, P, F};
+}
+
+struct HatRule {
+    int a, b, c, d;
+    int edge;
+    uint8_t kind;
+    uint8_t label;
+};
+
+HatPtr constructHatPatch(const std::array<HatPtr, 4>& metatiles) {
+    static constexpr uint8_t H = 0, T = 1, P = 2, F = 3;
+    static const HatRule rules[] = {
+        { 0, 0, 0, 0, 0, 1, H },
+        { 0, 0, 0, 0, 2, 4, P }, { 1, 0, 0, 0, 2, 4, H },
+        { 2, 0, 0, 0, 2, 4, P }, { 3, 0, 0, 0, 2, 4, H },
+        { 4, 4, 0, 0, 2, 4, P }, { 0, 4, 0, 0, 3, 4, F },
+        { 2, 4, 0, 0, 3, 4, F }, { 4, 1, 3, 2, 0, 6, F },
+        { 8, 3, 0, 0, 0, 4, H }, { 9, 2, 0, 0, 0, 4, P },
+        {10, 2, 0, 0, 0, 4, H }, {11, 4, 0, 0, 2, 4, P },
+        {12, 0, 0, 0, 2, 4, H }, {13, 0, 0, 0, 3, 4, F },
+        {14, 2, 0, 0, 1, 4, F }, {15, 3, 0, 0, 4, 4, H },
+        { 8, 2, 0, 0, 1, 4, F }, {17, 3, 0, 0, 0, 4, H },
+        {18, 2, 0, 0, 0, 4, P }, {19, 2, 0, 0, 2, 4, H },
+        {20, 4, 0, 0, 3, 4, F }, {20, 0, 0, 0, 2, 4, P },
+        {22, 0, 0, 0, 2, 4, H }, {23, 4, 0, 0, 3, 4, F },
+        {23, 0, 0, 0, 3, 4, F }, {16, 0, 0, 0, 2, 4, P },
+        { 9, 4, 0, 2, 2, 6, T }, { 4, 0, 0, 0, 3, 4, F },
+    };
+
+    HatPtr ret = makeHatMeta({}, metatiles[0]->width);
+    for (const HatRule& r : rules) {
+        if (r.kind == 1) {
+            addHatChild(ret, kIdent, metatiles[r.label]);
+        } else if (r.kind == 4) {
+            const HatChild& ch = ret->children[r.a];
+            const auto& poly = ch.geom->shape;
+            const Pt p = transPt(ch.T, poly[(r.b + 1) % poly.size()]);
+            const Pt q = transPt(ch.T, poly[r.b]);
+            const HatPtr& next = metatiles[r.label];
+            const auto& npoly = next->shape;
+            addHatChild(ret,
+                matchTwo(npoly[r.edge], npoly[(r.edge + 1) % npoly.size()], p, q),
+                next);
+        } else {
+            const HatChild& chP = ret->children[r.a];
+            const HatChild& chQ = ret->children[r.c];
+            const Pt p = transPt(chQ.T, chQ.geom->shape[r.d]);
+            const Pt q = transPt(chP.T, chP.geom->shape[r.b]);
+            const HatPtr& next = metatiles[r.label];
+            const auto& npoly = next->shape;
+            addHatChild(ret,
+                matchTwo(npoly[r.edge], npoly[(r.edge + 1) % npoly.size()], p, q),
+                next);
+        }
+    }
+    return ret;
+}
+
+std::array<HatPtr, 4> constructHatMetatiles(const HatPtr& patch) {
+    const Pt bps1 = evalHatChild(patch, 8, 2);
+    const Pt bps2 = evalHatChild(patch, 21, 2);
+    const Pt rbps = transPt(rotAbout(bps1, -2.0 * kPi / 3.0), bps2);
+    const Pt p72 = evalHatChild(patch, 7, 2);
+    const Pt p252 = evalHatChild(patch, 25, 2);
+    const Pt llc = intersect(bps1, rbps, evalHatChild(patch, 6, 2), p72);
+
+    Pt w = psub(evalHatChild(patch, 6, 2), llc);
+    std::vector<Pt> H_outline = {llc, bps1};
+    w = transPt(trot(-kPi / 3.0), w);
+    H_outline.push_back(padd(H_outline[1], w));
+    H_outline.push_back(evalHatChild(patch, 14, 2));
+    w = transPt(trot(-kPi / 3.0), w);
+    H_outline.push_back(psub(H_outline[3], w));
+    H_outline.push_back(evalHatChild(patch, 6, 2));
+    HatPtr H = makeHatMeta(H_outline, patch->width * 2.0);
+    for (int ch : {0, 9, 16, 27, 26, 6, 1, 8, 10, 15})
+        addHatChild(H, patch->children[ch].T, patch->children[ch].geom);
+
+    std::vector<Pt> P_outline = {p72, padd(p72, psub(bps1, llc)), bps1, llc};
+    HatPtr P = makeHatMeta(P_outline, patch->width * 2.0);
+    for (int ch : {7, 2, 3, 4, 28})
+        addHatChild(P, patch->children[ch].T, patch->children[ch].geom);
+
+    std::vector<Pt> F_outline = {
+        bps2, evalHatChild(patch, 24, 2), evalHatChild(patch, 25, 0),
+        p252, padd(p252, psub(llc, bps1)),
+    };
+    HatPtr F = makeHatMeta(F_outline, patch->width * 2.0);
+    for (int ch : {21, 20, 22, 23, 24, 25})
+        addHatChild(F, patch->children[ch].T, patch->children[ch].geom);
+
+    const Pt AAA = H_outline[2];
+    const Pt BBB = padd(H_outline[1], psub(H_outline[4], H_outline[5]));
+    const Pt CCC = transPt(rotAbout(BBB, -kPi / 3.0), AAA);
+    HatPtr T = makeHatMeta({BBB, CCC, AAA}, patch->width * 2.0);
+    addHatChild(T, patch->children[11].T, patch->children[11].geom);
+
+    recenterHat(H);
+    recenterHat(P);
+    recenterHat(F);
+    recenterHat(T);
+    return {H, T, P, F};
+}
+
+void emitHatLeaves(const HatPtr& geom, Xf T, std::vector<Tile>& out) {
+    if (geom->leaf) {
+        out.push_back(polygonTile(geom->shape, T, geom->type));
+        return;
+    }
+    for (const HatChild& ch : geom->children)
+        emitHatLeaves(ch.geom, mul(T, ch.T), out);
+}
+
+struct SpecGeom;
+using SpecPtr = std::shared_ptr<SpecGeom>;
+
+struct SpecChild {
+    Xf T;
+    SpecPtr geom;
+};
+
+struct SpecGeom {
+    std::vector<Pt> shape;
+    std::array<Pt, 4> quad{};
+    std::vector<SpecChild> children;
+    uint8_t type = 0;
+    bool leaf = false;
+};
+
+SpecPtr makeSpecLeaf(const std::vector<Pt>& shape,
+                     const std::array<Pt, 4>& quad,
+                     uint8_t type) {
+    auto g = std::make_shared<SpecGeom>();
+    g->shape = shape;
+    g->quad = quad;
+    g->type = type;
+    g->leaf = true;
+    return g;
+}
+
+SpecPtr makeSpecMeta(const std::array<Pt, 4>& quad) {
+    auto g = std::make_shared<SpecGeom>();
+    g->quad = quad;
+    return g;
+}
+
+inline void addSpecChild(const SpecPtr& parent, const SpecPtr& child, Xf T) {
+    parent->children.push_back({T, child});
+}
+
+std::array<SpecPtr, 9> buildSpectreBase() {
+    const std::vector<Pt> spectre = {
+        pt(0.0, 0.0), pt(1.0, 0.0), pt(1.5, -kHalfSqrt3),
+        pt(2.366025403784439, -0.36602540378443865),
+        pt(2.366025403784439, 0.6339745962155614),
+        pt(3.366025403784439, 0.6339745962155614),
+        pt(3.866025403784439, 1.5), pt(3.0, 2.0),
+        pt(2.133974596215561, 1.5),
+        pt(1.6339745962155614, 2.3660254037844393),
+        pt(0.6339745962155614, 2.3660254037844393),
+        pt(-0.3660254037844386, 2.3660254037844393),
+        pt(-0.866025403784439, 1.5), pt(0.0, 1.0),
+    };
+    const std::array<Pt, 4> quad = {spectre[3], spectre[5], spectre[7], spectre[11]};
+
+    std::array<SpecPtr, 9> sys{};
+    for (int i = 1; i < 9; ++i)
+        sys[i] = makeSpecLeaf(spectre, quad, static_cast<uint8_t>(i + 1));
+
+    SpecPtr gamma = makeSpecMeta(quad);
+    addSpecChild(gamma, makeSpecLeaf(spectre, quad, 0), kIdent);
+    addSpecChild(gamma, makeSpecLeaf(spectre, quad, 1),
+                 mul(ttrans(spectre[8].x, spectre[8].y), trot(kPi / 6.0)));
+    sys[0] = gamma;
+    return sys;
+}
+
+std::array<SpecPtr, 9> buildSpectreSupertiles(const std::array<SpecPtr, 9>& sys) {
+    const std::array<Pt, 4> quad = sys[1]->quad;
+    const Xf R{-1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+    const int tRules[7][3] = {
+        { 60, 3, 1 }, { 0, 2, 0 }, { 60, 3, 1 }, { 60, 3, 1 },
+        { 0, 2, 0 }, { 60, 3, 1 }, { -120, 3, 3 },
+    };
+
+    std::vector<Xf> Ts = {kIdent};
+    int totalAng = 0;
+    Xf rot = kIdent;
+    std::array<Pt, 4> tquad = quad;
+    for (const auto& rule : tRules) {
+        totalAng += rule[0];
+        if (rule[0] != 0) {
+            rot = trot(static_cast<double>(totalAng) * kPi / 180.0);
+            for (int i = 0; i < 4; ++i) tquad[i] = transPt(rot, quad[i]);
+        }
+        const Xf ttt = transTo(tquad[rule[2]], transPt(Ts.back(), quad[rule[1]]));
+        Ts.push_back(mul(ttt, rot));
+    }
+    for (Xf& T : Ts) T = mul(R, T);
+
+    static const int superRules[9][8] = {
+        {5, 1, -1, 2, 6, 4, 7, 0},
+        {4, 1,  4, 7, 6, 5, 7, 0},
+        {8, 1,  5, 7, 6, 5, 7, 0},
+        {8, 1,  4, 7, 6, 5, 7, 0},
+        {8, 1,  5, 7, 6, 8, 7, 0},
+        {8, 1,  4, 7, 6, 8, 7, 0},
+        {4, 1,  4, 7, 6, 5, 3, 0},
+        {8, 1,  8, 7, 6, 5, 7, 0},
+        {8, 1,  8, 7, 6, 8, 7, 0},
+    };
+    const std::array<Pt, 4> superQuad = {
+        transPt(Ts[6], quad[2]),
+        transPt(Ts[5], quad[1]),
+        transPt(Ts[3], quad[2]),
+        transPt(Ts[0], quad[1]),
+    };
+
+    std::array<SpecPtr, 9> ret{};
+    for (int lab = 0; lab < 9; ++lab) {
+        SpecPtr sup = makeSpecMeta(superQuad);
+        for (int idx = 0; idx < 8; ++idx) {
+            const int sub = superRules[lab][idx];
+            if (sub >= 0) addSpecChild(sup, sys[sub], Ts[idx]);
+        }
+        ret[lab] = sup;
+    }
+    return ret;
+}
+
+void emitSpecLeaves(const SpecPtr& geom, Xf T, std::vector<Tile>& out) {
+    if (geom->leaf) {
+        out.push_back(polygonTile(geom->shape, T, geom->type));
+        return;
+    }
+    for (const SpecChild& ch : geom->children)
+        emitSpecLeaves(ch.geom, mul(T, ch.T), out);
 }
 
 } // namespace
@@ -240,8 +731,9 @@ std::vector<Tile> subdivideDanzer(const std::vector<Tile>& in) {
         for (const DanzerChild& c : rule[t.type & 3]) {
             float p[6];
             for (int r = 0; r < 3; ++r) {
-                p[2 * r]     = static_cast<float>(ox + c.s[r] * ux + c.d[r] * wx);
-                p[2 * r + 1] = static_cast<float>(oy + c.s[r] * uy + c.d[r] * wy);
+                const std::ptrdiff_t i = static_cast<std::ptrdiff_t>(2) * r;
+                p[i]     = static_cast<float>(ox + c.s[r] * ux + c.d[r] * wx);
+                p[i + 1] = static_cast<float>(oy + c.s[r] * uy + c.d[r] * wy);
             }
             out.push_back(mkTri(c.type, p[0], p[1], p[2], p[3], p[4], p[5]));
         }
@@ -321,8 +813,10 @@ std::vector<Tile> seedP3(SeedP3 seed) {
             float v1x = (float)std::cos(a1), v1y = (float)std::sin(a1);
             float v3x = (float)std::cos(a3), v3y = (float)std::sin(a3);
             float v2x = v1x + v3x, v2y = v1y + v3y;
-            out.push_back(mkTri(0, 0.0f, 0.0f, v1x, v1y, v2x, v2y));
-            out.push_back(mkTri(0, 0.0f, 0.0f, v3x, v3y, v2x, v2y));
+            const float cx = v2x * 0.5f;
+            const float cy = v2y * 0.5f;
+            out.push_back(mkTri(0, -cx, -cy, v1x - cx, v1y - cy, v2x - cx, v2y - cy));
+            out.push_back(mkTri(0, -cx, -cy, v3x - cx, v3y - cy, v2x - cx, v2y - cy));
             break;
         }
     }
@@ -681,8 +1175,9 @@ std::vector<Tile> subdividePinwheel(const std::vector<Tile>& in) {
             for (int k = 0; k < 3; ++k) {
                 const float a = corner[k][0] + 2.0f;
                 const float b = corner[k][1] - 1.0f;
-                p[2 * k]     = sx + a * c1x + b * c2x;
-                p[2 * k + 1] = sy + a * c1y + b * c2y;
+                const std::ptrdiff_t i = static_cast<std::ptrdiff_t>(2) * k;
+                p[i]     = sx + a * c1x + b * c2x;
+                p[i + 1] = sy + a * c1y + b * c2y;
             }
             out.push_back(mkPin(p[0], p[1], p[2], p[3], p[4], p[5]));
         }
@@ -741,6 +1236,11 @@ namespace {
 // from Tile so the many-iteration recursion runs without float drift.
 struct BinRhomb { double x[4], y[4]; uint8_t type; };
 
+inline void binAppend(std::vector<BinRhomb>& dst, const std::vector<BinRhomb>& src) {
+    dst.reserve(dst.size() + src.size());
+    for (const BinRhomb& q : src) dst.push_back(q);
+}
+
 // Append into `dst` a copy of every rhomb in `src` rotated by `rot` about the
 // origin and then translated by (tx,ty).
 inline void binEmit(std::vector<BinRhomb>& dst, const std::vector<BinRhomb>& src,
@@ -796,7 +1296,9 @@ std::vector<Tile> generateBinary(int seedIdx, int generations) {
             ox = gm * (gc * vx - gs * vy);
             oy = gm * (gs * vx + gc * vy);
         };
-        std::vector<BinRhomb> Ln = L, Sn = S;             // identity term
+        std::vector<BinRhomb> Ln, Sn;                     // identity term
+        binAppend(Ln, L);
+        binAppend(Sn, S);
         double tx, ty;
         gvec(ex[0],          ey[0],          tx, ty); binEmit(Ln, L, r1 * 1, tx, ty);
         gvec(ex[0] + ex[1],  ey[0] + ey[1],  tx, ty); binEmit(Ln, L, r1 * 2, tx, ty);
@@ -810,11 +1312,11 @@ std::vector<Tile> generateBinary(int seedIdx, int generations) {
     // vector, so the rotated copies fan a full turn around the origin.
     std::vector<BinRhomb> out;
     if (seedIdx == 1) {                 // Dog: D = S + r2 S + r4 L
-        out = S;
+        binAppend(out, S);
         binEmit(out, S, r1 * 2, 0.0, 0.0);
         binEmit(out, L, r1 * 4, 0.0, 0.0);
     } else {                            // Bear: B = L + r L + r2 L + r3 S
-        out = L;
+        binAppend(out, L);
         binEmit(out, L, r1 * 1, 0.0, 0.0);
         binEmit(out, L, r1 * 2, 0.0, 0.0);
         binEmit(out, S, r1 * 3, 0.0, 0.0);
@@ -860,11 +1362,11 @@ std::vector<Tile> generateBinary(int seedIdx, int generations) {
 namespace {
 
 // 2x3 affine transform: (x,y) -> (a*x + c*y + e, b*x + d*y + f).
-struct Xf { double a, b, c, d, e, f; };
-const Xf kXfId{ 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+struct P1Xf { double a, b, c, d, e, f; };
+const P1Xf kXfId{ 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
 
 // A applied after B (A∘B) — mirrors the node's `base_matrix @ count_xform`.
-inline Xf xfMul(const Xf& A, const Xf& B) {
+inline P1Xf xfMul(const P1Xf& A, const P1Xf& B) {
     return { A.a*B.a + A.c*B.b,        A.b*B.a + A.d*B.b,
              A.a*B.c + A.c*B.d,        A.b*B.c + A.d*B.d,
              A.a*B.e + A.c*B.f + A.e,  A.b*B.e + A.d*B.f + A.f };
@@ -874,7 +1376,7 @@ inline Xf xfMul(const Xf& A, const Xf& B) {
 // rotateZ(rz), then an optional reflection across the x-axis (rx); the
 // translation (tx,ty) is applied last:
 //   translate(tx,ty) · reflectX(rx) · rotateZ(rz) · scale(sa).
-inline Xf xfCall(double tx, double ty, double rzDeg, bool rx, double sa) {
+inline P1Xf xfCall(double tx, double ty, double rzDeg, bool rx, double sa) {
     const double r = rzDeg * kPi / 180.0;
     const double C = std::cos(r), S = std::sin(r);
     const double rs = rx ? -1.0 : 1.0;
@@ -888,9 +1390,9 @@ const double kFatx  = 0.5 * std::sqrt(3.0 - kPhi);
 const double kS1    = 1.0 / kPhi;
 const double kS2    = 1.0 / (1.0 + kPhi);
 
-enum { P1_ENTRY, P1_FAT_PAIR, P1_THIN_SUB, P1_FAT_SUB, P1_THIN_LEAF, P1_FAT_LEAF };
+enum P1Rule : std::uint8_t { P1_ENTRY, P1_FAT_PAIR, P1_THIN_SUB, P1_FAT_SUB, P1_THIN_LEAF, P1_FAT_LEAF };
 
-void p1EmitPentagon(const Xf& m, std::vector<Tile>& out) {
+void p1EmitPentagon(const P1Xf& m, std::vector<Tile>& out) {
     Tile pe{};
     pe.vcount = 5;
     pe.type = 0;
@@ -917,15 +1419,15 @@ void p1EmitPentagon(const Xf& m, std::vector<Tile>& out) {
 // Walk the substitution rules, composing each child's transform onto the
 // parent's; emit a pentagon at every fat-triangle leaf. A *_sub rule that
 // exceeds the depth budget `md` switches to its leaf successor.
-void p1Recurse(int rule, const Xf& mat, int depth, int md, std::vector<Tile>& out) {
+void p1Recurse(P1Rule rule, const P1Xf& mat, int depth, int md, std::vector<Tile>& out) {
     if ((rule == P1_THIN_SUB || rule == P1_FAT_SUB) && depth > md) {
         p1Recurse(rule == P1_THIN_SUB ? P1_THIN_LEAF : P1_FAT_LEAF, mat, 0, md, out);
         return;
     }
     switch (rule) {
         case P1_ENTRY: {                               // 5 fat_pair, rz 72*n
-            Xf cx = kXfId;
-            const Xf step = xfCall(0, 0, 72, false, 1.0);
+            P1Xf cx = kXfId;
+            const P1Xf step = xfCall(0, 0, 72, false, 1.0);
             for (int n = 0; n < 5; ++n) {
                 cx = xfMul(cx, step);
                 p1Recurse(P1_FAT_PAIR, xfMul(mat, cx), depth + 1, md, out);
@@ -1082,6 +1584,29 @@ std::vector<Tile> generateP1(int /*seedIdx*/, int generations) {
     return out;
 }
 
+std::vector<Tile> generateHat(int seedIdx, int generations) {
+    auto metatiles = initialHatMetatiles();
+    for (int g = 0; g < generations; ++g) {
+        const HatPtr patch = constructHatPatch(metatiles);
+        metatiles = constructHatMetatiles(patch);
+    }
+    const int seed = (seedIdx < 0 || seedIdx > 3) ? 0 : seedIdx;
+    std::vector<Tile> out;
+    emitHatLeaves(metatiles[seed], kIdent, out);
+    normalizeTiles(out);
+    return out;
+}
+
+std::vector<Tile> generateSpectre(int seedIdx, int generations) {
+    auto sys = buildSpectreBase();
+    for (int g = 0; g < generations; ++g) sys = buildSpectreSupertiles(sys);
+    const int seed = (seedIdx < 0 || seedIdx > 8) ? 0 : seedIdx;
+    std::vector<Tile> out;
+    emitSpecLeaves(sys[seed], kIdent, out);
+    normalizeTiles(out);
+    return out;
+}
+
 // =============================================================================
 // Per-family descriptor table
 // =============================================================================
@@ -1120,6 +1645,10 @@ const FamilyInfo kFamilyInfo[kFamilyCount] = {
                           { 4, 10, false, 0, 1, false, false } },
     /* Danzer        */ { 7, 0.5549581320873713f, 14, 0, true,  false, 2,
                           { 4, 14, false, 0, 2, false, false } },
+    /* Hat           */ { 5, 0.3819660112501051f,  0, 0, true,  true,  0,
+                          { 5, 12, false, 0, 1, false, false } },
+    /* Spectre       */ { 5, 0.3535533905932738f,  0, 0, true,  true,  0,
+                          {10, 12, false, 0, 1, false, false } },
 };
 
 // =============================================================================
@@ -1174,6 +1703,14 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
             auto tiles = seedDanzer(static_cast<SeedDanzer>(s));
             for (int g = 0; g < cap; ++g) tiles = subdivideDanzer(tiles);
             return tiles;
+        }
+        case Family::Hat: {
+            int s = (seedIdx < 0 || seedIdx > 3) ? 0 : seedIdx;
+            return generateHat(s, cap);
+        }
+        case Family::Spectre: {
+            int s = (seedIdx < 0 || seedIdx > 8) ? 0 : seedIdx;
+            return generateSpectre(s, cap);
         }
     }
     return {};

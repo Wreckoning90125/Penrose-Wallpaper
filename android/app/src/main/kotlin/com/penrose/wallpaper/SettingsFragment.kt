@@ -22,6 +22,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.TooltipCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -31,11 +32,15 @@ import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.SeekBarPreference
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.penrose.wallpaper.atlas.AtlasCategory
+import com.penrose.wallpaper.atlas.AtlasStore
+import com.penrose.wallpaper.atlas.AtlasTarget
 import com.penrose.wallpaper.audio.AudioControlsPreference
 import com.penrose.wallpaper.audio.AudioPlaybackService
 import com.penrose.wallpaper.preset.MaterialPreset
 import com.penrose.wallpaper.preset.MaterialPresets
 import com.penrose.wallpaper.preset.PresetStore
+import com.penrose.wallpaper.preset.StaticValue
 
 /**
  * Settings UI hosted inside the BottomSheetDialogFragment. The root
@@ -48,6 +53,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
                          SharedPreferences.OnSharedPreferenceChangeListener {
 
     private var currentScreen: ScreenKey = ScreenKey.Main
+    private var applyingAtlasTarget = false
 
     private enum class ScreenKey(val resId: Int) {
         Main(R.xml.preferences),
@@ -103,7 +109,8 @@ class SettingsFragment : PreferenceFragmentCompat(),
             ScreenKey.Main -> bindMainActions()
             ScreenKey.Tiling -> {
                 bindBack()
-                applySeedListForCurrentFamily()
+                bindAtlasControls()
+                applyFamilySpecificTilingControls(resetSeed = false)
             }
             ScreenKey.Color -> {
                 bindBack()
@@ -152,8 +159,12 @@ class SettingsFragment : PreferenceFragmentCompat(),
     }
 
     override fun onSharedPreferenceChanged(sp: SharedPreferences?, key: String?) {
+        if (applyingAtlasTarget) return
         if (currentScreen == ScreenKey.Tiling && key == Settings.KEY_FAMILY) {
-            applySeedListForCurrentFamily()
+            applyFamilySpecificTilingControls(resetSeed = true)
+        }
+        if (key != null && key !in atlasSelectionKeys) {
+            clearAtlasTargetSelection(sp)
         }
     }
 
@@ -336,6 +347,107 @@ class SettingsFragment : PreferenceFragmentCompat(),
         }
     }
 
+    private fun bindAtlasControls() {
+        val categoryPref = findPreference<ListPreference>(Settings.KEY_ATLAS_CATEGORY) ?: return
+        val targetPref = findPreference<ListPreference>(Settings.KEY_ATLAS_TARGET) ?: return
+        val prefs = preferenceManager.sharedPreferences ?: return
+        val categories = AtlasStore(requireContext()).categories()
+        if (categories.isEmpty()) {
+            categoryPref.isEnabled = false
+            categoryPref.summary = "Atlas unavailable"
+            targetPref.isEnabled = false
+            targetPref.summary = "Atlas unavailable"
+            return
+        }
+
+        categoryPref.entries = categories.map { it.label }.toTypedArray()
+        categoryPref.entryValues = categories.map { it.id }.toTypedArray()
+        categoryPref.isEnabled = true
+        targetPref.isEnabled = true
+
+        val savedCategoryId = prefs.getString(Settings.KEY_ATLAS_CATEGORY, null)
+        val category = categories.firstOrNull { it.id == savedCategoryId } ?: categories.first()
+        categoryPref.value = category.id
+
+        bindAtlasTargetList(targetPref, category, prefs)
+
+        categoryPref.setOnPreferenceChangeListener { _, value ->
+            val nextCategory = categories.firstOrNull { it.id == value as? String }
+                ?: return@setOnPreferenceChangeListener false
+            val firstTarget = nextCategory.targets.firstOrNull()
+                ?: return@setOnPreferenceChangeListener false
+            applyAtlasTarget(nextCategory.id, firstTarget)
+            false
+        }
+
+        targetPref.setOnPreferenceChangeListener { _, value ->
+            val nextTarget = category.targets.firstOrNull { it.id == value as? String }
+                ?: return@setOnPreferenceChangeListener false
+            applyAtlasTarget(category.id, nextTarget)
+            false
+        }
+    }
+
+    private fun bindAtlasTargetList(
+        targetPref: ListPreference,
+        category: AtlasCategory,
+        prefs: SharedPreferences,
+    ) {
+        targetPref.entries = category.targets.map { it.name }.toTypedArray()
+        targetPref.entryValues = category.targets.map { it.id }.toTypedArray()
+        if (category.targets.isEmpty()) {
+            targetPref.value = null
+            targetPref.isEnabled = false
+            targetPref.summary = "No targets"
+            return
+        }
+        val savedTargetId = prefs.getString(Settings.KEY_ATLAS_TARGET, null)
+        val target = savedTargetId?.let { id -> category.targets.firstOrNull { it.id == id } }
+        if (target == null) {
+            targetPref.value = null
+            targetPref.summary = "Choose target"
+            return
+        }
+        targetPref.value = target.id
+        targetPref.summary = "%s"
+    }
+
+    private fun applyAtlasTarget(categoryId: String, target: AtlasTarget) {
+        val prefs = preferenceManager.sharedPreferences ?: return
+        applyingAtlasTarget = true
+        try {
+            prefs.edit(commit = true) {
+                putString(Settings.KEY_ATLAS_CATEGORY, categoryId)
+                putString(Settings.KEY_ATLAS_TARGET, target.id)
+                for ((key, value) in target.settings) {
+                    when (value) {
+                        is StaticValue.IntValue -> putInt(key, value.v)
+                        is StaticValue.StringValue -> putString(key, value.v)
+                        is StaticValue.BoolValue -> putBoolean(key, value.v)
+                        is StaticValue.FloatValue -> putFloat(key, value.v)
+                    }
+                }
+            }
+        } finally {
+            applyingAtlasTarget = false
+        }
+        loadScreen(ScreenKey.Tiling)
+        Toast.makeText(requireContext(), target.name, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun clearAtlasTargetSelection(sp: SharedPreferences?) {
+        if (sp?.contains(Settings.KEY_ATLAS_TARGET) != true) return
+        sp.edit {
+            remove(Settings.KEY_ATLAS_TARGET)
+        }
+        if (currentScreen == ScreenKey.Tiling) {
+            findPreference<ListPreference>(Settings.KEY_ATLAS_TARGET)?.let { targetPref ->
+                targetPref.value = null
+                targetPref.summary = "Choose target"
+            }
+        }
+    }
+
     /**
      * The Material-preset row. Opens a 2-column grid of tile thumbnails
      * (see `tools/bake_preset_thumbnails.py` — transparent background,
@@ -385,11 +497,11 @@ class SettingsFragment : PreferenceFragmentCompat(),
             grid.adapter = PresetPickerAdapter(ctx, presets) { which ->
                 val prefs = preferenceManager.sharedPreferences
                     ?: return@PresetPickerAdapter
-                val editor = prefs.edit()
-                for ((key, value) in presets[which].values) {
-                    editor.putInt(key, value)
+                prefs.edit {
+                    for ((key, value) in presets[which].values) {
+                        putInt(key, value)
+                    }
                 }
-                editor.apply()
                 loadScreen(ScreenKey.Material)
                 Toast.makeText(ctx, presets[which].name, Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
@@ -503,7 +615,12 @@ class SettingsFragment : PreferenceFragmentCompat(),
             .show()
     }
 
-    private fun applySeedListForCurrentFamily() {
+    private fun applyFamilySpecificTilingControls(resetSeed: Boolean) {
+        applySeedListForCurrentFamily(resetSeed)
+        applyGenerationMaxForCurrentFamily()
+    }
+
+    private fun applySeedListForCurrentFamily(resetSeed: Boolean) {
         val seedPref = findPreference<ListPreference>(Settings.KEY_SEED) ?: return
         val familyPref = findPreference<ListPreference>(Settings.KEY_FAMILY) ?: return
         val family = familyPref.value?.toIntOrNull() ?: 0
@@ -518,15 +635,33 @@ class SettingsFragment : PreferenceFragmentCompat(),
             8 -> R.array.seed_tuebingen_entries to R.array.seed_tuebingen_values
             9 -> R.array.seed_p1_entries to R.array.seed_p1_values
             10 -> R.array.seed_danzer_entries to R.array.seed_danzer_values
+            11 -> R.array.seed_hat_entries to R.array.seed_hat_values
+            12 -> R.array.seed_spectre_entries to R.array.seed_spectre_values
             else -> R.array.seed_p3_entries to R.array.seed_p3_values
         }
         val entries = resources.getStringArray(entriesId)
         val values = resources.getStringArray(valuesId)
         seedPref.entries = entries
         seedPref.entryValues = values
-        val current = seedPref.value?.toIntOrNull() ?: 0
-        if (current >= values.size || seedPref.value == null) {
+        if (resetSeed || seedPref.value == null || !values.contains(seedPref.value)) {
             seedPref.value = values[0]
+        }
+    }
+
+    private fun applyGenerationMaxForCurrentFamily() {
+        val generationPref = findPreference<SeekBarPreference>(Settings.KEY_GENERATION) ?: return
+        val familyPref = findPreference<ListPreference>(Settings.KEY_FAMILY) ?: return
+        val family = familyPref.value?.toIntOrNull() ?: 0
+        val maxGen = when (family) {
+            2 -> 7       // Chair
+            4 -> 6       // Pinwheel
+            9, 10 -> 7   // P1, Danzer
+            11, 12 -> 5  // Hat, Spectre
+            else -> 8
+        }
+        generationPref.max = maxGen
+        if (generationPref.value > maxGen) {
+            generationPref.value = maxGen
         }
     }
 
@@ -535,5 +670,12 @@ class SettingsFragment : PreferenceFragmentCompat(),
         val pref = findPreference<Preference>("audio_file_uri") ?: return
         val name = AudioPlaybackService.currentDisplayName
         pref.summary = name ?: getString(R.string.audio_file_none)
+    }
+
+    private companion object {
+        val atlasSelectionKeys = setOf(
+            Settings.KEY_ATLAS_CATEGORY,
+            Settings.KEY_ATLAS_TARGET,
+        )
     }
 }

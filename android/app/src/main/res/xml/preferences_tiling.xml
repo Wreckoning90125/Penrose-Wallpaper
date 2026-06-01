@@ -9,6 +9,16 @@
 
     <PreferenceCategory android:title="Tiling">
         <ListPreference
+            android:key="atlas_category"
+            android:title="Category"
+            android:summary="%s"
+            android:defaultValue="" />
+        <ListPreference
+            android:key="atlas_target"
+            android:title="Target"
+            android:summary="%s"
+            android:defaultValue="" />
+        <ListPreference
             android:key="family"
             android:title="Family"
             android:summary="%s"
@@ -26,7 +36,7 @@
             android:key="generation"
             android:title="Generation"
             android:summary="More generations = more tiles"
-            android:min="0" android:max="8" android:defaultValue="6"
+            android:min="0" android:max="8" android:defaultValue="4"
             app:showSeekBarValue="true" />
         <ListPreference
             android:key="pan_mode"

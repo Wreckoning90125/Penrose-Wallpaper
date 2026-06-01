@@ -23,7 +23,7 @@ inline Oklch lerp(Oklch a, Oklch b, float t) {
 }
 
 // Build evenly spaced color stops between two OKLCH endpoints and pad to
-// kMaxColors with hue-wheel fallbacks so unused slots aren't undefined.
+// kMaxColors with generated hue-wheel colors so unused slots stay defined.
 void fillEvenStops(PresetResult& out, Oklch c0, Oklch c1, int k) {
     int n = std::clamp(k, 1, kMaxColors);
     if (n == 1) {
@@ -42,7 +42,7 @@ void fillEvenStops(PresetResult& out, Oklch c0, Oklch c1, int k) {
 } // namespace
 
 // =============================================================================
-// OKLCH → linear sRGB. Identical formulas to web/penrose.js (Björn Ottosson,
+// OKLCH to linear sRGB. Matches web/src/color/palette.ts (Björn Ottosson,
 // 2020). Returned components are unclipped; out-of-gamut OKLCH points may
 // produce values outside [0,1].
 // =============================================================================
@@ -107,7 +107,7 @@ ShaderColor oklchToShaderColor(Oklch c, float alpha, bool wideGamutP3, bool line
 }
 
 // =============================================================================
-// Palette presets — direct port of PRESETS[] from web/penrose.js
+// Palette presets mirror web/src/color/palette.ts.
 // =============================================================================
 
 PresetResult buildPreset(Preset p, int k, const Oklch* customSource) {
@@ -231,7 +231,7 @@ PresetResult buildPreset(Preset p, int k, const Oklch* customSource) {
 }
 
 // =============================================================================
-// Tile classification — direct port of classifyTriangles() in web/penrose.js
+// Tile classification mirrors classifyTriangles() in web/src/tiling/geometry.ts.
 // =============================================================================
 
 Classification classify(const std::vector<Tile>& tiles,

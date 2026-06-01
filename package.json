@@ -1,0 +1,46 @@
+{
+  "name": "penrose-wallpaper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "atlas:verify": "python3 tools/verify_atlas.py",
+    "cpp:tidy": "bash tools/run_clang_tidy.sh",
+    "js:policy": "python3 tools/check_plain_js.py",
+    "quality:web": "npm run js:policy && npm run ts:policy && npm run typecheck && npm run atlas:verify && npm run border:verify && npm run web:build && npm run graph:contract",
+    "quality:native": "npm run tilings:verify && npm run cpp:tidy",
+    "quality:android": "npm run shaders:validate",
+    "quality:local": "npm run quality:web && npm run quality:native && npm run quality:android",
+    "shaders:validate": "bash tools/validate_shaders.sh",
+    "border:verify": "node tools/verify_border_joins.mts",
+    "graph:contract": "node tools/check_graph_contract.mts",
+    "tilings:verify": "g++ -std=c++20 -O2 -Wall -Wextra -I android/app/src/main/cpp tools/verify_tilings.cpp android/app/src/main/cpp/tiling/penrose.cpp -o .cache/verify_tilings && .cache/verify_tilings",
+    "ts:policy": "node tools/check_typescript_policy.mts",
+    "typecheck": "tsc --noEmit",
+    "web:generate": "python3 tools/generate_web_geometry.py",
+    "preweb:dev": "npm run web:generate",
+    "preweb:dev:alt": "npm run web:generate",
+    "dev": "npm run web:dev",
+    "web:dev": "node scripts/dev/run-owned-vite.mts serve",
+    "web:dev:alt": "node scripts/dev/run-owned-vite.mts serve --port 5274",
+    "preweb:build": "npm run web:generate",
+    "web:build": "vite build",
+    "web:preview": "node scripts/dev/run-owned-vite.mts preview",
+    "web:preview:alt": "node scripts/dev/run-owned-vite.mts preview --port 4274"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.10.2",
+    "lucide-react": "^1.16.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "three": "0.184.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.184.1",
+    "typescript": "^6.0.3",
+    "vite": "8.0.14"
+  }
+}

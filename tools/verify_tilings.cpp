@@ -24,7 +24,7 @@
 // argument used to derive the Danzer substitution, applied as an automated
 // gate. Build and run (from the repository root):
 //
-//   g++ -std=c++17 -O2 -I android/app/src/main/cpp
+//   g++ -std=c++20 -O2 -I android/app/src/main/cpp
 //       tools/verify_tilings.cpp android/app/src/main/cpp/tiling/penrose.cpp
 //       -o /tmp/verify_tilings && /tmp/verify_tilings
 //
@@ -146,6 +146,8 @@ int main() {
         { Family::Heptagonal,    "Heptagonal",    3, false },
         { Family::Binary,        "Binary",        2, false },
         { Family::P1,            "P1",            1, false },
+        { Family::Hat,           "Hat",           4, false },
+        { Family::Spectre,       "Spectre",       9, false },
     };
 
     constexpr int kSamples = 20000;

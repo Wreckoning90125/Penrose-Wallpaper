@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-Adaptive launcher icon (API 26+). The OS composes <background> and
-<foreground> per its own mask shape. mipmap-anydpi-v26 means this
-single XML serves every density; the legacy mipmap-*dpi fallbacks
-aren't shipped because minSdk = 36.
+  Adaptive launcher icon. minSdk = 36, so this single mipmap-anydpi XML
+  serves every density without a redundant v26 resource qualifier.
 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background" />

@@ -5,6 +5,7 @@
 #include "log.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string_view>
 #include <vector>
@@ -28,7 +29,7 @@ FlowNode* selectedNode(Graph& graph) {
     // editing values into a node that's about to vanish.
     for (auto& [uid, node] : graph.handler().getNodes()) {
         if (!node || node->toDestroy()) continue;
-        if (node->isSelected()) return static_cast<FlowNode*>(node.get());
+        if (node->isSelected()) return static_cast<FlowNode*>(node.get()); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
     }
     return nullptr;
 }
@@ -238,7 +239,7 @@ void GraphUi::arrangeNodes(Graph& graph) {
         const ImVec2 sz = node->getSize();
         // getSize() is (0,0) until ImNodeFlow has drawn the node once.
         if (sz.x <= 1.0f || sz.y <= 1.0f) return;   // retry next frame
-        auto* fn = static_cast<FlowNode*>(node.get());
+        auto* fn = static_cast<FlowNode*>(node.get()); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
         nodeH = std::max(nodeH, sz.y);
         const std::string_view cat = descriptor(fn->kind()).category;
         if (cat == "Operator")    { ops.push_back(fn); opW  = std::max(opW,  sz.x); }
@@ -249,10 +250,13 @@ void GraphUi::arrangeNodes(Graph& graph) {
     if (src.empty() && ops.empty() && tgt.empty()) return;
 
     // Order within a zone: bands ascend by kind, targets follow the enum.
-    auto byKind = [](FlowNode* a, FlowNode* b) { return a->kind() < b->kind(); };
-    std::sort(src.begin(), src.end(), byKind);
-    std::sort(ops.begin(), ops.end(), byKind);
-    std::sort(tgt.begin(), tgt.end(), byKind);
+    auto byKind = [](FlowNode* a, FlowNode* b) {
+        if (a->kind() != b->kind()) return a->kind() < b->kind();
+        return a->getUID() < b->getUID();
+    };
+    std::sort(src.begin(), src.end(), byKind); // NOLINT(bugprone-nondeterministic-pointer-iteration-order)
+    std::sort(ops.begin(), ops.end(), byKind); // NOLINT(bugprone-nondeterministic-pointer-iteration-order)
+    std::sort(tgt.begin(), tgt.end(), byKind); // NOLINT(bugprone-nondeterministic-pointer-iteration-order)
 
     float gridW = 0.0f, gridH = 0.0f;
     canvasGridSize(graph, gridW, gridH);
@@ -266,15 +270,18 @@ void GraphUi::arrangeNodes(Graph& graph) {
     auto fill = [&](const std::vector<FlowNode*>& list, float x0, float colW) {
         const int n    = static_cast<int>(list.size());
         const int rows = std::min(fit, std::max(1, n));
-        for (int i = 0; i < n; ++i)
-            list[i]->setPos(ImVec2(x0 + (i / rows) * (colW + hGap),
-                                   m  + (i % rows) * rowH));
+        for (int i = 0; i < n; ++i) {
+            const int col = i / rows;
+            const int row = i % rows;
+            list[i]->setPos(ImVec2(x0 + static_cast<float>(col) * (colW + hGap),
+                                   m  + static_cast<float>(row) * rowH));
+        }
     };
     // Columns `list` needs at the current fit.
     auto colsFor = [&](const std::vector<FlowNode*>& list) {
         const int n    = static_cast<int>(list.size());
         const int rows = std::min(fit, std::max(1, n));
-        return (n + rows - 1) / rows;
+        return static_cast<int>(std::ceil(static_cast<float>(n) / static_cast<float>(rows)));
     };
 
     // Sources hug the left; Targets hug the right; Operators centre in

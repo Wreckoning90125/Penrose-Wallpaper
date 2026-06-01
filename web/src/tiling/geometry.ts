@@ -1,0 +1,775 @@
+import { BufferAttribute, BufferGeometry } from 'three/webgpu';
+import { intSetting, numberSetting, type Settings } from '../settings/androidSettings';
+import { buildPalette, MAX_PALETTE_PRESET, oklchToLinearSrgb, type Oklch } from '../color/palette';
+import type { AtlasItem, GeometryBuild, Patch, Point, Point3, Tile } from '../types';
+import { buildTileRing, type TileBorder } from './borderJoin';
+
+type FamilySpec = {
+  typeBuckets: number;
+  orientBuckets: number;
+  orientFromType: boolean;
+  angA: number;
+  angB: number;
+  orientHalfTurn: boolean;
+  ringChebyshev: boolean;
+};
+
+type PatchIdentity = {
+  family: number;
+  seed: number;
+  generation: number;
+};
+
+type TileClasses = {
+  bucket: Uint8Array;
+  numBuckets: number;
+};
+
+type Projector = {
+  enabled: boolean;
+  map: (x: number, y: number) => Point;
+};
+
+type MeshBuffers = {
+  position: Float32Array;
+  color: Float32Array;
+  paletteSlot: Float32Array;
+  tileType: Float32Array;
+  tileRing: Float32Array;
+  tileOrient: Float32Array;
+  tileCenter: Float32Array;
+};
+
+type Snapper = (point: Point) => Point;
+type EdgeKind = 'base' | 'leg' | 'edge';
+type EdgeSide = {
+  type: number;
+  kind: EdgeKind;
+};
+type EdgeEntry = {
+  a: Point;
+  b: Point;
+  first: EdgeSide;
+  second: EdgeSide | null;
+};
+type BorderLayoutTile = {
+  edges: TileBorder['edges'];
+  centroid: Point;
+  ring: number;
+  orient: Point;
+  center: Point;
+};
+
+const FAMILY: FamilySpec[] = [
+  { typeBuckets: 2, orientBuckets: 10, orientFromType: false, angA: 0, angB: 2, orientHalfTurn: false, ringChebyshev: false },
+  { typeBuckets: 2, orientBuckets: 10, orientFromType: false, angA: 0, angB: 2, orientHalfTurn: false, ringChebyshev: false },
+  { typeBuckets: 4, orientBuckets: 4, orientFromType: true, angA: 0, angB: 0, orientHalfTurn: false, ringChebyshev: true },
+  { typeBuckets: 3, orientBuckets: 6, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: true, ringChebyshev: false },
+  { typeBuckets: 2, orientBuckets: 10, orientFromType: false, angA: 0, angB: 2, orientHalfTurn: false, ringChebyshev: false },
+  { typeBuckets: 2, orientBuckets: 4, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: true, ringChebyshev: false },
+  { typeBuckets: 3, orientBuckets: 7, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: true, ringChebyshev: false },
+  { typeBuckets: 2, orientBuckets: 5, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: true, ringChebyshev: false },
+  { typeBuckets: 2, orientBuckets: 10, orientFromType: false, angA: 0, angB: 2, orientHalfTurn: false, ringChebyshev: false },
+  { typeBuckets: 4, orientBuckets: 10, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: false, ringChebyshev: false },
+  { typeBuckets: 4, orientBuckets: 14, orientFromType: false, angA: 0, angB: 2, orientHalfTurn: false, ringChebyshev: false },
+  { typeBuckets: 5, orientBuckets: 12, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: false, ringChebyshev: false },
+  { typeBuckets: 10, orientBuckets: 12, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: false, ringChebyshev: false },
+];
+const BORDER_RELIEF_LIFT = 0.018;
+const BORDER_SURFACE_BIAS = 0.00035;
+const BORDER_LAYOUT_CACHE = new WeakMap<Patch, Map<string, BorderLayoutTile[]>>();
+// Subdivision detail is useful on sparse patches and pathological on dense
+// live-generated patches. These caps keep allocations bounded without changing
+// normal atlas presets; dense patches still render, just with less per-tile
+// tessellation where the extra vertices would be visually redundant.
+const MAX_FILL_VERTEX_COUNT = 3_200_000;
+const MAX_BORDER_VERTEX_COUNT = 2_400_000;
+
+function patchVertexCount(tiles: readonly Tile[]): number {
+  let count = 0;
+  for (const tile of tiles) count += tile.verts.length;
+  return count;
+}
+
+function clampQuadraticSubdivision(requested: number, edgeFanCount: number, maxVertices: number): number {
+  if (edgeFanCount <= 0) return requested;
+  const maxSub = Math.max(1, Math.floor(Math.sqrt(maxVertices / (edgeFanCount * 3))));
+  return Math.max(1, Math.min(requested, maxSub));
+}
+
+function clampLinearSubdivision(
+  requested: number,
+  edgeFanCount: number,
+  maxVertices: number,
+  verticesPerSegment: number,
+): number {
+  if (edgeFanCount <= 0 || verticesPerSegment <= 0) return requested;
+  const maxSub = Math.max(1, Math.floor(maxVertices / (edgeFanCount * verticesPerSegment)));
+  return Math.max(1, Math.min(requested, maxSub));
+}
+
+class Float32Builder {
+  private data: Float32Array;
+  length: number;
+
+  constructor(capacity = 1024) {
+    this.data = new Float32Array(capacity);
+    this.length = 0;
+  }
+
+  private ensure(extra: number): void {
+    const required = this.length + extra;
+    if (required <= this.data.length) return;
+    let capacity = this.data.length;
+    while (capacity < required) capacity *= 2;
+    const next = new Float32Array(capacity);
+    next.set(this.data);
+    this.data = next;
+  }
+
+  push1(a: number): void {
+    this.ensure(1);
+    this.data[this.length] = a;
+    this.length += 1;
+  }
+
+  push2(a: number, b: number): void {
+    this.ensure(2);
+    this.data[this.length] = a;
+    this.data[this.length + 1] = b;
+    this.length += 2;
+  }
+
+  push3(a: number, b: number, c: number): void {
+    this.ensure(3);
+    this.data[this.length] = a;
+    this.data[this.length + 1] = b;
+    this.data[this.length + 2] = c;
+    this.length += 3;
+  }
+
+  view(): Float32Array {
+    return this.data.subarray(0, this.length);
+  }
+}
+
+export async function loadPatch(item: AtlasItem): Promise<Patch> {
+  if (!item.geometry) throw new Error(`atlas target has no geometry: ${item.id}`);
+  const response = await fetch(`/generated/atlas/${item.geometry}`, { cache: 'force-cache' });
+  if (!response.ok) throw new Error(`geometry HTTP ${response.status}: ${item.geometry}`);
+  return parsePatch(await response.arrayBuffer());
+}
+
+export async function loadPatchForSettings(settings: Settings, item: AtlasItem | null = null): Promise<Patch> {
+  const family = intSetting(settings, 'family', 0, 12);
+  const seed = intSetting(settings, 'seed', 0, 8);
+  const generation = intSetting(settings, 'generation', 0, 8);
+  const expected = { family, seed, generation };
+  if (
+    item?.geometry
+    && intSetting(item.settings ?? {}, 'family', -1, 12) === family
+    && intSetting(item.settings ?? {}, 'seed', -1, 8) === seed
+    && intSetting(item.settings ?? {}, 'generation', -1, 8) === generation
+  ) {
+    const patch = await loadPatch(item);
+    if (samePatchIdentity(patch, expected)) return patch;
+  }
+
+  const response = await fetch(`/generated/live/${family}/${seed}/${generation}.ptg`, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`geometry HTTP ${response.status}: family=${family} seed=${seed} generation=${generation}`);
+  const patch = parsePatch(await response.arrayBuffer());
+  if (!samePatchIdentity(patch, expected)) {
+    throw new Error(`geometry identity mismatch: expected ${family}/${seed}/${generation}, got ${patch.family}/${patch.seed}/${patch.generation}`);
+  }
+  return patch;
+}
+
+function samePatchIdentity(patch: Patch, expected: PatchIdentity): boolean {
+  return patch.family === expected.family && patch.seed === expected.seed && patch.generation === expected.generation;
+}
+
+function parsePatch(buffer: ArrayBuffer): Patch {
+  const view = new DataView(buffer);
+  const magic = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+  if (magic !== 'PTG1') throw new Error('bad tiling geometry magic');
+  let offset = 4;
+  const family = view.getUint32(offset, true); offset += 4;
+  const seed = view.getUint32(offset, true); offset += 4;
+  const generation = view.getUint32(offset, true); offset += 4;
+  const tileCount = view.getUint32(offset, true); offset += 4;
+  const tiles: Tile[] = new Array<Tile>(tileCount);
+  for (let i = 0; i < tileCount; i++) {
+    const vcount = view.getUint8(offset++);
+    const type = view.getUint8(offset++);
+    const verts: Point[] = new Array<Point>(vcount);
+    for (let j = 0; j < vcount; j++) {
+      verts[j] = [view.getFloat32(offset, true), view.getFloat32(offset + 4, true)];
+      offset += 8;
+    }
+    tiles[i] = { type, verts };
+  }
+  return { family, seed, generation, tiles };
+}
+
+export function buildMeshGeometry(patch: Patch, settings: Settings, customColors: Oklch[] | null = null): GeometryBuild {
+  const colorMode = intSetting(settings, 'color_mode', 0, 2);
+  const colorCount = intSetting(settings, 'color_count', 2, 16);
+  // color_spread decouples the palette's gradient resolution from the tile
+  // quantization: tiles always quantize into color_count buckets, but the colours
+  // applied to those buckets come from a gradient of `appliedStops` stops. 0 =
+  // "follow Slots" (appliedStops === colorCount), which is the historical look.
+  const colorSpread = intSetting(settings, 'color_spread', 0, 16);
+  const appliedStops = colorSpread > 0 ? colorSpread : colorCount;
+  const preset = intSetting(settings, 'preset', 0, MAX_PALETTE_PRESET);
+  const palette = buildPalette(preset, appliedStops, customColors);
+  const classes = classify(patch.tiles, patch.family, colorMode, colorCount);
+  const relief = averageTileRadius(patch.tiles) * 0.34;
+  const maxType = Math.max(1, familySpec(patch.family).typeBuckets - 1);
+  const rings = tileRings(patch.tiles, familySpec(patch.family));
+  const projector = createProjector(settings);
+  const snap = createVertexSnapper(projector.enabled ? 1e-5 : 1e-7);
+  // Subdivision applies in BOTH projections. It was originally gated to Poincaré
+  // (only the curved projection needed it), but the per-vertex surface displacement
+  // (undulate/relief/field) needs the extra vertices to bend smoothly in Euclidean
+  // too — gating it there left flat-mode undulation coarse no matter the setting.
+  const tileVertexCount = patchVertexCount(patch.tiles);
+  const fillSub = clampQuadraticSubdivision(
+    intSetting(settings, 'hyp_fill_subdiv', 1, 8),
+    tileVertexCount,
+    MAX_FILL_VERTEX_COUNT,
+  );
+
+  let triCount = 0;
+  for (const tile of patch.tiles) triCount += tile.verts.length * fillSub * fillSub;
+  const vertexCount = triCount * 3;
+  const position = new Float32Array(vertexCount * 3);
+  const color = new Float32Array(vertexCount * 3);
+  const paletteSlot = new Float32Array(vertexCount);
+  const tileType = new Float32Array(vertexCount);
+  const tileRing = new Float32Array(vertexCount);
+  const tileOrient = new Float32Array(vertexCount * 2);
+  const tileCenter = new Float32Array(vertexCount * 2);
+
+  let cursor = 0;
+  for (let tileIndex = 0; tileIndex < patch.tiles.length; tileIndex++) {
+    const tile = patch.tiles[tileIndex]!;
+    const center = centroid(tile.verts);
+    const projectedCenter = snap(projector.map(center[0], center[1]));
+    const orient = orientation(tile, patch.family);
+    const typeValue = tile.type / maxType;
+    const ringValue = rings[tileIndex] ?? 0;
+    const paletteIndex = bucketToPaletteIdx(classes.bucket[tileIndex] ?? 0, classes.numBuckets, colorCount);
+    const rgb = clampRgb(oklchToLinearSrgb(palette.colors[paletteIndex] ?? palette.colors[0]!));
+    const centerZ = relief * (0.65 + ringValue * 0.35 + typeValue * 0.18);
+    // Normalize this tile's fan winding to CCW. Tiles come in both orientations,
+    // so without this the mesh has mixed winding and faceDirection can't tell front
+    // from back. DoubleSide means reversing the order is visually a no-op.
+    const flip = signedArea(tile.verts) < 0;
+    for (let i = 0; i < tile.verts.length; i++) {
+      const a = tile.verts[i]!;
+      const b = tile.verts[(i + 1) % tile.verts.length]!;
+      cursor = emitTriangle(
+        cursor,
+        { position, color, paletteSlot, tileType, tileRing, tileOrient, tileCenter },
+        projector,
+        snap,
+        fillSub,
+        [center[0], center[1], centerZ],
+        [a[0], a[1], 0],
+        [b[0], b[1], 0],
+        rgb,
+        typeValue,
+        ringValue,
+        orient,
+        projectedCenter,
+        paletteIndex,
+        flip,
+      );
+    }
+  }
+
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new BufferAttribute(position, 3));
+  geometry.setAttribute('color', new BufferAttribute(color, 3));
+  geometry.setAttribute('paletteSlot', new BufferAttribute(paletteSlot, 1));
+  geometry.setAttribute('uv', new BufferAttribute(buildUv(position), 2));
+  geometry.setAttribute('tileType', new BufferAttribute(tileType, 1));
+  geometry.setAttribute('tileRing', new BufferAttribute(tileRing, 1));
+  geometry.setAttribute('tileOrient', new BufferAttribute(tileOrient, 2));
+  geometry.setAttribute('tileCenter', new BufferAttribute(tileCenter, 2));
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+  const edgeGeometry = buildEdgeGeometry(patch, settings, projector, snap, relief);
+  return { geometry, edgeGeometry, palette };
+}
+
+function buildUv(position: Float32Array): Float32Array {
+  const count = position.length / 3;
+  const uv = new Float32Array(count * 2);
+  for (let i = 0; i < count; i++) {
+    uv[i * 2] = position[i * 3] ?? 0;
+    uv[i * 2 + 1] = position[i * 3 + 1] ?? 0;
+  }
+  return uv;
+}
+
+function familySpec(family: number): FamilySpec {
+  return FAMILY[family] ?? FAMILY[0]!;
+}
+
+function clampRgb(rgb: Point3): Point3 {
+  return [
+    Math.max(0, Math.min(1, rgb[0])),
+    Math.max(0, Math.min(1, rgb[1])),
+    Math.max(0, Math.min(1, rgb[2])),
+  ];
+}
+
+// Signed area of a polygon (shoelace). Positive = CCW vertex order.
+function signedArea(verts: Point[]): number {
+  let area = 0;
+  for (let i = 0; i < verts.length; i++) {
+    const a = verts[i]!;
+    const b = verts[(i + 1) % verts.length]!;
+    area += a[0] * b[1] - b[0] * a[1];
+  }
+  return area * 0.5;
+}
+
+function emitTriangle(
+  cursor: number,
+  buffers: MeshBuffers,
+  projector: Projector,
+  snap: Snapper,
+  fillSub: number,
+  a: Point3,
+  b: Point3,
+  c: Point3,
+  rgb: Point3,
+  typeValue: number,
+  ringValue: number,
+  orient: Point,
+  center: Point,
+  paletteIndex: number,
+  // When true, every emitted triangle's winding is reversed (2nd/3rd vertex
+  // swapped) WITHOUT changing any per-vertex data (position, edge distance). This
+  // normalizes CW tiles to CCW so the whole mesh has consistent winding — required
+  // for faceDirection to reliably tell front from back (the DoubleSide normal flip).
+  flip: boolean,
+): number {
+  const emitTri = (p0: Point3, p1: Point3, p2: Point3): void => {
+    if (flip) {
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p0, rgb, typeValue, ringValue, orient, center, paletteIndex);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p2, rgb, typeValue, ringValue, orient, center, paletteIndex);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p1, rgb, typeValue, ringValue, orient, center, paletteIndex);
+    } else {
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p0, rgb, typeValue, ringValue, orient, center, paletteIndex);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p1, rgb, typeValue, ringValue, orient, center, paletteIndex);
+      cursor = emitProjectedVertex(cursor, buffers, projector, snap, p2, rgb, typeValue, ringValue, orient, center, paletteIndex);
+    }
+  };
+  if (fillSub <= 1) {
+    emitTri(a, b, c);
+    return cursor;
+  }
+  const invN = 1 / fillSub;
+  const point = (i: number, j: number): Point3 => {
+    const k = fillSub - i - j;
+    const fa = i * invN;
+    const fb = j * invN;
+    const fc = k * invN;
+    return [
+      fa * a[0] + fb * b[0] + fc * c[0],
+      fa * a[1] + fb * b[1] + fc * c[1],
+      fa * a[2] + fb * b[2] + fc * c[2],
+    ];
+  };
+  for (let i = 0; i < fillSub; i++) {
+    for (let j = 0; j < fillSub - i; j++) {
+      emitTri(point(i, j), point(i + 1, j), point(i, j + 1));
+      if (j < fillSub - i - 1) {
+        emitTri(point(i + 1, j), point(i + 1, j + 1), point(i, j + 1));
+      }
+    }
+  }
+  return cursor;
+}
+
+function emitProjectedVertex(
+  cursor: number,
+  buffers: MeshBuffers,
+  projector: Projector,
+  snap: Snapper,
+  vertex: Point3,
+  rgb: Point3,
+  typeValue: number,
+  ringValue: number,
+  orient: Point,
+  center: Point,
+  paletteIndex: number,
+): number {
+  const [x, y] = snap(projector.map(vertex[0], vertex[1]));
+  return emitVertex(
+    cursor,
+    buffers.position,
+    buffers.color,
+    buffers.paletteSlot,
+    buffers.tileType,
+    buffers.tileRing,
+    buffers.tileOrient,
+    buffers.tileCenter,
+    x,
+    y,
+    vertex[2],
+    rgb,
+    typeValue,
+    ringValue,
+    orient,
+    center,
+    paletteIndex,
+  );
+}
+
+function emitVertex(
+  cursor: number,
+  position: Float32Array,
+  color: Float32Array,
+  paletteSlot: Float32Array,
+  tileType: Float32Array,
+  tileRing: Float32Array,
+  tileOrient: Float32Array,
+  tileCenter: Float32Array,
+  x: number,
+  y: number,
+  z: number,
+  rgb: Point3,
+  typeValue: number,
+  ringValue: number,
+  orient: Point,
+  center: Point,
+  paletteIndex: number,
+): number {
+  const p = cursor * 3;
+  position[p] = x;
+  position[p + 1] = y;
+  position[p + 2] = z;
+  color[p] = rgb[0];
+  color[p + 1] = rgb[1];
+  color[p + 2] = rgb[2];
+  paletteSlot[cursor] = paletteIndex;
+  tileType[cursor] = typeValue;
+  tileRing[cursor] = ringValue;
+  const o = cursor * 2;
+  tileOrient[o] = orient[0];
+  tileOrient[o + 1] = orient[1];
+  tileCenter[o] = center[0];
+  tileCenter[o + 1] = center[1];
+  return cursor + 1;
+}
+
+function buildEdgeGeometry(
+  patch: Patch,
+  settings: Settings,
+  projector: Projector,
+  snap: Snapper,
+  relief: number,
+): BufferGeometry | null {
+  const borderOn = String(settings.border_on) !== 'false';
+  const radius = averageTileRadius(patch.tiles);
+  const width = radius * intSetting(settings, 'border_width', 0, 600) / 600 * 0.16;
+  if (!borderOn || width <= 1e-7) return null;
+
+  // border_join: 0 miter · 1 round · 2 bevel. border_fill (0..1) pulls each corner
+  // from the sharp miter toward the centroid so border segments meet more fully.
+  const joinStyle = intSetting(settings, 'border_join', 0, 2);
+  const borderFill = intSetting(settings, 'border_fill', 0, 100) / 100;
+  const borderPoint = intSetting(settings, 'border_point', 0, 100) / 100;
+  // border_gap (0..1) pulls deeply-inset sharp corner tips back toward their vertex,
+  // closing the inter-tile star hole without collapsing the band.
+  const borderGap = intSetting(settings, 'border_gap', 0, 100) / 100;
+  const sub = clampLinearSubdivision(
+    intSetting(settings, 'hyp_border_subdiv', 1, 32),
+    patchVertexCount(patch.tiles),
+    MAX_BORDER_VERTEX_COUNT,
+    6,
+  );
+  const halfWidth = width * 0.5;
+  const edgeZ = relief * BORDER_RELIEF_LIFT + radius * BORDER_SURFACE_BIAS;
+  const positions = new Float32Builder();
+  const tileRing = new Float32Builder();
+  const tileOrient = new Float32Builder();
+  const tileCenter = new Float32Builder();
+
+  const pushBorderVertex = (p: Point, ring: number, orient: Point, center: Point): void => {
+    positions.push3(p[0], p[1], edgeZ);
+    tileRing.push1(ring);
+    tileOrient.push2(orient[0], orient[1]);
+    tileCenter.push2(center[0], center[1]);
+  };
+
+  const pushTri = (p0: Point, p1: Point, p2: Point, ring: number, orient: Point, center: Point): void => {
+    pushBorderVertex(p0, ring, orient, center);
+    pushBorderVertex(p1, ring, orient, center);
+    pushBorderVertex(p2, ring, orient, center);
+  };
+
+  // Per-tile inset ring: each tile strokes its own border inside itself, so borders
+  // can't overlap (disjoint tiles) or gap (tiles share edges exactly), and each
+  // vertex join is just the tile's own convex corner. (borderJoin.ts owns the
+  // geometry + its headless single-coverage proof, tools/verify_border_joins.mts.)
+  for (const border of borderLayout(patch, settings, projector, snap, sub)) {
+    buildTileRing(border, halfWidth, joinStyle, borderFill, borderPoint, borderGap, pushTri);
+  }
+
+  if (positions.length === 0) return null;
+  const geometry = new BufferGeometry();
+  const position = positions.view();
+  geometry.setAttribute('position', new BufferAttribute(position, 3));
+  geometry.setAttribute('uv', new BufferAttribute(buildUv(position), 2));
+  geometry.setAttribute('tileRing', new BufferAttribute(tileRing.view(), 1));
+  geometry.setAttribute('tileOrient', new BufferAttribute(tileOrient.view(), 2));
+  geometry.setAttribute('tileCenter', new BufferAttribute(tileCenter.view(), 2));
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+export function buildEdgeGeometryForPatch(patch: Patch, settings: Settings): BufferGeometry | null {
+  const projector = createProjector(settings);
+  const snap = createVertexSnapper(projector.enabled ? 1e-5 : 1e-7);
+  return buildEdgeGeometry(patch, settings, projector, snap, averageTileRadius(patch.tiles) * 0.34);
+}
+
+function borderLayoutKey(settings: Settings, sub: number): string {
+  const projection = intSetting(settings, 'projection', 0, 1);
+  const scale = projection === 1 ? intSetting(settings, 'hyp_scale', 0, 100) : 0;
+  return `${projection}:${scale}:${sub}`;
+}
+
+function borderLayout(
+  patch: Patch,
+  settings: Settings,
+  projector: Projector,
+  snap: Snapper,
+  sub: number,
+): BorderLayoutTile[] {
+  const key = borderLayoutKey(settings, sub);
+  let byKey = BORDER_LAYOUT_CACHE.get(patch);
+  if (!byKey) {
+    byKey = new Map();
+    BORDER_LAYOUT_CACHE.set(patch, byKey);
+  }
+  const cached = byKey.get(key);
+  if (cached) return cached;
+
+  // Which tile edges carry a visible border (shared same-type edges are hidden).
+  const visibleKeys = collectVisibleEdgeKeys(patch);
+  const spec = familySpec(patch.family);
+  const rings = tileRings(patch.tiles, spec);
+  const layout: BorderLayoutTile[] = [];
+  for (let tileIndex = 0; tileIndex < patch.tiles.length; tileIndex++) {
+    const tile = patch.tiles[tileIndex]!;
+    const cen = centroid(tile.verts);
+    const projCentroid = snap(projector.map(cen[0], cen[1]));
+    const tileEdges: TileBorder['edges'] = [];
+    for (let i = 0; i < tile.verts.length; i++) {
+      const a = tile.verts[i]!;
+      const b = tile.verts[(i + 1) % tile.verts.length]!;
+      const pts: Point[] = [];
+      for (let k = 0; k <= sub; k++) {
+        const p = lerp2(a, b, k / sub);
+        pts.push(snap(projector.map(p[0], p[1])));
+      }
+      tileEdges.push({ pts, visible: visibleKeys.has(edgeKey(a, b)) });
+    }
+    layout.push({
+      edges: tileEdges,
+      centroid: projCentroid,
+      ring: rings[tileIndex] ?? 0,
+      orient: orientation(tile, patch.family),
+      center: projCentroid,
+    });
+  }
+  byKey.set(key, layout);
+  return layout;
+}
+
+function collectVisibleEdgeKeys(patch: Patch): Set<string> {
+  const map = new Map<string, EdgeEntry>();
+  for (let tileIndex = 0; tileIndex < patch.tiles.length; tileIndex++) {
+    const tile = patch.tiles[tileIndex]!;
+    for (let i = 0; i < tile.verts.length; i++) {
+      const j = (i + 1) % tile.verts.length;
+      const a = tile.verts[i]!;
+      const b = tile.verts[j]!;
+      const key = edgeKey(a, b);
+      const entry = map.get(key);
+      const kind = edgeKind(patch.family, tile, i);
+      const side = { type: tile.type, kind };
+      if (entry) {
+        entry.second = side;
+      } else {
+        map.set(key, { a, b, first: side, second: null });
+      }
+    }
+  }
+  const keys = new Set<string>();
+  for (const edge of map.values()) {
+    if (edge.second && edge.first.type === edge.second.type && hiddenEdge(patch.family, edge.first.kind, edge.second.kind)) {
+      continue;
+    }
+    keys.add(edgeKey(edge.a, edge.b));
+  }
+  return keys;
+}
+
+function edgeKind(family: number, tile: Tile, edgeIndex: number): EdgeKind {
+  if ((family !== 0 && family !== 1) || tile.verts.length !== 3) return 'edge';
+  return edgeIndex === 2 ? 'base' : 'leg';
+}
+
+function hiddenEdge(family: number, first: EdgeKind, second: EdgeKind): boolean {
+  if (family === 0) return first === 'base' && second === 'base';
+  if (family === 1) return first === 'leg' && second === 'leg';
+  return false;
+}
+
+function edgeKey(a: Point, b: Point): string {
+  const ka = pointKey(a);
+  const kb = pointKey(b);
+  return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+}
+
+function pointKey([x, y]: Point): string {
+  return `${Math.round(x * 1e5)},${Math.round(y * 1e5)}`;
+}
+
+function lerp2(a: Point, b: Point, t: number): Point {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+}
+
+function createVertexSnapper(epsilon: number): Snapper {
+  const seen = new Map<string, Point>();
+  return ([x, y]) => {
+    const key = `${Math.round(x / epsilon)},${Math.round(y / epsilon)}`;
+    const existing = seen.get(key);
+    if (existing) return existing;
+    const snapped: Point = [x, y];
+    seen.set(key, snapped);
+    return snapped;
+  };
+}
+
+function createProjector(settings: Settings): Projector {
+  if (intSetting(settings, 'projection', 0, 1) !== 1) {
+    return { enabled: false, map: (x: number, y: number) => [x, y] };
+  }
+  const scale = 0.05 + numberSetting(settings, 'hyp_scale', 0, 100) / 100 * 2.95;
+  return {
+    enabled: true,
+    map: (x: number, y: number) => projectHyp(x, y, 0, 0, scale),
+  };
+}
+
+function projectHyp(x: number, y: number, bx: number, by: number, scale: number): Point {
+  const r = Math.hypot(x, y);
+  const d = Math.tanh(r * scale * 0.5);
+  const zx = r > 1e-6 ? x / r * d : 0;
+  const zy = r > 1e-6 ? y / r * d : 0;
+  const bb = bx * bx + by * by;
+  const zz = zx * zx + zy * zy;
+  const zb = zx * bx + zy * by;
+  let denom = bb * zz + 2 * zb + 1;
+  if (Math.abs(denom) < 1e-6) denom = 1e-6;
+  return [
+    ((1 - bb) * zx + (zz + 2 * zb + 1) * bx) / denom,
+    ((1 - bb) * zy + (zz + 2 * zb + 1) * by) / denom,
+  ];
+}
+
+function classify(tiles: Tile[], family: number, mode: number, colorCount: number): TileClasses {
+  const spec = familySpec(family);
+  const bucket = new Uint8Array(tiles.length);
+  if (mode === 0) {
+    const n = Math.max(1, spec.typeBuckets);
+    for (let i = 0; i < tiles.length; i++) bucket[i] = tiles[i]!.type % n;
+    return { bucket, numBuckets: n };
+  }
+  if (mode === 1) {
+    const n = Math.max(1, spec.orientBuckets);
+    if (spec.orientFromType) {
+      for (let i = 0; i < tiles.length; i++) bucket[i] = tiles[i]!.type % n;
+      return { bucket, numBuckets: n };
+    }
+    const span = spec.orientHalfTurn ? Math.PI : Math.PI * 2;
+    const denom = span / n;
+    for (let i = 0; i < tiles.length; i++) {
+      const tile = tiles[i]!;
+      const a = tile.verts[Math.min(spec.angA, tile.verts.length - 1)]!;
+      const b = tile.verts[Math.min(spec.angB, tile.verts.length - 1)]!;
+      let angle = Math.atan2(b[1] - a[1], b[0] - a[0]);
+      if (angle < 0) angle += Math.PI * 2;
+      if (spec.orientHalfTurn && angle >= Math.PI) angle -= Math.PI;
+      bucket[i] = ((Math.floor((angle + denom * 0.5) / denom) % n) + n) % n;
+    }
+    return { bucket, numBuckets: n };
+  }
+  const rings = tileRings(tiles, spec);
+  const n = Math.max(1, colorCount);
+  for (let i = 0; i < tiles.length; i++) bucket[i] = Math.max(0, Math.min(n - 1, Math.floor((rings[i] ?? 0) * n)));
+  return { bucket, numBuckets: n };
+}
+
+function bucketToPaletteIdx(bucket: number, numBuckets: number, colorCount: number): number {
+  if (colorCount <= 1) return 0;
+  if (numBuckets > colorCount) return Math.min(colorCount - 1, Math.floor(bucket / (numBuckets / colorCount)));
+  return bucket % colorCount;
+}
+
+function tileRings(tiles: Tile[], spec: FamilySpec): number[] {
+  const c = tiles.map(tile => centroid(tile.verts));
+  let maxX = 0;
+  let maxY = 0;
+  let maxR = 0;
+  for (const [x, y] of c) {
+    maxX = Math.max(maxX, Math.abs(x));
+    maxY = Math.max(maxY, Math.abs(y));
+    maxR = Math.max(maxR, Math.hypot(x, y));
+  }
+  return c.map(([x, y]) => {
+    if (spec.ringChebyshev) {
+      return Math.max(maxX > 0 ? Math.abs(x) / maxX : 0, maxY > 0 ? Math.abs(y) / maxY : 0);
+    }
+    return maxR > 0 ? Math.hypot(x, y) / maxR : 0;
+  });
+}
+
+function averageTileRadius(tiles: Tile[]): number {
+  let sum = 0;
+  let count = 0;
+  for (const tile of tiles) {
+    const [cx, cy] = centroid(tile.verts);
+    for (const [x, y] of tile.verts) {
+      sum += Math.hypot(x - cx, y - cy);
+      count += 1;
+    }
+  }
+  return count > 0 ? sum / count : 1;
+}
+
+function centroid(verts: Point[]): Point {
+  let x = 0;
+  let y = 0;
+  for (const v of verts) {
+    x += v[0];
+    y += v[1];
+  }
+  return [x / verts.length, y / verts.length];
+}
+
+function orientation(tile: Tile, family: number): Point {
+  const spec = familySpec(family);
+  const a = tile.verts[Math.min(spec.angA, tile.verts.length - 1)]!;
+  const b = tile.verts[Math.min(spec.angB, tile.verts.length - 1)]!;
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+  return [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+}

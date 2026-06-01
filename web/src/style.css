@@ -1,0 +1,1306 @@
+:root {
+  color-scheme: dark;
+  --bg: #07080a;
+  --ink: #f6f1e8;
+  --muted: #a69f92;
+  --line: color-mix(in oklch, var(--ink) 18%, transparent);
+  --panel: color-mix(in oklch, var(--bg) 88%, black);
+  --node: color-mix(in oklch, #141515 88%, #2a2011);
+  --node-strong: color-mix(in oklch, #1d1d1b 78%, #433211);
+  --accent: oklch(0.78 0.13 80);
+  --accent-2: oklch(0.72 0.11 210);
+  --danger: oklch(0.72 0.16 28);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button,
+select,
+input {
+  font: inherit;
+}
+
+button,
+select,
+.file-button {
+  min-height: 34px;
+  min-width: 0;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--ink) 7%, transparent);
+}
+
+button,
+.file-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+}
+
+select {
+  width: 100%;
+  padding: 0 10px;
+  appearance: none;
+}
+
+select option {
+  color: #f6f1e8;
+  background: #101114;
+}
+
+#viewport {
+  position: fixed;
+  inset: 0;
+}
+
+#viewport canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+#controls {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  width: min(var(--drawer-width), calc(100vw - 32px));
+  padding: 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  transition: transform 180ms ease, width 120ms ease;
+  pointer-events: none;
+}
+
+#controls > * {
+  pointer-events: auto;
+}
+
+#controls > header {
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--panel) 78%, transparent);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 16px 32px rgb(0 0 0 / 0.16);
+}
+
+#controls.collapsed {
+  transform: translateX(calc(100% + 12px));
+}
+
+#controls.resizing {
+  transition: transform 180ms ease;
+}
+
+#controls.resizing > header,
+#controls.resizing .control-flow-shell,
+#controls.resizing .flow-panel,
+#controls.resizing .react-flow__minimap,
+#controls.resizing .flow-controls.react-flow__controls,
+#controls.resizing .drawer-toggle,
+#controls.resizing .drawer-resize {
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+#controls.resizing::before {
+  content: "";
+  position: fixed;
+  top: 16px;
+  bottom: 16px;
+  left: var(--resize-guide-left);
+  z-index: 30;
+  width: 1px;
+  background: color-mix(in oklch, var(--accent) 72%, white);
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--bg) 82%, transparent);
+  pointer-events: none;
+}
+
+.drawer-toggle,
+.drawer-resize {
+  position: absolute;
+  z-index: 10;
+  width: 30px;
+  min-height: 42px;
+  padding: 0;
+  border-color: color-mix(in oklch, var(--ink) 14%, transparent);
+  background: color-mix(in oklch, var(--panel) 72%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.drawer-toggle {
+  top: 0;
+  left: -30px;
+}
+
+.drawer-resize {
+  top: 50%;
+  left: -16px;
+  cursor: ew-resize;
+  transform: translateY(-50%);
+}
+
+.drawer-resize:disabled {
+  opacity: 0;
+  pointer-events: none;
+}
+
+header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+.eyebrow,
+.section-title,
+label > span,
+.status,
+.node-subtitle,
+.audio-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+h1 {
+  max-width: 520px;
+  margin: 4px 0 0;
+  font-size: 18px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.status {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.status span:first-child {
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.control-flow-shell {
+  container-type: inline-size;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--ink) 9%, transparent);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 30% 15%, color-mix(in oklch, var(--accent) 10%, transparent), transparent 34%),
+    color-mix(in oklch, var(--bg) 70%, transparent);
+  backdrop-filter: blur(10px);
+  contain: paint;
+}
+
+.graph-frame {
+  position: relative;
+  display: grid;
+  height: 100%;
+  min-height: 0;
+}
+
+.loading-flow {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.react-flow {
+  width: 100%;
+  height: 100%;
+  --xy-edge-stroke-default: color-mix(in oklch, var(--accent) 62%, transparent);
+  --xy-edge-stroke-width-default: 1.5;
+  --xy-node-boxshadow-hover-default: 0 0 0 1px color-mix(in oklch, var(--accent) 30%, transparent);
+  --xy-controls-button-background-color-default: color-mix(in oklch, var(--bg) 86%, black);
+  --xy-controls-button-color-default: var(--ink);
+  --xy-controls-button-border-color-default: var(--line);
+  color: var(--ink);
+}
+
+.react-flow__viewport {
+  transition: opacity 120ms ease;
+}
+
+.react-flow__background {
+  opacity: 0.32;
+  transition: opacity 140ms ease;
+}
+
+.snap-grid-on .react-flow__background {
+  opacity: 1;
+}
+
+.react-flow__node {
+  background: transparent;
+  border: 0;
+  touch-action: none;
+  /* Let the card stretch to the grid-snapped minHeight set during layout so
+     row gaps stay even (even-gap regulation). */
+  display: flex;
+}
+
+.react-flow__handle {
+  width: 10px;
+  height: 10px;
+  border: 1px solid color-mix(in oklch, white 30%, transparent);
+  background: var(--accent);
+}
+
+.flow-node {
+  --node-accent: var(--accent);
+  --node-accent-2: var(--accent);
+  --node-content-pad: 8px;
+  --node-frame-pad: 12px;
+  --node-port-width: 96px;
+  --node-port-handle-offset: 8px;
+  position: relative;
+  inline-size: clamp(18rem, 44cqw, 23rem);
+  max-inline-size: min(26rem, calc(100vw - 5rem));
+  overflow: visible;
+  padding: 0 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, color-mix(in oklch, var(--node-accent) 16%, transparent), transparent 44%),
+    linear-gradient(180deg, color-mix(in oklch, var(--node-strong) 72%, transparent), var(--node)),
+    var(--node);
+  border-color: color-mix(in oklch, var(--node-accent) 46%, var(--line));
+  box-shadow: 0 16px 30px rgb(0 0 0 / 0.24);
+}
+
+.wide-node {
+  inline-size: clamp(23rem, 62cqw, 30rem);
+}
+
+.node-kind-source {
+  --node-accent: oklch(0.72 0.13 86);
+  --node-accent-2: oklch(0.56 0.12 132);
+  background:
+    linear-gradient(135deg, color-mix(in oklch, var(--node-accent) 20%, transparent), color-mix(in oklch, var(--node-accent-2) 12%, transparent) 46%, transparent 78%),
+    linear-gradient(180deg, color-mix(in oklch, var(--node-strong) 72%, transparent), var(--node)),
+    var(--node);
+}
+
+.node-kind-color {
+  --node-accent: oklch(0.64 0.16 30);
+  --node-accent-2: oklch(0.54 0.15 300);
+}
+
+.node-kind-geometry {
+  --node-accent: oklch(0.62 0.13 205);
+  --node-accent-2: oklch(0.52 0.12 248);
+}
+
+.node-kind-surface {
+  --node-accent: oklch(0.64 0.12 52);
+  --node-accent-2: oklch(0.52 0.12 26);
+  background:
+    linear-gradient(135deg, color-mix(in oklch, var(--node-accent) 18%, transparent), color-mix(in oklch, var(--node-accent-2) 14%, transparent) 52%, transparent 82%),
+    linear-gradient(180deg, color-mix(in oklch, var(--node-strong) 72%, transparent), var(--node)),
+    var(--node);
+}
+
+.node-kind-signal {
+  --node-accent: oklch(0.60 0.13 155);
+  --node-accent-2: oklch(0.52 0.13 215);
+  background:
+    linear-gradient(135deg, color-mix(in oklch, var(--node-accent) 18%, transparent), color-mix(in oklch, var(--node-accent-2) 14%, transparent) 52%, transparent 82%),
+    linear-gradient(180deg, color-mix(in oklch, var(--node-strong) 72%, transparent), var(--node)),
+    var(--node);
+}
+
+.node-kind-output {
+  --node-accent: oklch(0.58 0.15 285);
+  --node-accent-2: oklch(0.52 0.12 230);
+}
+
+.node-kind-operator {
+  --node-accent: oklch(0.59 0.13 275);
+  --node-accent-2: oklch(0.55 0.12 226);
+}
+
+.node-kind-target {
+  --node-accent: oklch(0.63 0.16 12);
+  --node-accent-2: oklch(0.62 0.14 338);
+}
+
+.node-variant-1 {
+  --node-accent-2: color-mix(in oklch, var(--node-accent) 50%, oklch(0.70 0.14 145));
+}
+
+.node-variant-2 {
+  --node-accent-2: color-mix(in oklch, var(--node-accent) 46%, oklch(0.68 0.15 28));
+}
+
+.flow-node-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 -12px 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid color-mix(in oklch, white 18%, transparent);
+  color: white;
+  cursor: grab;
+  background: color-mix(in oklch, var(--node-accent) 72%, black);
+}
+
+/* The node-type icon, seated top-left of the title immediately before the label
+   so the icon -> node-type association is reinforced in the graph itself. */
+.flow-node-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  opacity: 0.92;
+}
+
+/* Tooltips use the native `title` attribute (set on the toolbar icons, node-header
+   icons, add-effect buttons and slider rows). A styled CSS ::after tooltip was tried
+   but rendered unreliably (composited under the WebGPU canvas / React Flow layers in
+   real use), so it was dropped for the browser-native tooltip, which always shows. */
+
+.node-port-rail {
+  position: absolute;
+  z-index: 8;
+  top: 42px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 68px;
+  pointer-events: none;
+}
+
+.node-inlet-rail {
+  left: calc(-1 * (var(--node-port-width) + var(--node-port-handle-offset)));
+  align-items: flex-end;
+}
+
+.node-outlet-rail {
+  right: calc(-1 * (var(--node-port-width) + var(--node-port-handle-offset)));
+  align-items: flex-start;
+}
+
+.node-port {
+  position: relative;
+  width: var(--node-port-width);
+  min-height: 24px;
+  max-width: var(--node-port-width);
+  pointer-events: none;
+}
+
+.node-port-label {
+  display: grid;
+  width: 100%;
+  min-height: 24px;
+  max-width: var(--node-port-width);
+  align-items: center;
+  padding: 3px 12px;
+  border: 1px solid color-mix(in oklch, var(--node-accent) 36%, transparent);
+  border-radius: 999px;
+  color: color-mix(in oklch, var(--ink) 70%, transparent);
+  background: color-mix(in oklch, var(--panel) 58%, transparent);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 760;
+  line-height: 1.05;
+  text-transform: uppercase;
+  cursor: default;
+  opacity: 0.78;
+  pointer-events: none;
+}
+
+.node-port-label:disabled {
+  opacity: 1;
+}
+
+.node-inlet-rail .node-port-label {
+  justify-items: end;
+  padding-right: 12px;
+  text-align: right;
+}
+
+.node-outlet-rail .node-port-label {
+  justify-items: start;
+  padding-left: 12px;
+  text-align: left;
+}
+
+.node-port-label span {
+  overflow: hidden;
+  max-width: 72px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.node-port.active .node-port-label {
+  color: white;
+  border-color: color-mix(in oklch, var(--node-accent) 70%, white);
+  background: color-mix(in oklch, var(--node-accent) 48%, transparent);
+  cursor: default;
+  opacity: 0.86;
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--node-accent) 46%, transparent);
+}
+
+.ports-collapsed .node-port-label {
+  width: 0;
+  min-height: 14px;
+  padding: 0;
+  border: 0;
+  color: transparent;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ports-collapsed .node-port-rail {
+  gap: 3px;
+  min-width: 18px;
+}
+
+.ports-collapsed .node-inlet-rail {
+  left: calc(-1 * var(--node-port-handle-offset));
+}
+
+.ports-collapsed .node-outlet-rail {
+  right: calc(-1 * var(--node-port-handle-offset));
+}
+
+.ports-collapsed .node-port {
+  width: 0;
+  min-height: 14px;
+  max-width: 0;
+}
+
+.rail-handle {
+  z-index: 2;
+  width: 11px;
+  height: 11px;
+  border: 1px solid color-mix(in oklch, white 42%, transparent);
+  background: color-mix(in oklch, var(--node-accent) 82%, white);
+  pointer-events: auto;
+}
+
+.node-inlet-handle {
+  right: auto;
+  left: calc(-1 * var(--node-port-handle-offset));
+  transform: translate(-50%, -50%);
+}
+
+.node-outlet-handle {
+  right: calc(-1 * var(--node-port-handle-offset));
+  left: auto;
+  transform: translate(50%, -50%);
+}
+
+.react-flow__node.dragging .flow-node-title {
+  cursor: grabbing;
+}
+
+.flow-node-title strong {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 760;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 1px rgb(0 0 0 / 0.42);
+}
+
+.port-label-toggle {
+  width: 25px;
+  min-width: 0;
+  min-height: 22px;
+  padding: 0;
+  color: white;
+  border-color: color-mix(in oklch, white 22%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--node-accent) 50%, black);
+  font-size: 10px;
+  font-weight: 780;
+  letter-spacing: 0;
+}
+
+.port-label-toggle:hover,
+.port-label-toggle:focus-visible {
+  background: color-mix(in oklch, var(--node-accent) 72%, black);
+}
+
+.node-delete {
+  position: absolute;
+  z-index: 12;
+  top: 6px;
+  right: 7px;
+  min-width: 0;
+  width: 24px;
+  min-height: 24px;
+  padding: 0;
+  color: white;
+  border-color: color-mix(in oklch, white 22%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklch, oklch(0.42 0.14 25) 78%, black);
+}
+
+.node-delete:hover,
+.node-delete:focus-visible {
+  background: color-mix(in oklch, oklch(0.56 0.18 25) 86%, black);
+}
+
+.node-subtitle,
+.audio-status {
+  margin-bottom: 10px;
+  line-height: 1.35;
+  letter-spacing: 0.06em;
+}
+
+/* Advisory caution marker on an FX node whose linear domain is placed after the
+   tone-map (display-referred) node. Non-blocking; explains itself on hover. */
+.fx-domain-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 var(--node-content-pad) 8px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  color: oklch(0.9 0.13 85);
+  background: color-mix(in oklch, oklch(0.62 0.16 75) 22%, transparent);
+  border: 1px solid color-mix(in oklch, oklch(0.7 0.16 75) 45%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: help;
+}
+
+.fx-domain-warning svg {
+  flex: 0 0 auto;
+}
+
+.control-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding-inline: var(--node-content-pad);
+}
+
+.control-grid.two-col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 10px;
+  row-gap: 8px;
+}
+
+/* Slider grids directly after a button group (e.g. the Border node's join buttons
+   above the Width/Light row) need the same gap other slider/label combos get. */
+.segmented + .control-grid {
+  margin-top: 10px;
+}
+
+.control-grid.two-col > * {
+  min-width: 0;
+}
+
+.control-grid.two-col > label {
+  padding-inline: 0;
+}
+
+label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.range-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 1fr) minmax(4.6rem, 5.6rem);
+  grid-template-areas:
+    "label value"
+    "slider slider";
+  align-items: center;
+  gap: 4px 10px;
+  padding-inline: 0;
+}
+
+.control-grid.two-col .range-row {
+  grid-template-columns: minmax(0, 1fr) minmax(3.35rem, 4.25rem);
+  gap: 4px 7px;
+  padding-inline: 0;
+}
+
+.range-row span {
+  grid-area: label;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
+  line-height: 1.2;
+}
+
+.control-grid.two-col .range-row span {
+  white-space: nowrap;
+}
+
+.control-grid.two-col select {
+  min-width: 0;
+}
+
+.control-grid.two-col .number-field {
+  padding-inline: 5px;
+  font-size: 11px;
+}
+
+.number-field {
+  grid-area: value;
+  justify-self: end;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in oklch, var(--ink) 15%, transparent);
+  border-radius: 5px;
+  color: var(--ink);
+  background: color-mix(in oklch, var(--ink) 7%, transparent);
+  font-size: 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.number-field:focus {
+  outline: 2px solid color-mix(in oklch, var(--accent) 62%, transparent);
+  outline-offset: 1px;
+}
+
+input[type="range"] {
+  grid-area: slider;
+  min-width: 0;
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.port-meter-row {
+  position: relative;
+  margin-right: calc(-1 * var(--node-frame-pad));
+  padding-right: calc(var(--node-frame-pad) + 16px);
+}
+
+.meter-outlet-handle {
+  right: 0;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  border: 1px solid color-mix(in oklch, white 42%, transparent);
+  transform: translate(50%, -50%);
+  background: color-mix(in oklch, var(--node-accent) 82%, white);
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+  padding-inline: var(--node-content-pad);
+}
+
+.segmented.two {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.segmented button.active {
+  color: #171109;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+  padding-inline: var(--node-content-pad);
+}
+
+.swatch {
+  aspect-ratio: 1;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid color-mix(in oklch, white 24%, transparent);
+  border-radius: 5px;
+}
+
+.swatch.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.color-editor {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-inline: var(--node-content-pad);
+}
+
+#colorWheel {
+  width: min(210px, 100%);
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: #111;
+  cursor: crosshair;
+}
+
+.gamut {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.button-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+  padding-inline: var(--node-content-pad);
+}
+
+.button-row button.active {
+  color: #171109;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.flow-panel button.active {
+  color: #171109;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.drag-mode-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid color-mix(in oklch, var(--ink) 12%, transparent);
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--ink) 5%, transparent);
+}
+
+.flow-panel .drag-mode-toggle button {
+  min-height: 24px;
+  padding-inline: 8px;
+}
+
+.projection-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 10px 0 0;
+}
+
+.projection-mode-row {
+  margin-bottom: 14px;
+}
+
+.projection-control-grid {
+  margin-top: 0;
+}
+
+.audio-controls-row {
+  display: grid;
+  grid-template-columns: repeat(6, 30px) minmax(96px, 1fr);
+  justify-content: start;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding-inline: var(--node-content-pad);
+}
+
+.audio-controls-row button:disabled,
+.seek-row input:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.audio-controls-row .audio-icon-button,
+.audio-controls-row .file-button {
+  display: inline-flex;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+}
+
+.audio-controls-row .audio-icon-button svg,
+.audio-controls-row .file-button svg {
+  flex: 0 0 auto;
+  stroke-width: 2;
+}
+
+.audio-volume-control {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 96px;
+  height: 30px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.audio-volume-control svg {
+  stroke-width: 2;
+}
+
+.audio-volume-control > input.audio-volume {
+  grid-area: auto;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 14px;
+  margin: 0;
+  appearance: none;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.audio-volume::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.audio-volume::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -3.5px;
+  appearance: none;
+  border: 1px solid color-mix(in oklch, white 42%, transparent);
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 1px 5px rgb(0 0 0 / 0.32);
+}
+
+.audio-volume::-moz-range-track {
+  height: 5px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.audio-volume::-moz-range-progress {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.audio-volume::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 1px solid color-mix(in oklch, white 42%, transparent);
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 1px 5px rgb(0 0 0 / 0.32);
+}
+
+.seek-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  grid-template-areas: "elapsed scrubber duration";
+  align-items: center;
+  width: 100%;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding-inline: var(--node-content-pad);
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.seek-row span:first-child {
+  grid-area: elapsed;
+  justify-self: start;
+}
+
+.seek-row span:last-child {
+  grid-area: duration;
+  justify-self: end;
+  text-align: right;
+}
+
+.seek-row > input.audio-scrubber {
+  grid-area: scrubber;
+  align-self: center;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 14px;
+  margin: 0;
+  appearance: none;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.audio-scrubber:disabled {
+  cursor: not-allowed;
+  filter: saturate(0.5);
+  opacity: 0.52;
+}
+
+.audio-scrubber::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.audio-scrubber::-webkit-slider-thumb {
+  width: 13px;
+  height: 13px;
+  margin-top: -4px;
+  appearance: none;
+  border: 1px solid color-mix(in oklch, white 46%, transparent);
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 1px 5px rgb(0 0 0 / 0.36);
+}
+
+.audio-scrubber::-moz-range-track {
+  height: 5px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.audio-scrubber::-moz-range-progress {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.audio-scrubber::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: 1px solid color-mix(in oklch, white 46%, transparent);
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 1px 5px rgb(0 0 0 / 0.36);
+}
+
+.audio-status.is-idle {
+  color: color-mix(in oklch, var(--muted) 72%, transparent);
+}
+
+.file-button {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.file-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  pointer-events: none;
+}
+
+.meter-row {
+  display: grid;
+  grid-template-columns: minmax(5.5ch, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.meter-track {
+  height: 7px;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--ink) 14%, transparent);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.05);
+}
+
+.meter-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+}
+
+.render-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.render-readout span {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.render-readout em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.flow-panel {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: min(42rem, calc(100vw - 2rem));
+  padding: 6px;
+  border: 1px solid color-mix(in oklch, var(--ink) 10%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--bg) 58%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.flow-panel button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.flow-panel button:disabled,
+.flow-panel button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.flow-panel button.link-delete-ready {
+  color: white;
+  border-color: color-mix(in oklch, oklch(0.62 0.18 28) 74%, white);
+  background: color-mix(in oklch, oklch(0.50 0.17 28) 84%, black);
+  box-shadow: 0 0 0 1px color-mix(in oklch, oklch(0.62 0.18 28) 34%, transparent);
+}
+
+.flow-panel button.link-delete-ready:hover,
+.flow-panel button.link-delete-ready:focus-visible {
+  background: color-mix(in oklch, oklch(0.58 0.19 28) 90%, black);
+}
+
+.graph-preset-input {
+  display: none;
+}
+
+.operator-port-list {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.add-node-menu {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  max-width: min(34rem, calc(100vw - 4rem));
+}
+
+.add-node-menu button {
+  min-height: 30px;
+  padding: 0 9px;
+  white-space: nowrap;
+}
+
+.add-node-menu .back-button {
+  color: var(--muted);
+}
+
+.multiswitch {
+  display: flex;
+  gap: 2px;
+  margin: 4px 0;
+}
+
+.multiswitch button {
+  flex: 1;
+  font-size: 10px;
+  padding: 3px 2px;
+  opacity: 0.7;
+  border-radius: 3px;
+}
+
+.multiswitch button.active {
+  opacity: 1;
+  background: color-mix(in oklch, var(--accent, #c7682e) 28%, transparent);
+}
+
+.add-node-menu .add-effect-button {
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.react-flow__minimap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--bg) 54%, transparent);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.24);
+  opacity: 0.72;
+  backdrop-filter: blur(8px);
+}
+
+.flow-controls.react-flow__controls {
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--ink) 10%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--bg) 48%, transparent);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.18);
+  opacity: 0.78;
+  backdrop-filter: blur(8px);
+}
+
+.flow-controls .react-flow__controls-button {
+  background: color-mix(in oklch, var(--bg) 44%, transparent);
+}
+
+.flow-controls .react-flow__controls-zoomin {
+  order: 1;
+}
+
+.flow-controls .react-flow__controls-zoomout {
+  order: 2;
+}
+
+.flow-controls .flow-controls-fit {
+  order: 3;
+}
+
+.flow-controls .react-flow__controls-interactive {
+  order: 4;
+}
+
+.fatal {
+  margin: 24px;
+  color: var(--danger);
+  white-space: pre-wrap;
+}
+
+@media (max-width: 760px) {
+  #controls {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 74vh;
+    border-right: 0;
+    border-left: 0;
+    border-bottom: 0;
+    border-radius: 8px 8px 0 0;
+  }
+
+  #controls.collapsed {
+    transform: translateY(calc(100% - 44px));
+  }
+
+  .drawer-toggle {
+    top: -38px;
+    right: 16px;
+    left: auto;
+    transform: none;
+  }
+
+  .drawer-resize {
+    display: none;
+  }
+
+  h1 {
+    max-width: 72vw;
+    font-size: 16px;
+  }
+
+  .control-flow-shell {
+    min-height: 0;
+  }
+
+  .control-grid.two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container (max-width: 620px) {
+  .control-grid.two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-node,
+  .wide-node {
+    inline-size: clamp(18rem, 86cqw, 24rem);
+  }
+}
+
+.fx-bypass {
+  margin-top: 6px;
+  width: 100%;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.fx-bypass.active {
+  opacity: 1;
+  color: var(--accent, #c7682e);
+}

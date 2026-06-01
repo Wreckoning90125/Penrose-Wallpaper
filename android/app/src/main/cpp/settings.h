@@ -40,7 +40,7 @@ enum class Projection : int {
 struct Settings {
     Family family       = Family::P3;
     int    seedIdx      = 0;
-    int    generation   = 6;
+    int    generation   = 4;
 
     Preset preset       = Preset::Gold;
     int    colorCount   = 2;
@@ -95,8 +95,8 @@ struct Settings {
     float  hypScale         = 1.5f;
     float  hypBoostX        = 0.0f;
     float  hypBoostY        = 0.0f;
-    int    hypBorderSubdiv  = 1;
-    int    hypFillSubdiv    = 1;
+    int    hypBorderSubdiv  = 16;
+    int    hypFillSubdiv    = 4;
 
     // Tile look: master brightness multiplier and per-tile depth/parallax
     // gradient amplitude. Depth follows the tile's geometric apex — fat

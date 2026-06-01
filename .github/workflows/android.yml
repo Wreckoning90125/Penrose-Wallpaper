@@ -1,10 +1,7 @@
 name: Android build
 
-# Third-party actions are pinned by full commit SHA, not tag. Tags can be
-# moved silently (whoever holds the tag-write bit can re-point them at any
-# commit, including a malicious one), so pinning by SHA is the only way to
-# get reproducible, audit-able builds. Each SHA below is annotated with the
-# release tag it corresponds to so we can review upgrades intentionally.
+# Third-party actions are pinned by full commit SHA. Each SHA is annotated
+# with the release tag it corresponds to so upgrades stay explicit.
 
 on:
   push:
@@ -12,17 +9,19 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    name: assembleDebug
-    runs-on: ubuntu-latest
+    name: assembleRelease
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     # Lint emits SARIF; upload-sarif needs `security-events: write` to push
     # it to the repo's code-scanning database. Without this the upload step
-    # logs "Resource not accessible by integration" before its
-    # `continue-on-error: true` masks the failure — visible as red text in
-    # the run output. `contents: read` keeps actions/checkout working under
+    # logs "Resource not accessible by integration". `contents: read` keeps
+    # actions/checkout working under
     # the explicit grant (declaring `permissions:` at all drops the default
     # read-all that GITHUB_TOKEN normally carries).
     permissions:
@@ -81,15 +80,21 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Upload Lint SARIF to GitHub code scanning
+      - name: Upload Lint SARIF artifact
         if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: lint-sarif-${{ github.sha }}
+          path: android/app/build/reports/lint-results-release.sarif
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Lint SARIF to GitHub code scanning
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4.35.5
         with:
           sarif_file: android/app/build/reports/lint-results-release.sarif
           category: android-lint
-        # SARIF upload needs `Security events: write` repo permission;
-        # warn-only so PRs from forks still succeed.
-        continue-on-error: true
 
       - name: Build release APK
         # Signed with the committed debug keystore (app/debug.keystore). Not
@@ -122,15 +127,11 @@ jobs:
       - name: Verify release APK
         run: bash ../scripts/verify-apk.sh "$(ls app/build/outputs/apk/release/*.apk | head -1)"
 
-  # Parallel job: UBSan-instrumented debug APK. Cheap (a few percent
-  # overhead) and catches signed-overflow, null-deref, shift-out-of-range
-  # and function-pointer-cast mismatches the moment they happen on a
-  # device. Independent of the release job so a sanitizer trip here
-  # doesn't block APK delivery — install this APK on the test device
-  # to reproduce crashes under instrumented libclang_rt.
+  # UBSan catches signed-overflow, null-deref, shift-out-of-range, and
+  # function-pointer-cast mismatches in the native renderer.
   sanitized-debug:
     name: assembleDebug (UBSan)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     defaults:
@@ -187,7 +188,7 @@ jobs:
   # same closure argument used to derive the rules in the first place.
   tiling-verify:
     name: verify tilings
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
@@ -196,7 +197,7 @@ jobs:
 
       - name: Compile the tiling core and the verifier
         run: |
-          g++ -std=c++17 -O2 -Wall -Wextra -I android/app/src/main/cpp \
+          g++ -std=c++20 -O2 -Wall -Wextra -I android/app/src/main/cpp \
             tools/verify_tilings.cpp \
             android/app/src/main/cpp/tiling/penrose.cpp \
             -o verify_tilings
@@ -212,7 +213,7 @@ jobs:
   # the NDK build's glslc step twenty minutes later.
   shader-validate:
     name: validate shaders
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
@@ -237,12 +238,122 @@ jobs:
           done
           exit $status
 
-  # On pull requests: fail the PR if it introduces a dependency with a known
-  # vulnerability or a disallowed licence. Reads the GitHub dependency graph
-  # kept current by the dependency-submission job below.
+  native-static-analysis:
+    name: clang-tidy native renderer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    defaults:
+      run:
+        working-directory: android
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+
+      - name: Install clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+        working-directory: ${{ github.workspace }}
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@f2beeb24e141e01a676f977032f5a29d81c9e27e  # v5.1.0
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699  # v4.0.1
+        with:
+          packages: ""
+
+      - name: Install required SDK packages
+        run: |
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "platform-tools" \
+            "cmake;3.22.1" \
+            "ndk;29.0.14206865"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c  # v5.0.2
+        with:
+          gradle-version: "9.4.1"
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Run clang-tidy through CMake
+        run: |
+          set -o pipefail
+          mkdir -p ../build
+          gradle --no-daemon --stacktrace -PpenroseTidy=true assembleDebug 2>&1 | tee ../build/clang-tidy.log
+
+      - name: Upload clang-tidy log
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: clang-tidy-log-${{ github.sha }}
+          path: build/clang-tidy.log
+          if-no-files-found: error
+          retention-days: 14
+
+  static-analysis-ratchet:
+    name: static analysis ratchet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs: [build, native-static-analysis]
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+
+      - name: Download Android Lint SARIF
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: lint-sarif-${{ github.sha }}
+          path: build/static-analysis
+
+      - name: Download clang-tidy log
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: clang-tidy-log-${{ github.sha }}
+          path: build/static-analysis
+
+      - name: Enforce total static-analysis budget
+        run: |
+          python3 tools/static_analysis_ratchet.py \
+            --sarif build/static-analysis/lint-results-release.sarif \
+            --clang-tidy-log build/static-analysis/clang-tidy.log
+
+  web:
+    name: repo quality gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+
+      - name: Set up Node 24
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f  # v6.1.0
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Install native quality tools
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy glslang-tools spirv-tools
+
+      - name: Run local quality gate
+        run: npm run quality:local
+
+  # On pull requests: fail the PR if it introduces a critical dependency issue.
   dependency-review:
     name: dependency review
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request'
     timeout-minutes: 5
     permissions:
@@ -256,18 +367,14 @@ jobs:
       - name: Dependency review
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
         with:
+          fail-on-severity: critical
           comment-summary-in-pr: on-failure
 
-  # On main only: submit the resolved Gradle dependency graph to GitHub so
-  # Dependabot alerts and the dependency-review job above see an accurate
-  # picture. Gradle's graph is dynamic, so it must be submitted — GitHub does
-  # not parse it from the build files. Needs the full Android SDK + NDK
-  # because AGP configuration (which dependency resolution triggers) locates
-  # the NDK through build.gradle.kts's resolveNdkPath(). main-only, so it
-  # never gates a PR.
+  # Submit the resolved Gradle dependency graph on main so Dependabot and
+  # Dependency Review see AGP's actual dependency model.
   dependency-submission:
     name: submit dependency graph
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 20
     permissions:
@@ -306,3 +413,7 @@ jobs:
         with:
           gradle-version: "9.4.1"
           build-root-directory: android
+          # Report what ships in the APK. The default "resolve all" graph
+          # includes Gradle/plugin classpaths, which created Dependabot alerts
+          # for Netty/BouncyCastle/JDOM used by build tooling, not by Penrose.
+          dependency-graph-include-configurations: "releaseRuntimeClasspath"

@@ -1,6 +1,7 @@
 package com.penrose.wallpaper
 
 import android.content.SharedPreferences
+import androidx.core.content.edit
 
 /**
  * Strongly-typed projection of our SharedPreferences, encoded into the
@@ -112,6 +113,8 @@ internal class Settings(
         const val KEY_FAMILY        = "family"
         const val KEY_SEED          = "seed"
         const val KEY_GENERATION    = "generation"
+        const val KEY_ATLAS_CATEGORY = "atlas_category"
+        const val KEY_ATLAS_TARGET   = "atlas_target"
         const val KEY_PRESET        = "preset"
         const val KEY_COLOR_COUNT   = "color_count"
         const val KEY_COLOR_MODE    = "color_mode"
@@ -249,7 +252,7 @@ internal class Settings(
             return Settings(
                 family       = safeStr(prefs, KEY_FAMILY, "0").toIntOrNull() ?: 0,
                 seedIdx      = safeStr(prefs, KEY_SEED, "0").toIntOrNull() ?: 0,
-                generation   = safeInt(prefs, KEY_GENERATION, 6),
+                generation   = safeInt(prefs, KEY_GENERATION, 4),
                 preset       = safeStr(prefs, KEY_PRESET, "4").toIntOrNull() ?: 4,
                 colorCount   = safeInt(prefs, KEY_COLOR_COUNT, 2),
                 colorMode    = safeStr(prefs, KEY_COLOR_MODE, "0").toIntOrNull() ?: 0,
@@ -307,8 +310,8 @@ internal class Settings(
                 hypScale      = 0.05f + safeInt(prefs, KEY_HYP_SCALE, 50) / 100f * 2.95f,
                 hypBoostX       = (safeInt(prefs, KEY_HYP_BOOST_X, 50) - 50) / 50f * 0.9f,
                 hypBoostY       = (safeInt(prefs, KEY_HYP_BOOST_Y, 50) - 50) / 50f * 0.9f,
-                hypBorderSubdiv = safeInt(prefs, KEY_HYP_BORDER_SUBDIV, 1).coerceIn(1, 32),
-                hypFillSubdiv   = safeInt(prefs, KEY_HYP_FILL_SUBDIV, 1).coerceIn(1, 8),
+                hypBorderSubdiv = safeInt(prefs, KEY_HYP_BORDER_SUBDIV, 16).coerceIn(1, 32),
+                hypFillSubdiv   = safeInt(prefs, KEY_HYP_FILL_SUBDIV, 4).coerceIn(1, 8),
                 customOklch  = custom,
             )
         }
@@ -317,12 +320,12 @@ internal class Settings(
             prefs: SharedPreferences,
             zoom: Float, rotation: Float, panX: Float, panY: Float,
         ) {
-            prefs.edit()
-                .putFloat(KEY_ZOOM, zoom)
-                .putFloat(KEY_ROTATION, rotation)
-                .putFloat(KEY_PAN_X, panX)
-                .putFloat(KEY_PAN_Y, panY)
-                .apply()
+            prefs.edit {
+                putFloat(KEY_ZOOM, zoom)
+                putFloat(KEY_ROTATION, rotation)
+                putFloat(KEY_PAN_X, panX)
+                putFloat(KEY_PAN_Y, panY)
+            }
         }
     }
 }

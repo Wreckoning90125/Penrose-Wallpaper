@@ -31,7 +31,7 @@ namespace {
 
 // Preferred swapchain (format, colorSpace) tuples, in order of preference.
 // The renderer picks the first match the surface advertises. Wide-gamut P3
-// wins; sRGB hardware-encoded fallback when only sRGB shows up; bare UNORM
+// wins; sRGB hardware-encoded path when only sRGB shows up; bare UNORM
 // last because we'd have to encode in software.
 struct SwapchainPref {
     VkFormat        format;
@@ -621,6 +621,7 @@ void Renderer::destroyPerFrameResources() {
     }
     if (commandPool_ != VK_NULL_HANDLE && !frames_.empty()) {
         std::vector<VkCommandBuffer> bufs;
+        bufs.reserve(frames_.size());
         for (auto& f : frames_) bufs.push_back(f.cmd);
         vkFreeCommandBuffers(device_, commandPool_, (uint32_t)bufs.size(), bufs.data());
     }

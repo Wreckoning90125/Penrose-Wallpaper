@@ -539,7 +539,8 @@ void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
         // them; handler_.update() sweeps them afterwards. Evaluating one
         // would feed a stale target for the frame between the two.
         if (!node || node->toDestroy()) continue;
-        auto* fn = static_cast<FlowNode*>(node.get()); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+        auto* fn = dynamic_cast<FlowNode*>(node.get());
+        if (!fn) continue;
         const int ti = static_cast<int>(fn->kind()) - firstTarget;
         if (ti < 0 || ti >= kTargetCount) continue;  // not a Target
         // Skip Targets whose input pin has no upstream link. An
@@ -548,7 +549,9 @@ void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
         // Target nodes, and zeroing brightness would render black.
         const auto& ins = node->getIns();
         if (ins.empty() || !ins[0] || !ins[0]->isConnected()) continue;
-        add[ti]  += static_cast<TargetNode*>(fn)->pull(); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+        auto* target = dynamic_cast<TargetNode*>(fn);
+        if (!target) continue;
+        add[ti]  += target->pull();
         seen[ti]  = true;
     }
 
@@ -600,7 +603,8 @@ std::string Graph::toJson() {
         // A node deleted this frame is marked toDestroy() but not yet
         // swept from the map — saving it would resurrect it on reload.
         if (!base || base->toDestroy()) continue;
-        const auto* n = static_cast<const FlowNode*>(base.get());
+        const auto* n = dynamic_cast<const FlowNode*>(base.get());
+        if (!n) continue;
         if (!first) s << ",";
         first = false;
         const ImVec2& pos = base->getPos();
@@ -708,7 +712,8 @@ bool Graph::fromJson(const std::string& text) {
                 if (!newU) continue;
                 auto it = handler_.getNodes().find(newU);
                 if (it != handler_.getNodes().end()) {
-                    auto* fn = static_cast<FlowNode*>(it->second.get());
+                    auto* fn = dynamic_cast<FlowNode*>(it->second.get());
+                    if (!fn) continue;
                     fn->p0 = static_cast<float>(p0);
                     fn->p1 = static_cast<float>(p1);
                     fn->p2 = static_cast<float>(p2);

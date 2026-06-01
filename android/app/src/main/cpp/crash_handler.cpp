@@ -36,7 +36,7 @@ namespace {
 
 constexpr const char* kTag        = "PenroseCrash";
 constexpr int         kMaxFrames  = 64;
-constexpr size_t      kAltStackSz = 64zu * 1024zu;
+constexpr size_t      kAltStackSz = static_cast<size_t>(64) * 1024;
 
 // Single-shot install guard.
 std::atomic<bool> installed_{false};

@@ -539,7 +539,7 @@ void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
         // them; handler_.update() sweeps them afterwards. Evaluating one
         // would feed a stale target for the frame between the two.
         if (!node || node->toDestroy()) continue;
-        auto* fn = static_cast<FlowNode*>(node.get());
+        auto* fn = static_cast<FlowNode*>(node.get()); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
         const int ti = static_cast<int>(fn->kind()) - firstTarget;
         if (ti < 0 || ti >= kTargetCount) continue;  // not a Target
         // Skip Targets whose input pin has no upstream link. An
@@ -548,7 +548,7 @@ void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
         // Target nodes, and zeroing brightness would render black.
         const auto& ins = node->getIns();
         if (ins.empty() || !ins[0] || !ins[0]->isConnected()) continue;
-        add[ti]  += static_cast<TargetNode*>(fn)->pull();
+        add[ti]  += static_cast<TargetNode*>(fn)->pull(); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
         seen[ti]  = true;
     }
 

@@ -11,6 +11,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE = ROOT / "ci" / "static_analysis_baseline.json"
+IGNORED_SARIF_RULE_IDS = {
+    # Version freshness is tracked by Dependabot/dependency review. Keep these
+    # visible in Lint's SARIF/HTML artifacts, but out of the defect ratchet.
+    "GradleDependency",
+    "NewerVersionAvailable",
+}
 
 
 def count_sarif(path: Path) -> tuple[int, int]:
@@ -27,6 +33,8 @@ def count_sarif(path: Path) -> tuple[int, int]:
         for result in run.get("results", []):
             level = result.get("level", "warning")
             rule_id = result.get("ruleId", "")
+            if rule_id in IGNORED_SARIF_RULE_IDS:
+                continue
             tags = rules.get(rule_id, {}).get("properties", {}).get("tags", [])
             if level == "error" or "security" in tags:
                 critical += 1

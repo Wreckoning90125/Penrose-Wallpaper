@@ -51,7 +51,7 @@ jobs:
         run: |
           sdkmanager --install \
             "platforms;android-37" \
-            "build-tools;37.0.0" \
+            "build-tools;36.0.0" \
             "platform-tools" \
             "cmake;3.22.1" \
             "ndk;29.0.14206865"
@@ -157,7 +157,7 @@ jobs:
         run: |
           sdkmanager --install \
             "platforms;android-37" \
-            "build-tools;37.0.0" \
+            "build-tools;36.0.0" \
             "platform-tools" \
             "cmake;3.22.1" \
             "ndk;29.0.14206865"
@@ -270,7 +270,7 @@ jobs:
         run: |
           sdkmanager --install \
             "platforms;android-37" \
-            "build-tools;37.0.0" \
+            "build-tools;36.0.0" \
             "platform-tools" \
             "cmake;3.22.1" \
             "ndk;29.0.14206865"
@@ -403,7 +403,7 @@ jobs:
         run: |
           sdkmanager --install \
             "platforms;android-37" \
-            "build-tools;37.0.0" \
+            "build-tools;36.0.0" \
             "platform-tools" \
             "cmake;3.22.1" \
             "ndk;29.0.14206865"

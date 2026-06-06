@@ -1239,20 +1239,28 @@ std::vector<Tile> generateCromwellKRT(int seedIdx, int generations) {
     const std::vector<Tile> base = buildCromwellKRTFromRobinson(baseDepth);
     const std::vector<Tile> full = buildCromwellKRTFromRobinson(depth);
 
-    Pt baseMin{std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
-    Pt baseMax{-std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
+    Pt baseMin{0.0, 0.0};
+    Pt baseMax{0.0, 0.0};
+    bool foundBasePoint = false;
     for (const Tile& tile : base) {
         for (int i = 0; i < tile.vcount; ++i) {
-            baseMin.x = std::min(baseMin.x, static_cast<double>(tile.x[i]));
-            baseMin.y = std::min(baseMin.y, static_cast<double>(tile.y[i]));
-            baseMax.x = std::max(baseMax.x, static_cast<double>(tile.x[i]));
-            baseMax.y = std::max(baseMax.y, static_cast<double>(tile.y[i]));
+            const Pt p{static_cast<double>(tile.x[i]), static_cast<double>(tile.y[i])};
+            if (!foundBasePoint) {
+                baseMin = p;
+                baseMax = p;
+                foundBasePoint = true;
+            } else {
+                baseMin.x = std::min(baseMin.x, p.x);
+                baseMin.y = std::min(baseMin.y, p.y);
+                baseMax.x = std::max(baseMax.x, p.x);
+                baseMax.y = std::max(baseMax.y, p.y);
+            }
         }
     }
     const Pt baseCenter{0.5 * (baseMin.x + baseMax.x), 0.5 * (baseMin.y + baseMax.y)};
     Tile window{};
     bool foundWindow = false;
-    double bestDist2 = std::numeric_limits<double>::infinity();
+    double bestDist2 = 0.0;
     for (const Tile& tile : base) {
         if (tile.type == seed) {
             const Pt c = cromwellTileCenter(tile);

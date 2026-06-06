@@ -6,6 +6,7 @@ import type { AtlasCategory, LiveBoostStore, WebAudioGraph } from '../types';
 import type { Settings, SettingKey, SettingValue } from '../settings/androidSettings';
 import type { Oklch, Palette } from '../color/palette';
 import type { GainKey } from './graphPreset';
+import type { OperatorSignalStore } from './operatorSignals';
 import type { OperatorSpec } from './operatorSpecs';
 
 export type AtlasNodeData = {
@@ -48,7 +49,8 @@ export type PaletteNodeData = {
   onSetting: (key: SettingKey, value: SettingValue) => void;
   onPreviewSetting: (key: SettingKey, value: SettingValue) => void;
   onSelectedColor: (index: number) => void;
-  onCustomColor: (updater: (color: Oklch) => Oklch) => void;
+  onPreviewCustomColor: (updater: (color: Oklch) => Oklch) => void;
+  onCommitCustomColor: () => void;
 } & EditCallbacks;
 
 export type SettingsNodeData = {
@@ -91,6 +93,7 @@ export type OperatorNodeData = {
   onBeginEdit: (paramKey: string) => void;
   onEndEdit: (paramKey: string) => void;
   onOperatorPreview?: (id: string, values: Record<string, number>, selectValues: Record<string, string>) => void;
+  operatorSignals: OperatorSignalStore;
   spec: OperatorSpec;
   selectValues: Record<string, string>;
   values: Record<string, number>;

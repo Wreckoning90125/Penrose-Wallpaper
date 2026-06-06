@@ -9,6 +9,13 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
+int typeBucketCount(const std::vector<Tile>& tiles, Family family, const ClassSpec& cs) {
+    if (family != Family::GailiunasSpiral) return cs.typeBuckets > 0 ? cs.typeBuckets : 1;
+    uint8_t maxType = 0;
+    for (const Tile& tile : tiles) maxType = std::max(maxType, tile.type);
+    return static_cast<int>(maxType) + 1;
+}
+
 inline float srgbEncode(float v) {
     if (v <= 0.0f) return 0.0f;
     if (v >= 1.0f) return 1.0f;
@@ -245,8 +252,10 @@ Classification classify(const std::vector<Tile>& tiles,
     const int k = std::clamp(colorCount, 1, kMaxColors);
 
     if (mode == ColorMode::Type) {
-        // One bucket per distinct tile kind, as the family declares.
-        const int tb = cs.typeBuckets > 0 ? cs.typeBuckets : 1;
+        // One bucket per distinct tile kind. Gailiunas spirals carry the arm
+        // index in `type`, so setting Slots to the seed's arm count maps arm i
+        // to palette slot i like the source notebook's "color count = arms".
+        const int tb = typeBucketCount(tiles, family, cs);
         c.numBuckets = tb;
         for (size_t i = 0; i < n; ++i)
             c.bucket[i] = static_cast<uint8_t>(tiles[i].type % tb);
@@ -284,11 +293,9 @@ Classification classify(const std::vector<Tile>& tiles,
         float maxX = 0.0f, maxY = 0.0f, maxR = 0.0f;
         for (size_t i = 0; i < n; ++i) {
             const Tile& t = tiles[i];
-            float sx = 0.0f, sy = 0.0f;
-            const int vc = t.vcount;
-            for (int j = 0; j < vc; ++j) { sx += t.x[j]; sy += t.y[j]; }
-            const float cx = sx / vc;
-            const float cy = sy / vc;
+            const TilePoint center = tileAreaCentroid(t);
+            const float cx = static_cast<float>(center.x);
+            const float cy = static_cast<float>(center.y);
             cxs[i] = cx; cys[i] = cy;
             const float ax = std::abs(cx), ay = std::abs(cy);
             if (ax > maxX) maxX = ax;

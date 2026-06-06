@@ -8,14 +8,15 @@ the UI panel label; it is where the value enters the renderer.
 | Layer | Three/TSL shape | Repo examples | Rule |
 |------|------------------|---------------|------|
 | Surface/material | `MeshPhysicalNodeMaterial`, `positionNode`, `normalNode`, material property nodes | relief, depth drive, ripple displacement/color, roughness, worn edges, metal variation, clearcoat, anisotropy, iridescence, emissive | Target controls; update uniforms/material nodes, not post-FX chain topology |
-| Screen post-FX | `RenderPipeline`, `pass(scene, camera)`, `outputNode`, input color nodes returning `vec4` | pixelate, posterize, film grain, RGB shift, Sobel mix, afterimage | Composited post-FX; update uniforms at slider rate and rebuild only when the chain topology changes |
+| Screen post-FX | `RenderPipeline`, `pass(scene, camera)`, `outputNode`, input color nodes returning `vec4` | pixelate, posterize, film grain, RGB shift, Sobel mix, afterimage, feedback | Composited post-FX; update uniforms at slider rate and rebuild when topology, bypass, no-op status, or structural selects change |
 | Multi-pass display | r184 display addons that need depth, normal, motion, MRT, or extra render targets | bloom, FXAA/SMAA/TAA/SSAA, GTAO, SSR, SSGI, SSS, depth of field, outline, denoise, motion blur | Add only with the required pass data and health checks; do not fake them as material sliders |
 | Scene/render helpers | controls, helpers, exporters, loaders, WebGL `EffectComposer` passes | Orbit/Arcball controls, legacy postprocessing passes, loaders | Reference only; do not mix WebGL composer patterns into the WebGPU TSL pipeline |
 
 ## Current Web Chain
 
-`web/src/render/webgpuRenderer.ts` creates one `RenderPipeline`. Its ordered
-shape is:
+`ControlGraph` derives a `PostChainSpec` by walking `frame` edges from Display
+back to the Scene pass. `web/src/render/webgpuRenderer.ts` compiles that spec
+into one `RenderPipeline`. Its ordered shape is:
 
 1. surface assembly: tiling geometry is projected, classified, assigned palette
    slots, and bound to material and field-source uniforms (displacement / relief
@@ -25,27 +26,19 @@ shape is:
    the next screen `vec4`;
 4. display: `renderPipeline.outputNode` is the last frame in that chain.
 
-The current screen chain folds these operations over the scene pass color:
-
-1. custom TSL pixelate using `screenUV`, `screenSize`, and `convertToTexture`;
-2. `posterize`;
-3. `film`;
-4. `rgbShift`;
-5. `sobel`, mixed back over the shifted color;
-6. `afterImage` only when its control is non-zero.
-
-The first five effects stay in the compiled chain and are controlled by
-uniforms. `afterImage` owns render targets, so the renderer rebuilds the output
-node only when that effect is enabled or disabled.
+The available screen effects are declared in `web/src/render/postFxCatalog.ts`.
+The catalog includes pixelate, posterize, film grain, RGB shift, Sobel,
+afterimage, bloom, tone map, dot screen, chromatic aberration, sepia, bleach,
+blur, anamorphic, feedback, anti-aliasing, and contours. Parameters update
+uniforms at slider rate; topology, bypass, no-op status, or structural select
+changes rebuild the compiled output node.
 
 ## Graph Order
 
-The working reference for this graph model is
-`/home/wreckoning90125/PrismicHolonomy/src/apps/procedural-morphology-lab`.
-That app uses typed feed-forward streams: geometry/material/scene data flows
+The graph model is typed feed-forward streams: geometry/material/scene data flows
 toward the scene pass, screen effects consume and emit frame streams, and audio
-or clock operators feed parameter inlets only. That is the model to preserve
-here because it makes node stacking meaningful.
+or clock operators feed parameter inlets only. That ordering makes node stacking
+meaningful and is the model to preserve here.
 
 The control graph must mirror the same ordering:
 
@@ -106,9 +99,8 @@ the pointer moves.
 
 Post-FX nodes must have a frame input and a frame output. They may expose
 operator-controllable parameters, but those parameters do not replace the
-upstream frame dependency. The renderer may build the chain internally from
-settings today, but the graph still has to represent the data dependency so
-future FX chaining is serial instead of parallel and unaware.
+upstream frame dependency. The renderer compiles the chain from the graph-derived
+`PostChainSpec`, so FX chaining is serial and follows the visible frame wire path.
 
 Audio modulation follows the morphology lab target-range rule: graph output is
 a modulation signal, not an absolute replacement setting. The target computes

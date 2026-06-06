@@ -34,6 +34,7 @@
 #include "tiling/penrose.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -52,6 +53,67 @@ double tileArea(const Tile& t) {
            - static_cast<double>(t.x[j]) * t.y[i];
     }
     return std::fabs(a) * 0.5;
+}
+
+double orient2(double ax, double ay, double bx, double by, double cx, double cy) {
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+}
+
+bool pointOnSegment(double ax, double ay, double bx, double by, double px, double py) {
+    constexpr double eps = 1e-8;
+    if (std::fabs(orient2(ax, ay, bx, by, px, py)) > eps) return false;
+    return px >= std::min(ax, bx) - eps && px <= std::max(ax, bx) + eps
+        && py >= std::min(ay, by) - eps && py <= std::max(ay, by) + eps;
+}
+
+bool segmentsIntersect(
+    double ax,
+    double ay,
+    double bx,
+    double by,
+    double cx,
+    double cy,
+    double dx,
+    double dy
+) {
+    constexpr double eps = 1e-8;
+    const double o1 = orient2(ax, ay, bx, by, cx, cy);
+    const double o2 = orient2(ax, ay, bx, by, dx, dy);
+    const double o3 = orient2(cx, cy, dx, dy, ax, ay);
+    const double o4 = orient2(cx, cy, dx, dy, bx, by);
+    if (((o1 > eps && o2 < -eps) || (o1 < -eps && o2 > eps)) &&
+        ((o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps))) {
+        return true;
+    }
+    return pointOnSegment(ax, ay, bx, by, cx, cy)
+        || pointOnSegment(ax, ay, bx, by, dx, dy)
+        || pointOnSegment(cx, cy, dx, dy, ax, ay)
+        || pointOnSegment(cx, cy, dx, dy, bx, by);
+}
+
+bool simplePolygonOk(const Tile& t) {
+    constexpr double eps = 1e-8;
+    if (t.vcount < 3) return false;
+    if (tileArea(t) <= eps) return false;
+    for (int i = 0; i < t.vcount; ++i) {
+        if (!std::isfinite(t.x[i]) || !std::isfinite(t.y[i])) return false;
+        const int j = (i + 1) % t.vcount;
+        const double dx = static_cast<double>(t.x[i]) - t.x[j];
+        const double dy = static_cast<double>(t.y[i]) - t.y[j];
+        if (dx * dx + dy * dy <= eps * eps) return false;
+    }
+    for (int i = 0; i < t.vcount; ++i) {
+        const int i1 = (i + 1) % t.vcount;
+        for (int j = i + 1; j < t.vcount; ++j) {
+            const int j1 = (j + 1) % t.vcount;
+            if (i == j || i1 == j || j1 == i) continue;
+            if (i == 0 && j1 == 0) continue;
+            if (segmentsIntersect(t.x[i], t.y[i], t.x[i1], t.y[i1], t.x[j], t.y[j], t.x[j1], t.y[j1])) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 // Even-odd point-in-polygon, valid for the convex and the concave (P1 star /
@@ -124,6 +186,38 @@ struct Grid {
     }
 };
 
+std::array<double, 3> sortedSides(const Tile& t) {
+    std::array<double, 3> sides{};
+    for (int i = 0; i < 3; ++i) {
+        const int j = (i + 1) % 3;
+        const double dx = static_cast<double>(t.x[i]) - t.x[j];
+        const double dy = static_cast<double>(t.y[i]) - t.y[j];
+        sides[i] = std::hypot(dx, dy);
+    }
+    std::sort(sides.begin(), sides.end());
+    return sides;
+}
+
+bool equithirdsShapeOk(const Tile& t) {
+    if (t.vcount != 3) return false;
+    const auto s = sortedSides(t);
+    if (s[0] <= 1e-12) return false;
+    // Deep Equithirds generations are stored as float32 vertices; by gen10 the
+    // smallest sides are ~0.004, so exact sqrt(3) ratios carry a few ULPs of
+    // accumulated roundoff. Keep this tight enough to catch wrong prototiles
+    // while not failing valid source-rule subdivisions.
+    constexpr double kShapeTol = 5e-5;
+    if (t.type == 0) {
+        return std::fabs(s[1] / s[0] - 1.0) < kShapeTol
+            && std::fabs(s[2] / s[0] - 1.0) < kShapeTol;
+    }
+    if (t.type == 1) {
+        return std::fabs(s[1] / s[0] - 1.0) < kShapeTol
+            && std::fabs(s[2] / s[0] - std::sqrt(3.0)) < kShapeTol;
+    }
+    return false;
+}
+
 struct FamilyCase {
     Family fam;
     const char* name;
@@ -140,6 +234,10 @@ int main() {
         { Family::Chair,         "Chair",         3, true  },
         { Family::Pinwheel,      "Pinwheel",      3, true  },
         { Family::Tuebingen,     "Tuebingen",     2, true  },
+        { Family::Equithirds,    "Equithirds",    2, true  },
+        { Family::CromwellKRT,   "CromwellKRT",   4, false },
+        { Family::GailiunasSpiral, "GailiunasSpiral", 52, false },
+        { Family::Cairo,         "Cairo",          1, false },
         { Family::Danzer,        "Danzer",        2, true  },
         { Family::Dodecagonal,   "Dodecagonal",   3, false },
         { Family::AmmannBeenker, "AmmannBeenker", 3, false },
@@ -185,11 +283,40 @@ int main() {
             // ---- 2. closure at the deepest generation ----------------------
             const std::vector<Tile> gN = generate(fc.fam, seed, maxGen);
             int degen = 0;
+            int nonSimple = 0;
+            int badShape = 0;
             for (const Tile& t : gN)
                 if (t.vcount < 3 || tileArea(t) < 1e-14) ++degen;
+            for (const Tile& t : gN)
+                if (!simplePolygonOk(t)) ++nonSimple;
+            if (fc.fam == Family::Equithirds) {
+                for (const Tile& t : gN)
+                    if (!equithirdsShapeOk(t)) ++badShape;
+            }
+            if (fc.fam == Family::CromwellKRT) {
+                for (const Tile& t : gN)
+                    if (t.vcount != 4 || t.type > 2) ++badShape;
+            }
             if (degen) {
                 std::printf("  FAIL %s seed %d: %d degenerate tiles\n",
                             fc.name, seed, degen);
+                ok = false;
+            }
+            if (nonSimple) {
+                std::printf("  FAIL %s seed %d: %d non-simple polygon tiles\n",
+                            fc.name, seed, nonSimple);
+                ok = false;
+            }
+            if (badShape) {
+                if (fc.fam == Family::CromwellKRT) {
+                    std::printf("  FAIL %s seed %d: %d tiles fail KRT "
+                                "quadrilateral/type checks\n",
+                                fc.name, seed, badShape);
+                } else {
+                    std::printf("  FAIL %s seed %d: %d tiles fail equilateral / "
+                                "30-30-120 side-ratio checks\n",
+                                fc.name, seed, badShape);
+                }
                 ok = false;
             }
 

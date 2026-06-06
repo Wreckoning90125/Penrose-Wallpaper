@@ -290,6 +290,7 @@ void Renderer::considerGrowth() {
         if (deviceReady_ && swapchainReady_) {
             vkDeviceWaitIdle(device_);
             buildGeometry();
+            updatePaletteUbo();
         }
     }
     if (effectiveGeneration_ >= maxGen) panAccumPx_ = 0.0f;
@@ -328,14 +329,13 @@ void Renderer::drawFrame() {
     lastFrameSec_ = time_;
     globalAudioAnalyzer().analyzeFrame(dt);
 
-    // Snapshot bands + beat ONCE per frame under analyzeMutex_. Reuse
-    // the same buffer for the modulation graph's EvalContext and the
-    // UBO audio block below — taking the lock twice in a frame is just
+    // Snapshot audio features ONCE per frame under analyzeMutex_. Reuse
+    // the same values for the modulation graph's EvalContext and the UBO
+    // audio block below — taking the lock twice in a frame is just
     // contention waiting to happen when a second renderer in the same
     // process is also doing snapshots.
-    float audioBands[AudioAnalyzer::kBands];
-    float audioBeat = 0.0f;
-    globalAudioAnalyzer().snapshot(audioBands, audioBeat);
+    AudioAnalyzer::FeatureSnapshot audio{};
+    globalAudioAnalyzer().snapshot(audio);
 
     // Modulation graph: evaluate against the latest audio + clock. The
     // result lands in the fx* members the UBO patch below uploads —
@@ -347,8 +347,15 @@ void Renderer::drawFrame() {
     // graph reproduces the slider values exactly.
     {
         graph::EvalContext gctx{};
-        for (int i = 0; i < 8; ++i) gctx.bands[i] = audioBands[i];
-        gctx.beat       = audioBeat;
+        for (int i = 0; i < 8; ++i) gctx.bands[i] = audio.bands[i];
+        gctx.beat       = audio.beat;
+        gctx.rms        = audio.rms;
+        gctx.spectralFlux = audio.spectralFlux;
+        gctx.onsetStrength = audio.onsetStrength;
+        gctx.cwtTransient = audio.cwtTransient;
+        gctx.crestFactor = audio.crestFactor;
+        gctx.beatConfidence = audio.beatConfidence;
+        gctx.dtSeconds   = dt;
         gctx.timeSec    = time_;
         gctx.pageScroll = pageOffset_;
         graph::EvalResult gres{};
@@ -419,11 +426,14 @@ void Renderer::drawFrame() {
         }
     }
 
+    FrameSync& f = frames_[currentFrame_];
+    vkWaitForFences(device_, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
+
     // Per-frame UBO patch for the live block — anim, effects, audio bands,
-    // beat envelope. Palette / border / bg slots stay where
+    // and beat/transient features. Palette / border / bg slots stay where
     // updatePaletteUbo last wrote them and don't need rewriting every
     // vsync.
-    if (paletteUboMapped_) {
+    if (paletteUboMapped_[currentFrame_]) {
         float anim[4] = {
             time_,
             fxRippleAmount_,
@@ -438,10 +448,10 @@ void Renderer::drawFrame() {
         };
         // Reuse the same snapshot taken above the graph eval.
         float bandsBlock[8];
-        std::memcpy(bandsBlock, audioBands, sizeof(bandsBlock));
-        float beatBlock[4] = { audioBeat, 0.0f, 0.0f, 0.0f };
+        std::memcpy(bandsBlock, audio.bands, sizeof(bandsBlock));
+        float beatBlock[4] = { audio.beat, audio.onsetStrength, audio.cwtTransient, audio.beatConfidence };
 
-        auto* base = static_cast<uint8_t*>(paletteUboMapped_);
+        auto* base = static_cast<uint8_t*>(paletteUboMapped_[currentFrame_]);
         std::memcpy(base + offsetof(PaletteUbo, anim),       anim,       sizeof(anim));
         std::memcpy(base + offsetof(PaletteUbo, effects),    effects,    sizeof(effects));
         std::memcpy(base + offsetof(PaletteUbo, audioBands), bandsBlock, sizeof(bandsBlock));
@@ -480,9 +490,6 @@ void Renderer::drawFrame() {
             reinterpret_cast<float*>(base + offsetof(PaletteUbo, matNormal)),
             fxMat);
     }
-
-    FrameSync& f = frames_[currentFrame_];
-    vkWaitForFences(device_, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
 
     uint32_t imageIndex = 0;
     bool rebuildAfterPresent = false;
@@ -645,8 +652,9 @@ void Renderer::drawFrame() {
     pc.hypScale   = hypScaleEff;
     pc.projection = (settings_.projection == Projection::PoincareDisk) ? 1.0f : 0.0f;
 
+    VkDescriptorSet frameDescSet = descSets_[currentFrame_];
     vkCmdBindDescriptorSets(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipelineLayout_, 0, 1, &descSet_, 0, nullptr);
+                            pipelineLayout_, 0, 1, &frameDescSet, 0, nullptr);
 
     // ---- Fills ----
     if (fillVertexCount_ > 0) {

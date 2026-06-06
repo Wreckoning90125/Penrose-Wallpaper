@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <unordered_set>
 #include <unordered_map>
 #include <utility>
 
@@ -17,6 +18,7 @@ constexpr double kPi    = 3.14159265358979323846;
 constexpr double kPhi   = 1.6180339887498949;
 constexpr double kPsi   = 1.0 / kPhi;
 constexpr double kPsi2  = kPsi * kPsi;
+constexpr double kInvSqrt3 = 0.5773502691896258;
 constexpr double kHalfSqrt3 = 0.8660254037844386;
 
 struct Pt {
@@ -917,6 +919,418 @@ std::vector<Tile> seedDanzer(SeedDanzer seed) {
     return out;
 }
 
+namespace {
+
+struct CromTri {
+    Pt p;
+    Pt q;
+    Pt r;
+    bool tall;
+};
+
+struct CromPointKey {
+    long long x;
+    long long y;
+    bool operator==(const CromPointKey& other) const {
+        return x == other.x && y == other.y;
+    }
+};
+
+struct CromPointHash {
+    size_t operator()(const CromPointKey& key) const {
+        const uint64_t a = static_cast<uint64_t>(key.x);
+        const uint64_t b = static_cast<uint64_t>(key.y);
+        return static_cast<size_t>(a ^ (b + 0x9e3779b97f4a7c15ull + (a << 6u) + (a >> 2u)));
+    }
+};
+
+struct CromEdgeKey {
+    int a;
+    int b;
+    bool operator==(const CromEdgeKey& other) const {
+        return a == other.a && b == other.b;
+    }
+};
+
+struct CromEdgeHash {
+    size_t operator()(const CromEdgeKey& key) const {
+        return (static_cast<size_t>(key.a) << 32u) ^ static_cast<size_t>(key.b);
+    }
+};
+
+Pt goldenSection(Pt p, Pt q) {
+    return {p.x + (q.x - p.x) * kPsi, p.y + (q.y - p.y) * kPsi};
+}
+
+void cromwellWide(Pt p, Pt q, Pt r, int depth, std::vector<CromTri>& out);
+void cromwellTall(Pt p, Pt q, Pt r, int depth, std::vector<CromTri>& out);
+
+void cromwellWide(Pt p, Pt q, Pt r, int depth, std::vector<CromTri>& out) {
+    if (depth <= 0) {
+        out.push_back({p, q, r, false});
+        return;
+    }
+    const Pt t = goldenSection(p, q);
+    cromwellTall(r, t, p, depth - 1, out);
+    cromwellWide(q, r, t, depth - 1, out);
+}
+
+void cromwellTall(Pt p, Pt q, Pt r, int depth, std::vector<CromTri>& out) {
+    if (depth <= 0) {
+        out.push_back({p, q, r, true});
+        return;
+    }
+    const Pt u = goldenSection(q, r);
+    const Pt v = goldenSection(r, p);
+    cromwellTall(v, p, q, depth - 1, out);
+    cromwellTall(v, u, q, depth - 1, out);
+    cromwellWide(r, v, u, depth - 1, out);
+}
+
+double signedArea(const std::vector<Pt>& poly) {
+    double area = 0.0;
+    for (size_t i = 0; i < poly.size(); ++i) {
+        const Pt a = poly[i];
+        const Pt b = poly[(i + 1) % poly.size()];
+        area += a.x * b.y - b.x * a.y;
+    }
+    return 0.5 * area;
+}
+
+uint8_t cromwellFaceType(const std::vector<Pt>& face) {
+    double side[4];
+    for (int i = 0; i < 4; ++i) {
+        const Pt a = face[i];
+        const Pt b = face[(i + 1) & 3];
+        const double dx = b.x - a.x;
+        const double dy = b.y - a.y;
+        side[i] = std::sqrt(dx * dx + dy * dy);
+    }
+    const double scale = std::max(std::max(side[0], side[1]), std::max(side[2], side[3]));
+    const auto eq = [&](double a, double b) {
+        return std::fabs(a - b) <= 1e-5 * std::max(scale, 1.0);
+    };
+    if (eq(side[0], side[1]) && eq(side[1], side[2]) && eq(side[2], side[3])) return 1;
+    if ((eq(side[0], side[1]) && eq(side[2], side[3])) ||
+        (eq(side[1], side[2]) && eq(side[3], side[0]))) return 0;
+    return 2;
+}
+
+Pt cromwellTileCenter(const Tile& tile) {
+    const TilePoint c = tileAreaCentroid(tile);
+    return {c.x, c.y};
+}
+
+enum class BoundedSide : std::uint8_t { Outside, Boundary, Inside };
+
+double orient2(Pt a, Pt b, Pt c) {
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+bool pointOnSegment(Pt a, Pt b, Pt p) {
+    constexpr double eps = 1e-10;
+    if (std::fabs(orient2(a, b, p)) > eps) return false;
+    return p.x >= std::min(a.x, b.x) - eps
+        && p.x <= std::max(a.x, b.x) + eps
+        && p.y >= std::min(a.y, b.y) - eps
+        && p.y <= std::max(a.y, b.y) + eps;
+}
+
+BoundedSide cromwellBoundedSide(Pt p, const Tile& tile) {
+    bool inside = false;
+    for (int i = 0, j = tile.vcount - 1; i < tile.vcount; j = i++) {
+        const double ax = tile.x[i];
+        const double ay = tile.y[i];
+        const double bx = tile.x[j];
+        const double by = tile.y[j];
+        if (pointOnSegment({ax, ay}, {bx, by}, p)) return BoundedSide::Boundary;
+        if ((ay > p.y) != (by > p.y) &&
+            p.x < ((bx - ax) * (p.y - ay)) / (by - ay) + ax) {
+            inside = !inside;
+        }
+    }
+    return inside ? BoundedSide::Inside : BoundedSide::Outside;
+}
+
+bool cromwellPointInTile(Pt p, const Tile& tile) {
+    return cromwellBoundedSide(p, tile) != BoundedSide::Outside;
+}
+
+std::vector<Tile> cromwellFacesFromTriangles(const std::vector<CromTri>& tris) {
+    std::vector<Pt> points;
+    std::unordered_map<CromPointKey, int, CromPointHash> pointIndex;
+    const auto pointId = [&](Pt p) {
+        const CromPointKey key{
+            static_cast<long long>(std::llround(p.x * 1000000000.0)),
+            static_cast<long long>(std::llround(p.y * 1000000000.0)),
+        };
+        const auto it = pointIndex.find(key);
+        if (it != pointIndex.end()) return it->second;
+        const int id = static_cast<int>(points.size());
+        pointIndex.emplace(key, id);
+        points.push_back(p);
+        return id;
+    };
+
+    std::unordered_set<CromEdgeKey, CromEdgeHash> edges;
+    const auto addEdge = [&](Pt p, Pt q) {
+        int ia = pointId(p);
+        int ib = pointId(q);
+        if (ia == ib) return;
+        if (ib < ia) std::swap(ia, ib);
+        edges.insert({ia, ib});
+    };
+
+    for (const CromTri& tri : tris) {
+        if (tri.tall) {
+            // Tall triangle edge q-r is blue; keep p-q (black) and r-p (red).
+            addEdge(tri.p, tri.q);
+            addEdge(tri.r, tri.p);
+        } else {
+            // Wide triangle edge p-q is blue; keep q-r (green) and r-p (black).
+            addEdge(tri.q, tri.r);
+            addEdge(tri.r, tri.p);
+        }
+    }
+
+    std::vector<std::vector<int>> adj(points.size());
+    for (const CromEdgeKey& e : edges) {
+        adj[e.a].push_back(e.b);
+        adj[e.b].push_back(e.a);
+    }
+    for (size_t i = 0; i < adj.size(); ++i) {
+        std::sort(adj[i].begin(), adj[i].end(), [&](int lhs, int rhs) {
+            const Pt p = points[i];
+            const Pt a0 = points[lhs];
+            const Pt b0 = points[rhs];
+            return std::atan2(a0.y - p.y, a0.x - p.x) < std::atan2(b0.y - p.y, b0.x - p.x);
+        });
+    }
+
+    std::unordered_set<CromEdgeKey, CromEdgeHash> used;
+    std::vector<Tile> out;
+    out.reserve(edges.size() / 2);
+    for (const CromEdgeKey& e : edges) {
+        const CromEdgeKey starts[2] = {{e.a, e.b}, {e.b, e.a}};
+        for (const CromEdgeKey start : starts) {
+            if (used.find(start) != used.end()) continue;
+            std::vector<int> faceIds;
+            CromEdgeKey cur = start;
+            bool closed = false;
+            for (int guard = 0; guard < 4096; ++guard) {
+                if (used.find(cur) != used.end()) break;
+                used.insert(cur);
+                faceIds.push_back(cur.a);
+                const std::vector<int>& nbrs = adj[cur.b];
+                const auto it = std::find(nbrs.begin(), nbrs.end(), cur.a);
+                if (it == nbrs.end() || nbrs.empty()) break;
+                const int idx = static_cast<int>(it - nbrs.begin());
+                const int next = nbrs[(idx + static_cast<int>(nbrs.size()) - 1) % static_cast<int>(nbrs.size())];
+                cur = {cur.b, next};
+                if (cur == start) {
+                    closed = true;
+                    break;
+                }
+            }
+            if (!closed || faceIds.size() != 4) continue;
+            std::vector<Pt> face;
+            face.reserve(4);
+            for (int id : faceIds) face.push_back(points[id]);
+            if (signedArea(face) <= 1e-10) continue;
+            Tile tile{};
+            tile.vcount = 4;
+            tile.type = cromwellFaceType(face);
+            for (int i = 0; i < 4; ++i) {
+                tile.x[i] = static_cast<float>(face[i].x);
+                tile.y[i] = static_cast<float>(face[i].y);
+            }
+            out.push_back(tile);
+        }
+    }
+    return out;
+}
+
+std::vector<Tile> buildCromwellKRTFromRobinson(int depth) {
+    const Pt a{0.0, 0.0};
+    const Pt b{kPhi, 0.0};
+    const double wideHeight = std::sqrt(std::max(0.0, 1.0 - (kPhi * 0.5) * (kPhi * 0.5)));
+    const Pt c{kPhi * 0.5, wideHeight};
+    const double tallX = 0.5 * kPsi;
+    const Pt d{tallX, -std::sqrt(std::max(0.0, 1.0 - tallX * tallX))};
+
+    std::vector<CromTri> tris;
+    tris.reserve(2u << std::min(depth, 20));
+    // Cromwell's Figure 3 Robinson patch: one wide and one tall triangle sharing
+    // the omitted blue edge. This helper extracts the red+green+black KRT graph
+    // from that Robinson patch; generateCromwellKRT below crops KRT supertiles
+    // from it instead of exposing this whole two-triangle window as the atlas.
+    cromwellWide(a, b, c, depth, tris);
+    cromwellTall(d, a, b, depth, tris);
+    return cromwellFacesFromTriangles(tris);
+}
+
+std::vector<Tile> buildCromwellKRTStar(int depth) {
+    std::vector<CromTri> tris;
+    tris.reserve(10u << std::min(depth, 18));
+    const double ang36 = kPi / 5.0;
+    for (int i = 0; i < 5; ++i) {
+        const double theta = (2.0 * kPi * i) / 5.0 + kPi / 2.0;
+        const Pt apex{std::cos(theta), std::sin(theta)};
+        const Pt left{kPhi * std::cos(theta + ang36), kPhi * std::sin(theta + ang36)};
+        const Pt right{kPhi * std::cos(theta - ang36), kPhi * std::sin(theta - ang36)};
+        // Same Robinson-wide star as the P2 star seed, but consumed as the
+        // Robinson graph before dropping blue edges into Cromwell KRT faces.
+        cromwellWide({0.0, 0.0}, left, apex, depth, tris);
+        cromwellWide({0.0, 0.0}, right, apex, depth, tris);
+    }
+    return cromwellFacesFromTriangles(tris);
+}
+
+} // namespace
+
+double tileSignedArea(const Tile& tile) {
+    double area = 0.0;
+    for (int i = 0; i < tile.vcount; ++i) {
+        const int j = (i + 1) % tile.vcount;
+        area += static_cast<double>(tile.x[i]) * static_cast<double>(tile.y[j])
+              - static_cast<double>(tile.x[j]) * static_cast<double>(tile.y[i]);
+    }
+    return 0.5 * area;
+}
+
+TilePoint tileAreaCentroid(const Tile& tile) {
+    double twiceArea = 0.0;
+    double cx = 0.0;
+    double cy = 0.0;
+    for (int i = 0; i < tile.vcount; ++i) {
+        const int j = (i + 1) % tile.vcount;
+        const double ax = static_cast<double>(tile.x[i]);
+        const double ay = static_cast<double>(tile.y[i]);
+        const double bx = static_cast<double>(tile.x[j]);
+        const double by = static_cast<double>(tile.y[j]);
+        const double cross = ax * by - bx * ay;
+        twiceArea += cross;
+        cx += (ax + bx) * cross;
+        cy += (ay + by) * cross;
+    }
+    if (std::fabs(twiceArea) > 1e-12) {
+        const double scale = 1.0 / (3.0 * twiceArea);
+        return {cx * scale, cy * scale};
+    }
+    double sx = 0.0;
+    double sy = 0.0;
+    const int n = std::max(1, static_cast<int>(tile.vcount));
+    for (int i = 0; i < tile.vcount; ++i) {
+        sx += static_cast<double>(tile.x[i]);
+        sy += static_cast<double>(tile.y[i]);
+    }
+    return {sx / static_cast<double>(n), sy / static_cast<double>(n)};
+}
+
+std::vector<Tile> generateCromwellKRT(int seedIdx, int generations) {
+    const int seed = std::max(0, std::min(3, seedIdx));
+    if (seed == static_cast<int>(SeedCromwellKRT::Star)) {
+        std::vector<Tile> out = buildCromwellKRTStar(std::max(0, generations) * 2);
+        normalizeTiles(out);
+        return out;
+    }
+    const int baseDepth = 3;
+    const int depth = baseDepth + std::max(0, generations) * 2;
+    const std::vector<Tile> base = buildCromwellKRTFromRobinson(baseDepth);
+    const std::vector<Tile> full = buildCromwellKRTFromRobinson(depth);
+
+    Pt baseMin{std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
+    Pt baseMax{-std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
+    for (const Tile& tile : base) {
+        for (int i = 0; i < tile.vcount; ++i) {
+            baseMin.x = std::min(baseMin.x, static_cast<double>(tile.x[i]));
+            baseMin.y = std::min(baseMin.y, static_cast<double>(tile.y[i]));
+            baseMax.x = std::max(baseMax.x, static_cast<double>(tile.x[i]));
+            baseMax.y = std::max(baseMax.y, static_cast<double>(tile.y[i]));
+        }
+    }
+    const Pt baseCenter{0.5 * (baseMin.x + baseMax.x), 0.5 * (baseMin.y + baseMax.y)};
+    Tile window{};
+    bool foundWindow = false;
+    double bestDist2 = std::numeric_limits<double>::infinity();
+    for (const Tile& tile : base) {
+        if (tile.type == seed) {
+            const Pt c = cromwellTileCenter(tile);
+            const double dx = c.x - baseCenter.x;
+            const double dy = c.y - baseCenter.y;
+            const double dist2 = dx * dx + dy * dy;
+            if (!foundWindow || dist2 < bestDist2) {
+                bestDist2 = dist2;
+                window = tile;
+                foundWindow = true;
+            }
+        }
+    }
+
+    std::vector<Tile> out;
+    if (foundWindow) {
+        out.reserve(full.size());
+        for (const Tile& tile : full) {
+            if (cromwellPointInTile(cromwellTileCenter(tile), window)) {
+                out.push_back(tile);
+            }
+        }
+        // A selected face at depth 3 is a valid KRT supertile. At generation 0
+        // the center test above can sit on numerical boundaries, so fall back to
+        // the selected face itself if no child center was accepted.
+        if (out.empty()) {
+            out.push_back(window);
+        }
+    }
+    if (out.empty()) out = full;
+    normalizeTiles(out);
+    return out;
+}
+
+std::vector<Tile> seedEquithirds(SeedEquithirds seed) {
+    if (seed == SeedEquithirds::Wide) {
+        // 30-30-120 triangle with unit equal sides and long edge sqrt(3).
+        return { mkTri(1,
+            static_cast<float>(-kHalfSqrt3), -1.0f / 6.0f,
+            static_cast<float>( kHalfSqrt3), -1.0f / 6.0f,
+            0.0f,                             1.0f / 3.0f) };
+    }
+
+    // Unit equilateral triangle, centred on its centroid.
+    return { mkTri(0,
+        -0.5f, static_cast<float>(-kHalfSqrt3 / 3.0),
+         0.5f, static_cast<float>(-kHalfSqrt3 / 3.0),
+         0.0f, static_cast<float>( 2.0 * kHalfSqrt3 / 3.0)) };
+}
+
+std::vector<Tile> subdivideEquithirds(const std::vector<Tile>& in) {
+    std::vector<Tile> out;
+    out.reserve(in.size() * 3);
+    for (const Tile& t : in) {
+        if (t.type == 0) {
+            const float cx = (t.x[0] + t.x[1] + t.x[2]) / 3.0f;
+            const float cy = (t.y[0] + t.y[1] + t.y[2]) / 3.0f;
+            out.push_back(mkTri(1, t.x[0], t.y[0], t.x[1], t.y[1], cx, cy));
+            out.push_back(mkTri(1, t.x[1], t.y[1], t.x[2], t.y[2], cx, cy));
+            out.push_back(mkTri(1, t.x[2], t.y[2], t.x[0], t.y[0], cx, cy));
+            continue;
+        }
+
+        const float mx = (t.x[0] + t.x[1]) * 0.5f;
+        const float my = (t.y[0] + t.y[1]) * 0.5f;
+        const float sx = (t.x[1] - t.x[0]) / 6.0f;
+        const float sy = (t.y[1] - t.y[0]) / 6.0f;
+        const float b1x = mx - sx;
+        const float b1y = my - sy;
+        const float b2x = mx + sx;
+        const float b2y = my + sy;
+        out.push_back(mkTri(1, t.x[0], t.y[0], t.x[2], t.y[2], b1x, b1y));
+        out.push_back(mkTri(0, b1x, b1y, b2x, b2y, t.x[2], t.y[2]));
+        out.push_back(mkTri(1, t.x[2], t.y[2], t.x[1], t.y[1], b2x, b2y));
+    }
+    return out;
+}
+
 std::vector<Tile> seedChair(SeedChair seed) {
     std::vector<Tile> out;
     switch (seed) {
@@ -1472,10 +1886,24 @@ inline double p1Area(const float* x, const float* y, int n) {
     return a;
 }
 
+Tile p1SeedStar() {
+    Tile t{};
+    t.vcount = 10;
+    t.type = 1;
+    for (int i = 0; i < 10; ++i) {
+        const double r = (i & 1) ? kPsi2 : 1.0;
+        const double a = -0.5 * kPi + static_cast<double>(i) * kPi / 5.0;
+        t.x[i] = static_cast<float>(r * std::cos(a));
+        t.y[i] = static_cast<float>(r * std::sin(a));
+    }
+    return t;
+}
+
 } // namespace
 
 std::vector<Tile> generateP1(int /*seedIdx*/, int generations) {
-    const int md = generations < 1 ? 1 : generations;
+    const int md = generations < 0 ? 0 : generations;
+    if (md == 0) return { p1SeedStar() };
 
     // ---- 1. run the recursion, collecting the decorating pentagons --------
     std::vector<Tile> pent;
@@ -1607,6 +2035,205 @@ std::vector<Tile> generateSpectre(int seedIdx, int generations) {
     return out;
 }
 
+std::vector<Tile> generateEquithirds(int seedIdx, int generations) {
+    const int seed = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+    auto tiles = seedEquithirds(static_cast<SeedEquithirds>(seed));
+    for (int g = 0; g < generations; ++g) tiles = subdivideEquithirds(tiles);
+    return tiles;
+}
+
+struct SpiralSeed {
+    int arms;
+    int n;
+    int k;
+};
+
+constexpr SpiralSeed kGailiunasSeeds[] = {
+    { 3,  6,  3}, { 3,  9,  4}, { 3, 12,  5}, { 3, 15,  6},
+    { 3, 18,  7}, { 3, 21,  8}, { 3, 24,  9}, { 3, 27, 10},
+    { 3, 30, 11}, { 3, 33, 12}, { 3, 36, 13}, { 4,  8,  3},
+    { 4, 12,  4}, { 4, 16,  5}, { 4, 20,  6}, { 4, 24,  7},
+    { 4, 28,  8}, { 4, 32,  9}, { 4, 36, 10}, { 5, 10,  3},
+    { 5, 15,  4}, { 5, 20,  5}, { 5, 25,  6}, { 5, 30,  7},
+    { 5, 35,  8}, { 6, 12,  3}, { 6, 18,  4}, { 6, 24,  5},
+    { 6, 30,  6}, { 6, 36,  7}, { 7, 14,  3}, { 7, 21,  4},
+    { 7, 28,  5}, { 7, 35,  6}, { 8, 16,  3}, { 8, 24,  4},
+    { 8, 32,  5}, { 9, 18,  3}, { 9, 27,  4}, { 9, 36,  5},
+    {10, 20,  3}, {10, 30,  4}, {11, 22,  3}, {11, 33,  4},
+    {12, 24,  3}, {12, 36,  4}, {13, 26,  3}, {14, 28,  3},
+    {15, 30,  3}, {16, 32,  3}, {17, 34,  3}, {18, 36,  3},
+};
+
+inline Pt cadd(Pt a, Pt b) { return {a.x + b.x, a.y + b.y}; }
+inline Pt csub(Pt a, Pt b) { return {a.x - b.x, a.y - b.y}; }
+inline Pt cscale(Pt a, double s) { return {a.x * s, a.y * s}; }
+inline Pt cconj(Pt a) { return {a.x, -a.y}; }
+inline Pt crot(Pt a, double angle) {
+    const double c = std::cos(angle);
+    const double s = std::sin(angle);
+    return {a.x * c - a.y * s, a.x * s + a.y * c};
+}
+
+using SpiralPoly = std::vector<Pt>;
+using SpiralPolyList = std::vector<SpiralPoly>;
+using SpiralSections = std::vector<SpiralPolyList>;
+
+SpiralPoly translatePoly(const SpiralPoly& in, Pt delta) {
+    SpiralPoly out;
+    out.reserve(in.size());
+    for (Pt p : in) out.push_back(cadd(p, delta));
+    return out;
+}
+
+SpiralPoly rotateTranslatePoly(const SpiralPoly& in, double angle, Pt delta) {
+    SpiralPoly out;
+    out.reserve(in.size());
+    for (Pt p : in) out.push_back(cadd(crot(p, angle), delta));
+    return out;
+}
+
+SpiralPoly gailiunasBaseTile(int n, int k) {
+    SpiralPoly z;
+    z.reserve(static_cast<size_t>(k));
+    Pt acc{0.0, 0.0};
+    for (int i = 0; i < k; ++i) {
+        acc = cadd(acc, {std::cos(2.0 * kPi * i / n), std::sin(2.0 * kPi * i / n)});
+        z.push_back(acc);
+    }
+
+    SpiralPoly poly;
+    poly.reserve(2U * static_cast<size_t>(k));
+    for (Pt p : z) poly.push_back(p);
+    for (auto it = z.rbegin(); it != z.rend(); ++it) poly.push_back(csub(*it, {1.0, 0.0}));
+    return poly;
+}
+
+void pushSpiralTile(const SpiralPoly& poly, uint8_t type, std::vector<Tile>& out) {
+    if (poly.size() < 3 || poly.size() > static_cast<size_t>(kMaxTileVerts)) return;
+    Tile tile{};
+    tile.vcount = static_cast<uint8_t>(poly.size());
+    tile.type = type;
+    for (size_t i = 0; i < poly.size(); ++i) {
+        tile.x[i] = static_cast<float>(poly[i].x);
+        tile.y[i] = static_cast<float>(poly[i].y);
+    }
+    out.push_back(tile);
+}
+
+std::vector<Tile> generateGailiunasSpiral(int seedIdx, int generations) {
+    const int maxSeed = static_cast<int>(sizeof(kGailiunasSeeds) / sizeof(kGailiunasSeeds[0])) - 1;
+    const SpiralSeed seed = kGailiunasSeeds[(seedIdx < 0 || seedIdx > maxSeed) ? 0 : seedIdx];
+    const int level = std::max(0, generations);
+    const double turn = kPi * (2.0 / static_cast<double>(seed.arms) + 1.0);
+
+    const SpiralPoly base = gailiunasBaseTile(seed.n, seed.k);
+    const Pt anchor = base[static_cast<size_t>(seed.k - 1)];
+    SpiralPoly ft0 = translatePoly(base, cscale(anchor, -1.0));
+
+    SpiralPoly fc;
+    fc.reserve(base.size());
+    for (Pt p : base) fc.push_back(crot(cconj(p), turn));
+
+    std::vector<SpiralPolyList> ft(static_cast<size_t>(level + 1));
+    ft[0].push_back(ft0);
+    for (int j = 1; j <= level; ++j) {
+        SpiralPolyList polys;
+        polys.reserve(2U * static_cast<size_t>(j));
+        for (int i = 0; i < j; ++i) polys.push_back(translatePoly(ft0, {-static_cast<double>(i), 0.0}));
+        for (int i = 0; i < j; ++i) {
+            const Pt step = cadd({static_cast<double>(j), 0.0}, crot({static_cast<double>(i), 0.0}, turn));
+            polys.push_back(translatePoly(fc, cscale(step, -1.0)));
+        }
+        ft[static_cast<size_t>(j)] = std::move(polys);
+    }
+
+    std::vector<SpiralSections> sections(static_cast<size_t>(level + 1));
+    for (int j = 1; j <= level; ++j) {
+        Pt offset{0.0, 0.0};
+        Pt next{0.0, 0.0};
+        const SpiralPolyList& polys = ft[static_cast<size_t>(j)];
+        const Pt last = polys.back().back();
+        const Pt t = cscale(last, -1.0);
+        SpiralSections sect;
+        sect.reserve(static_cast<size_t>(seed.k - 1));
+        for (int i = 0; i <= seed.k - 2; ++i) {
+            offset = cadd(offset, next);
+            next = crot(t, -2.0 * kPi * i / seed.n);
+            SpiralPolyList sector;
+            sector.reserve(polys.size());
+            for (const SpiralPoly& p : polys) {
+                sector.push_back(rotateTranslatePoly(p, -2.0 * kPi * i / seed.n, cscale(offset, -1.0)));
+            }
+            sect.push_back(std::move(sector));
+        }
+        sections[static_cast<size_t>(j)] = std::move(sect);
+    }
+
+    SpiralPolyList oneArm;
+    if (level == 0) {
+        oneArm.push_back(ft0);
+    } else {
+        Pt offset{0.0, 0.0};
+        Pt next{0.0, 0.0};
+        for (int i = 1; i <= level; ++i) {
+            offset = cadd(offset, next);
+            const double angle = -2.0 * kPi * (i - 1) * (seed.k - 1) / seed.n;
+            const SpiralSections& sect = sections[static_cast<size_t>(i)];
+            next = crot(sect.back().back().back(), angle);
+            for (const SpiralPolyList& sector : sect) {
+                for (const SpiralPoly& p : sector) oneArm.push_back(rotateTranslatePoly(p, angle, offset));
+            }
+        }
+    }
+
+    std::vector<Tile> out;
+    out.reserve(oneArm.size() * static_cast<size_t>(seed.arms));
+    for (int arm = 0; arm < seed.arms; ++arm) {
+        const double angle = 2.0 * kPi * arm / seed.arms;
+        const uint8_t type = static_cast<uint8_t>(arm % 18);
+        for (const SpiralPoly& p : oneArm) pushSpiralTile(rotateTranslatePoly(p, angle, {0.0, 0.0}), type, out);
+    }
+    normalizeTiles(out);
+    return out;
+}
+
+std::vector<Tile> generateCairo(int /*seedIdx*/, int generations) {
+    constexpr double e = 0.5;
+    const std::array<std::array<Pt, 5>, 8> cell = {{
+        {{{0.0, 0.0}, {1.0, -e}, {2.0, 0.0}, {2.0 - e, 1.0}, {e, 1.0}}},
+        {{{e, 1.0}, {0.0, 2.0}, {1.0, 2.0 + e}, {2.0, 2.0}, {2.0 - e, 1.0}}},
+        {{{0.0, 2.0}, {-e, 3.0}, {0.0, 4.0}, {1.0, 4.0 - e}, {1.0, 2.0 + e}}},
+        {{{1.0, 4.0 - e}, {2.0, 4.0}, {2.0 + e, 3.0}, {2.0, 2.0}, {1.0, 2.0 + e}}},
+        {{{2.0, 0.0}, {3.0, e}, {3.0, 2.0 - e}, {2.0, 2.0}, {2.0 - e, 1.0}}},
+        {{{3.0, e}, {3.0, 2.0 - e}, {4.0, 2.0}, {4.0 + e, 1.0}, {4.0, 0.0}}},
+        {{{3.0, 2.0 - e}, {2.0, 2.0}, {2.0 + e, 3.0}, {4.0 - e, 3.0}, {4.0, 2.0}}},
+        {{{2.0 + e, 3.0}, {4.0 - e, 3.0}, {4.0, 4.0}, {3.0, 4.0 + e}, {2.0, 4.0}}},
+    }};
+
+    const int radius = std::max(0, generations);
+    const int cells = 2 * radius + 1;
+    std::vector<Tile> out;
+    out.reserve(static_cast<size_t>(cells * cells) * cell.size());
+    for (int ix = -radius; ix <= radius; ++ix) {
+        for (int iy = -radius; iy <= radius; ++iy) {
+            const Xf T = ttrans(4.0 * ix, 4.0 * iy);
+            for (size_t type = 0; type < cell.size(); ++type) {
+                Tile tile{};
+                tile.vcount = 5;
+                tile.type = static_cast<uint8_t>(type);
+                for (int i = 0; i < 5; ++i) {
+                    const Pt p = transPt(T, cell[type][static_cast<size_t>(i)]);
+                    tile.x[i] = static_cast<float>(p.x);
+                    tile.y[i] = static_cast<float>(p.y);
+                }
+                out.push_back(tile);
+            }
+        }
+    }
+    normalizeTiles(out);
+    return out;
+}
+
 // =============================================================================
 // Per-family descriptor table
 // =============================================================================
@@ -1649,6 +2276,14 @@ const FamilyInfo kFamilyInfo[kFamilyCount] = {
                           { 5, 12, false, 0, 1, false, false } },
     /* Spectre       */ { 5, 0.3535533905932738f,  0, 0, true,  true,  0,
                           {10, 12, false, 0, 1, false, false } },
+    /* Equithirds    */ {10, static_cast<float>(kInvSqrt3), 6, 0, true,  false, 2,
+                          { 2,  6, false, 0, 1, false, false } },
+    /* CromwellKRT   */ { 5, 0.3819660112501051f,  5, 0, true,  false, 0,
+                          { 3, 10, false, 0, 1, false, false } },
+    /* GailiunasSpiral */ { 8, 1.0f,               0, 0, true,  true,  0,
+                          {18, 18, false, 0, 1, false, false } },
+    /* Cairo         */ { 8, 1.0f,                 4, 0, true,  true,  0,
+                          { 8,  8, false, 0, 1, false, true  } },
 };
 
 // =============================================================================
@@ -1712,6 +2347,16 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
             int s = (seedIdx < 0 || seedIdx > 8) ? 0 : seedIdx;
             return generateSpectre(s, cap);
         }
+        case Family::Equithirds: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            return generateEquithirds(s, cap);
+        }
+        case Family::CromwellKRT:
+            return generateCromwellKRT(seedIdx, cap);
+        case Family::GailiunasSpiral:
+            return generateGailiunasSpiral(seedIdx, cap);
+        case Family::Cairo:
+            return generateCairo(seedIdx, cap);
     }
     return {};
 }

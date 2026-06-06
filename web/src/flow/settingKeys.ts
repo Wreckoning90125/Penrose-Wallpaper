@@ -4,7 +4,7 @@
 import type { SettingKey } from '../settings/androidSettings';
 
 export const TILING_SETTING_KEYS: readonly SettingKey[] = ['family', 'seed', 'generation'];
-export const PALETTE_SETTING_KEYS: readonly SettingKey[] = ['preset', 'color_mode', 'color_count', 'color_spread'];
+export const PALETTE_SETTING_KEYS: readonly SettingKey[] = ['preset', 'color_mode', 'color_count', 'color_spread', 'color_spectral'];
 export const PROJECTION_SETTING_KEYS: readonly SettingKey[] = [
   'projection',
   'proj_blend',
@@ -12,7 +12,6 @@ export const PROJECTION_SETTING_KEYS: readonly SettingKey[] = [
   'hyp_boost_x',
   'hyp_boost_y',
   'hyp_fill_subdiv',
-  'hyp_border_subdiv',
 ];
 export const MATERIAL_SETTING_KEYS: readonly SettingKey[] = [
   'brightness',
@@ -24,7 +23,6 @@ export const MATERIAL_SETTING_KEYS: readonly SettingKey[] = [
   'mat_clearcoat',
   'mat_iridescence',
   'mat_sheen',
-  'mat_anisotropy',
   'mat_emissive',
 ];
 export const LIGHT_SETTING_KEYS: readonly SettingKey[] = [
@@ -76,6 +74,7 @@ export const GRAPH_PRESET_SETTING_KEYS: readonly SettingKey[] = [
   'color_count',
   'color_mode',
   'color_spread',
+  'color_spectral',
   'edge_profile_c',
   'edge_profile_glow',
   'edge_profile_h',

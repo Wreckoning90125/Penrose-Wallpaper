@@ -65,6 +65,14 @@ enum class NodeKind : uint16_t {
     // Appended after the target block so existing saved-graph node indices
     // never shift. A Source by category despite its enum position.
     SrcPageScroll,
+    SrcRms,
+    SrcSpectralFlux,
+    SrcOnsetStrength,
+    SrcCwtTransient,
+    SrcCrestFactor,
+    SrcBeatConfidence,
+    OpThresholdCompare,
+    OpLag,
 
     Count_,
 };
@@ -82,6 +90,13 @@ int                   descriptorCount();
 struct EvalContext {
     float bands[8]  = {};
     float beat      = 0.0f;
+    float rms       = 0.0f;
+    float spectralFlux = 0.0f;
+    float onsetStrength = 0.0f;
+    float cwtTransient = 0.0f;
+    float crestFactor = 0.0f;
+    float beatConfidence = 0.0f;
+    float dtSeconds = 1.0f / 60.0f;
     float timeSec   = 0.0f;
     float pageScroll = 0.0f;  // home-screen horizontal scroll, 0..1
 };
@@ -126,6 +141,8 @@ public:
     //   OpClamp         p0=lo,  p1=hi
     //   OpSmoothstep    p0=edge0, p1=edge1
     //   OpScaleBias     p0=gain, p1=bias
+    //   OpThresholdCompare p0=threshold
+    //   OpLag           p0=time_seconds
     // p2 is unused today; carried in the save shape because every
     // node serialises three floats regardless of kind.
     float p0 = 0.0f;

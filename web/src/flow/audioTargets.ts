@@ -5,7 +5,7 @@
 import { MAX_COLORS } from '../color/palette';
 
 export const AUDIO_TARGET_RANGES: Record<string, readonly [number, number]> = {
-  brightness: [40, 180],
+  brightness: [0, 100],
   border_l: [0, 100],
   border_c: [0, 37],
   border_h: [0, 359],
@@ -15,7 +15,8 @@ export const AUDIO_TARGET_RANGES: Record<string, readonly [number, number]> = {
   border_point: [0, 100],
   border_gap: [0, 100],
   color_count: [2, MAX_COLORS],
-  color_spread: [0, MAX_COLORS],
+  color_spread: [0, 100],
+  color_spectral: [0, 100],
   field_displace: [0, 100],
   field_relief: [0, 100],
   field_color: [0, 100],
@@ -23,11 +24,8 @@ export const AUDIO_TARGET_RANGES: Record<string, readonly [number, number]> = {
   field_freq: [0, 100],
   field_undulate_freq: [0, 100],
   field_speed: [0, 200],
-  generation: [0, 8],
   hyp_boost_x: [0, 100],
   hyp_boost_y: [0, 100],
-  hyp_border_subdiv: [1, 32],
-  hyp_fill_subdiv: [1, 8],
   hyp_scale: [0, 100],
   proj_blend: [0, 100],
   light_ambient: [0, 100],
@@ -36,16 +34,15 @@ export const AUDIO_TARGET_RANGES: Record<string, readonly [number, number]> = {
   light_intensity: [0, 200],
   light_warmth: [0, 100],
   luminance: [0, 1],
-  mat_anisotropy: [0, 100],
   mat_clearcoat: [0, 100],
-  mat_emissive: [0, 200],
+  mat_emissive: [0, 100],
   mat_iridescence: [0, 100],
   mat_metal_mod: [0, 100],
   mat_metalness: [0, 100],
   mat_relief: [0, 200],
   mat_rough_mod: [0, 100],
   mat_roughness: [0, 100],
-  mat_sheen: [0, 200],
+  mat_sheen: [0, 100],
 };
 
 export function audioTargetRange(handle: string | null | undefined): readonly [number, number] | null {

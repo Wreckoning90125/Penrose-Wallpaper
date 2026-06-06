@@ -6,12 +6,15 @@ import type { Edge, Node } from '@xyflow/react';
 import type { AudioFeatures, AudioModulationValues, DragMode } from '../types';
 import { audioTargetRange } from './audioTargets';
 import { dataObject, dataString, numberRecordFromObject, stringRecordFromObject } from './nodeData';
-import { isMathOperator, operatorKindFromData, operatorSpec } from './operatorSpecs';
+import { isMathOperator, operatorKindFromData, operatorSpec, type OperatorSpec } from './operatorSpecs';
 import { audioFeatureValue, clampSignal, clockSignalValue, signalKey } from './signalUtils';
 import { fxDescriptor } from '../render/postFxCatalog';
 import { FIELD_SOURCE_PARAMS } from './fieldSourceSpec';
+import { applyModulationTargetRange, editHoldsActiveTarget, finiteModulation } from './modulationTargetRuntime';
 
 export type AudioOperatorRuntimeState = {
+  gateChangedAt: Record<string, number | undefined>;
+  gateOpen: Record<string, boolean | undefined>;
   held: Record<string, number | undefined>;
   previous: Record<string, number | undefined>;
   triggerHigh: Record<string, boolean | undefined>;
@@ -27,7 +30,7 @@ function inputSignal(
   signals: Map<string, number>,
   nodeId: string,
   handle: string,
-  fallback = 0,
+  defaultValue = 0,
 ): number {
   let count = 0;
   let total = 0;
@@ -38,12 +41,22 @@ function inputSignal(
     total += value;
     count += 1;
   }
-  return count > 0 ? total / count : fallback;
+  return count > 0 ? total / count : defaultValue;
 }
 
-function operatorControl(values: Record<string, number>, key: string, fallback: number): number {
+function operatorControl(values: Record<string, number>, key: string, defaultValue: number): number {
   const value = values[key];
-  return typeof value === 'number' ? value : fallback;
+  return typeof value === 'number' ? value : defaultValue;
+}
+
+function operatorDefault(spec: OperatorSpec, key: string, defaultValue: number): number {
+  return spec.defaults?.[key] ?? defaultValue;
+}
+
+function smoothingAlpha(seconds: number, dtSeconds: number): number {
+  if (seconds <= 0) return 1;
+  if (dtSeconds <= 0) return 0;
+  return Math.max(0, Math.min(1, 1 - Math.exp(-dtSeconds / seconds)));
 }
 
 function evaluateOperatorSignal(
@@ -52,6 +65,7 @@ function evaluateOperatorSignal(
   signals: Map<string, number>,
   state: AudioOperatorRuntimeState,
   liveOperators: LiveOperatorDataMap,
+  nowMs: number,
 ): void {
   const kind = operatorKindFromData(node.data);
   if (!kind) return;
@@ -65,10 +79,18 @@ function evaluateOperatorSignal(
     ...stringRecordFromObject(dataObject(node.data, 'selectValues')),
     ...(live?.selectValues ?? {}),
   };
-  const input = (handle: string, fallback = 0): number => inputSignal(edges, signals, node.id, handle, fallback);
+  const input = (handle: string, defaultValue = 0): number => inputSignal(edges, signals, node.id, handle, defaultValue);
   const previousKey = `${node.id}:previous`;
   const previous = state.previous[previousKey] ?? 0;
+  const elapsedKey = `${node.id}:elapsed`;
+  const previousNow = state.previous[elapsedKey];
+  const dtSeconds = typeof previousNow === 'number'
+    ? Math.max(0, Math.min(1, (nowMs - previousNow) * 0.001))
+    : 1 / 60;
+  state.previous[elapsedKey] = nowMs;
   let output = 0;
+  let nextPrevious: number | null = null;
+  let gateOutput: number | null = null;
 
   if (spec.kind === 'gain') output = input('signal') * operatorControl(values, 'gain', 1);
   if (spec.kind === 'bias') output = input('signal') + operatorControl(values, 'bias', 0);
@@ -97,20 +119,54 @@ function evaluateOperatorSignal(
     output = outMin + clampSignal(t) * (outMax - outMin);
   }
   if (spec.kind === 'envelope') {
-    const gate = input('gate') > 0.5 ? 1 : 0;
+    const threshold = operatorControl(values, 'threshold', operatorDefault(spec, 'threshold', 0.5));
+    const gate = input('gate') >= threshold ? 1 : 0;
     const attack = operatorControl(values, 'attack', 0);
     const release = operatorControl(values, 'release', 0);
     const alpha = gate > previous
-      ? Math.max(0.02, 1 / (1 + attack * 60))
-      : Math.max(0.02, 1 / (1 + release * 60));
+      ? smoothingAlpha(attack, dtSeconds)
+      : smoothingAlpha(release, dtSeconds);
     output = previous + (gate - previous) * alpha;
   }
   if (spec.kind === 'lag') {
     const lag = operatorControl(values, 'time', 0);
-    const alpha = Math.max(0.02, 1 / (1 + lag * 60));
+    const alpha = smoothingAlpha(lag, dtSeconds);
     output = previous + (input('signal') - previous) * alpha;
   }
-  if (spec.kind === 'threshold') output = input('signal') >= operatorControl(values, 'threshold', 0.5) ? 1 : 0;
+  if (spec.kind === 'threshold') output = input('signal') >= operatorControl(values, 'threshold', operatorDefault(spec, 'threshold', 0.5)) ? 1 : 0;
+  if (spec.kind === 'gate') {
+    const value = input('signal');
+    const open = operatorControl(values, 'open', operatorDefault(spec, 'open', 0.55));
+    const close = operatorControl(values, 'close', operatorDefault(spec, 'close', 0.45));
+    const hold = Math.max(0, operatorControl(values, 'hold', operatorDefault(spec, 'hold', 0.08)));
+    const attack = Math.max(0, operatorControl(values, 'attack', operatorDefault(spec, 'attack', 0.03)));
+    const release = Math.max(0, operatorControl(values, 'release', operatorDefault(spec, 'release', 0.25)));
+    const floor = clampSignal(operatorControl(values, 'floor', operatorDefault(spec, 'floor', 0)));
+    const openKey = `${node.id}:gateOpen`;
+    const changedKey = `${node.id}:gateChangedAt`;
+    let isOpen = state.gateOpen[openKey] === true;
+    if (!isOpen && value >= open) {
+      isOpen = true;
+      state.gateChangedAt[changedKey] = nowMs;
+    }
+    if (isOpen && value <= close) {
+      const changedAt = state.gateChangedAt[changedKey] ?? nowMs;
+      if ((nowMs - changedAt) * 0.001 >= hold) {
+        isOpen = false;
+        state.gateChangedAt[changedKey] = nowMs;
+      }
+    }
+    if (isOpen && value > close) state.gateChangedAt[changedKey] = nowMs;
+    state.gateOpen[openKey] = isOpen;
+    const target = isOpen ? 1 : floor;
+    const alpha = target > previous
+      ? smoothingAlpha(attack, dtSeconds)
+      : smoothingAlpha(release, dtSeconds);
+    const gain = previous + (target - previous) * alpha;
+    output = value * gain;
+    nextPrevious = gain;
+    gateOutput = isOpen ? 1 : 0;
+  }
   if (spec.kind === 'invert') output = operatorControl(values, 'pivot', 0.5) * 2 - input('signal');
   if (spec.kind === 'math') {
     const op = isMathOperator(selects['op'] ?? '') ? selects['op'] : 'multiply';
@@ -123,7 +179,8 @@ function evaluateOperatorSignal(
     if (op === 'divide') output = Math.abs(b) < 1e-6 ? 0 : a / b;
   }
   if (spec.kind === 'sh') {
-    const trigger = input('trigger') > 0.5;
+    const threshold = operatorControl(values, 'threshold', operatorDefault(spec, 'threshold', 0.5));
+    const trigger = input('trigger') >= threshold;
     const triggerKey = `${node.id}:trigger`;
     const heldKey = `${node.id}:held`;
     if (trigger && !state.triggerHigh[triggerKey]) state.held[heldKey] = input('signal');
@@ -131,8 +188,10 @@ function evaluateOperatorSignal(
     output = state.held[heldKey] ?? input('signal');
   }
 
-  state.previous[previousKey] = output;
-  for (const handle of spec.outputs) signals.set(signalKey(node.id, handle), output);
+  state.previous[previousKey] = nextPrevious ?? output;
+  for (const handle of spec.outputs) {
+    signals.set(signalKey(node.id, handle), handle === 'gate' && gateOutput !== null ? gateOutput : output);
+  }
 }
 
 export function fxModulatedParams(
@@ -150,11 +209,10 @@ export function fxModulatedParams(
     const edge = edges.find(e => e.target === node.id && e.targetHandle === param.key);
     if (!edge) continue;
     const signal = signals.get(signalKey(edge.source, edge.sourceHandle));
-    if (typeof signal !== 'number') continue;
     const editKey = `fx:${node.id}:${param.key}`;
-    if (dragMode === 'hold' && activeEditKey === editKey) continue;
+    if (finiteModulation(signal) === null || editHoldsActiveTarget(dragMode, activeEditKey, editKey)) continue;
     const baseValue = base[param.key] ?? param.def;
-    out[param.key] = Math.min(param.max, Math.max(param.min, baseValue + signal * (param.max - param.min)));
+    out[param.key] = applyModulationTargetRange(baseValue, signal, param.min, param.max);
   }
   return out;
 }
@@ -174,10 +232,9 @@ export function fieldModulatedValues(
     const edge = edges.find(e => e.target === node.id && e.targetHandle === key);
     if (!edge) continue;
     const signal = signals.get(signalKey(edge.source, edge.sourceHandle));
-    if (typeof signal !== 'number') continue;
-    if (dragMode === 'hold' && activeEditKey === `field:${node.id}:${key}`) continue;
+    if (finiteModulation(signal) === null || editHoldsActiveTarget(dragMode, activeEditKey, `field:${node.id}:${key}`)) continue;
     const baseValue = base[key] ?? def;
-    out[key] = Math.min(max, Math.max(min, baseValue + signal * (max - min)));
+    out[key] = applyModulationTargetRange(baseValue, signal, min, max);
   }
   return out;
 }
@@ -224,7 +281,7 @@ export function evaluateSignals(
   };
   for (const node of operatorNodes) visit(node);
   for (const node of orderedOperators) {
-    evaluateOperatorSignal(node, edges, signals, state, liveOperators);
+    evaluateOperatorSignal(node, edges, signals, state, liveOperators, nowMs);
   }
 
   // Drop runtime state for operators no longer in the graph, so deleted operators
@@ -233,6 +290,8 @@ export function evaluateSignals(
   // so their smoothing/envelope/sample-and-hold continuity is untouched.
   const activeOperatorIds = new Set(operatorNodes.map(node => node.id));
   pruneOperatorState(state.held, activeOperatorIds);
+  pruneOperatorState(state.gateChangedAt, activeOperatorIds);
+  pruneOperatorState(state.gateOpen, activeOperatorIds);
   pruneOperatorState(state.previous, activeOperatorIds);
   pruneOperatorState(state.triggerHigh, activeOperatorIds);
 

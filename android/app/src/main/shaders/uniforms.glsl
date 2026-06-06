@@ -13,7 +13,7 @@
 #define PENROSE_UNIFORMS_GLSL
 
 layout(set = 0, binding = 0, std140) uniform Palette {
-    vec4  palette[16];
+    vec4  palette[18];
     vec4  borderColor;
     vec4  bgColor;
     uvec4 flags;

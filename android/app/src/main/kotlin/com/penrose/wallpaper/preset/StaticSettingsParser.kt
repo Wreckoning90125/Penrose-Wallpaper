@@ -46,15 +46,19 @@ internal object StaticSettingsParser {
 
     private fun intRange(min: Int, max: Int) = PrefSpec(PrefType.Int, min..max)
     private fun stringSet(vararg values: String) = PrefSpec(PrefType.String, allowedStrings = values.toSet())
+    private fun stringRange(min: Int, max: Int) = PrefSpec(
+        PrefType.String,
+        allowedStrings = (min..max).map { it.toString() }.toSet(),
+    )
     private val bool = PrefSpec(PrefType.Bool)
     private val float = PrefSpec(PrefType.Float)
 
     private val prefSchema = mapOf(
-        Settings.KEY_FAMILY to stringSet("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"),
-        Settings.KEY_SEED to stringSet("0", "1", "2", "3", "4", "5", "6", "7", "8"),
+        Settings.KEY_FAMILY to stringRange(0, 16),
+        Settings.KEY_SEED to stringRange(0, 51),
         Settings.KEY_GENERATION to intRange(0, 8),
         Settings.KEY_PRESET to stringSet("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"),
-        Settings.KEY_COLOR_COUNT to intRange(2, 16),
+        Settings.KEY_COLOR_COUNT to intRange(2, 18),
         Settings.KEY_COLOR_MODE to stringSet("0", "1", "2"),
         Settings.KEY_BORDER_ON to bool,
         Settings.KEY_BORDER_W to intRange(0, 600),
@@ -75,15 +79,15 @@ internal object StaticSettingsParser {
         Settings.KEY_ROTATION to float,
         Settings.KEY_PAN_X to float,
         Settings.KEY_PAN_Y to float,
-        Settings.KEY_BRIGHTNESS to intRange(0, 200),
+        Settings.KEY_BRIGHTNESS to intRange(0, 100),
         Settings.KEY_DEPTH_AMOUNT to intRange(0, 100),
         Settings.KEY_MAT_ROUGHNESS to intRange(0, 100),
         Settings.KEY_MAT_METALNESS to intRange(0, 100),
-        Settings.KEY_MAT_SHEEN to intRange(0, 200),
+        Settings.KEY_MAT_SHEEN to intRange(0, 100),
         Settings.KEY_MAT_CLEARCOAT to intRange(0, 100),
         Settings.KEY_MAT_ANISOTROPY to intRange(0, 100),
         Settings.KEY_MAT_IRIDESCENCE to intRange(0, 100),
-        Settings.KEY_MAT_EMISSIVE to intRange(0, 200),
+        Settings.KEY_MAT_EMISSIVE to intRange(0, 100),
         Settings.KEY_MAT_RELIEF to intRange(0, 200),
         Settings.KEY_LIGHT_ANGLE to intRange(0, 360),
         Settings.KEY_LIGHT_ELEVATION to intRange(0, 90),

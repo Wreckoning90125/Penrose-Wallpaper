@@ -15,7 +15,14 @@ import {
 } from './settings/androidSettings';
 import { useWebAudioGraph } from './audio/useWebAudioGraph';
 import { ControlGraph } from './flow/ControlGraph';
-import { clampNumber } from './util/clamp';
+import {
+  applyModulationTargetRange,
+  clampTargetValue,
+  editHoldsAnyParam,
+  editRidesAnyParam,
+  editRidesParam,
+  finiteModulation,
+} from './flow/modulationTargetRuntime';
 import type { AtlasCategory, AtlasItem, AtlasManifest, BoostPosition, DragMode, FieldSlot, Gains, GraphPresetAppState, LiveBoostStore, Patch, PostChainSpec, RenderInputs } from './types';
 import type { WallpaperRenderer } from './render/webgpuRenderer';
 
@@ -27,49 +34,38 @@ const CURRENT_CONTROLS = '__current_controls__';
 // Adding `preset` here would reintroduce a full mesh rebuild on every palette
 // change (and the Poincaré flatten/re-ball flicker that came with it).
 const FILL_GEOMETRY_SETTINGS: SettingKey[] = [
-  'color_count',
-  'color_mode',
   'hyp_fill_subdiv',
   'projection',
 ];
-const HYPERBOLIC_FILL_GEOMETRY_SETTINGS: SettingKey[] = [...FILL_GEOMETRY_SETTINGS, 'hyp_scale'];
+const PALETTE_CLASS_SETTINGS: SettingKey[] = ['color_count', 'color_mode', 'color_spread'];
 
-// Settings that reshape only the border mesh. Keeping these separate avoids
-// re-uploading the full surface mesh while dragging Close gap/Fill/Point/Width.
+// Border shape is real edge geometry: round/bevel/miter/fill/point/gap live in
+// borderJoin.ts. Rebuild only the edge mesh for these controls.
 const BORDER_GEOMETRY_SETTINGS: SettingKey[] = [
-  'border_fill',
-  'border_gap',
-  'border_join',
   'border_on',
-  'border_point',
   'border_width',
+  'border_join',
+  'border_fill',
+  'border_point',
+  'border_gap',
   'hyp_border_subdiv',
 ];
 type PreviewGeometryMode = 'fill' | 'border';
 
-// How many gradient stops the applied palette uses. `color_spread` overrides the
-// stop-count independently of how many tile buckets exist (`color_count`); 0 means
-// "follow Slots" so the historical look is unchanged. Re-baked live by
-// applyPaletteColors / buildMeshGeometry — no geometry rebuild for spread alone.
-function appliedColorStops(settings: Settings | Partial<Settings>): number {
-  const spread = intSetting(settings, 'color_spread', 0, MAX_COLORS);
-  return spread > 0 ? spread : intSetting(settings, 'color_count', 2, MAX_COLORS);
-}
-const APP_AUDIO_SETTING_KEYS: readonly SettingKey[] = [
-  'generation',
+const LIVE_MODULATED_SETTING_KEYS: readonly SettingKey[] = [
   'color_count',
   'color_spread',
-  'hyp_fill_subdiv',
-  'hyp_border_subdiv',
+  'color_spectral',
+  'border_width',
   'border_fill',
   'border_point',
   'border_gap',
-  'border_width',
 ];
 
 type SettingsMutator = (current: Settings) => Settings;
-type AppAudioSettingBases = Partial<Record<SettingKey, number>>;
+type LiveModulatedSettingBases = Partial<Record<SettingKey, number>>;
 type LuminanceModulationBase = { index: number; value: number };
+type PendingPaletteRender = { settings: Settings; palette: Palette };
 
 function errorMessage(error: Error | string): string {
   return error instanceof Error ? error.stack ?? error.message : error;
@@ -99,37 +95,36 @@ function settingsKey(settings: Settings, keys: SettingKey[]): string {
 }
 
 function fillGeometryKey(settings: Settings): string {
-  const keys = String(settings.projection) === '1' ? HYPERBOLIC_FILL_GEOMETRY_SETTINGS : FILL_GEOMETRY_SETTINGS;
-  return settingsKey(settings, keys);
+  return settingsKey(settings, FILL_GEOMETRY_SETTINGS);
 }
 
 function borderGeometryKey(settings: Settings): string {
   return settingsKey(settings, BORDER_GEOMETRY_SETTINGS);
 }
 
-function previewGeometryModeForSetting(key: SettingKey, settings: Settings): PreviewGeometryMode | null {
-  if (key === 'hyp_scale') return String(settings.projection) === '1' ? 'fill' : null;
+function borderGeometryBasisSettings(current: Settings, baked: Settings | null): Settings {
+  if (!baked) return current;
+  return {
+    ...current,
+    projection: baked.projection,
+    hyp_scale: baked.hyp_scale,
+  };
+}
+
+function previewGeometryModeForSetting(key: SettingKey): PreviewGeometryMode | null {
   if (FILL_GEOMETRY_SETTINGS.includes(key) || key === 'hyp_fill_subdiv') return 'fill';
   if (BORDER_GEOMETRY_SETTINGS.includes(key)) return 'border';
   return null;
+}
+
+function isPaletteClassSetting(key: SettingKey): boolean {
+  return PALETTE_CLASS_SETTINGS.includes(key);
 }
 
 function copyOklch(color: Oklch): Oklch {
   return [color[0], color[1], color[2]];
 }
 
-
-function finiteModulation(value: number | undefined): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function editIsHeld(
-  dragMode: DragMode,
-  heldParams: Record<string, boolean | undefined>,
-  keys: readonly string[],
-): boolean {
-  return dragMode === 'hold' && keys.some(key => heldParams[key] === true);
-}
 
 function heldSettingKeys(preview: Settings | null, heldParams: Record<string, boolean | undefined>): SettingKey[] {
   if (!preview) return [];
@@ -142,11 +137,18 @@ function settingsWithHeldPreview(
   base: Settings,
   preview: Settings | null,
   heldParams: Record<string, boolean | undefined>,
+  dragMode: DragMode,
+  modulations: Record<string, number | undefined>,
 ): Settings {
   const keys = heldSettingKeys(preview, heldParams);
   if (!preview || keys.length === 0) return base;
   const effective = { ...base };
-  for (const key of keys) effective[key] = preview[key];
+  for (const key of keys) {
+    const appTargetIsRiding = editRidesParam(dragMode, heldParams, key)
+      && LIVE_MODULATED_SETTING_KEYS.some(item => item === key)
+      && finiteModulation(modulations[key]) !== null;
+    if (!appTargetIsRiding) effective[key] = preview[key];
+  }
   return effective;
 }
 
@@ -160,21 +162,30 @@ function effectiveRenderSettings(
   base: Settings,
   preview: Settings | null,
   heldParams: Record<string, boolean | undefined>,
+  dragMode: DragMode,
+  modulations: Record<string, number | undefined>,
   boost: BoostPosition | null,
 ): Settings {
-  return settingsWithLiveBoost(settingsWithHeldPreview(base, preview, heldParams), boost);
+  return settingsWithLiveBoost(settingsWithHeldPreview(base, preview, heldParams, dragMode, modulations), boost);
 }
 
 function paletteForSettings(settings: Settings, customColors: Oklch[] | null): Palette {
   return buildPalette(
     intSetting(settings, 'preset', 0, MAX_PALETTE_PRESET),
-    appliedColorStops(settings),
+    intSetting(settings, 'color_count', 2, MAX_COLORS),
     customColors,
+    intSetting(settings, 'color_spectral', 0, 100) / 100,
   );
 }
 
-function sameAppAudioSettings(a: Partial<Settings>, b: Partial<Settings>): boolean {
-  return APP_AUDIO_SETTING_KEYS.every(key => a[key] === b[key]);
+function editablePaletteForSettings(settings: Settings, customColors: Oklch[] | null): Palette {
+  const colorCount = intSetting(settings, 'color_count', 2, MAX_COLORS);
+  if (customColors) return buildPalette(CUSTOM_PALETTE_PRESET, colorCount, customColors, 0);
+  return buildPalette(intSetting(settings, 'preset', 0, MAX_PALETTE_PRESET), colorCount, null, 0);
+}
+
+function sameLiveModulatedSettings(a: Partial<Settings>, b: Partial<Settings>): boolean {
+  return LIVE_MODULATED_SETTING_KEYS.every(key => a[key] === b[key]);
 }
 
 function paletteWithLuminance(palette: Palette, index: number, luminance: number): Palette {
@@ -184,6 +195,12 @@ function paletteWithLuminance(palette: Palette, index: number, luminance: number
       idx === index ? [luminance, color[1], color[2]] : copyOklch(color)
     )),
   };
+}
+
+function customPaletteSettings(settings: Settings): Settings {
+  return intSetting(settings, 'preset', 0, MAX_PALETTE_PRESET) === CUSTOM_PALETTE_PRESET
+    ? settings
+    : { ...settings, preset: String(CUSTOM_PALETTE_PRESET) };
 }
 
 function createLiveBoostStore(): LiveBoostStore {
@@ -234,21 +251,25 @@ export function App() {
     border: true,
   });
   const applyAudioDriveRef = useRef<() => void>(() => undefined);
+  const applyLiveSettingModulationsRef = useRef<() => void>(() => undefined);
   const schedulePreviewGeometryRef = useRef<(mode: PreviewGeometryMode) => void>(() => undefined);
-  const appModulationFrameRef = useRef(0);
-  // Live "Slots"/"Color mode" preview re-quantizes the tile→bucket assignment,
-  // which lives in the baked paletteSlot attribute — so the slider drag must
-  // rebuild the mesh, not just recolor it. These refs let the dependency-free
-  // previewSetting reach the (lazily imported) geometry builder + current patch.
+  const schedulePreviewPaletteSlotsRef = useRef<() => void>(() => undefined);
+  const liveSettingModulationFrameRef = useRef(0);
+  // Live geometry/colour preview needs dependency-free access to the lazy builders
+  // and current patch. Slots/Color mode only re-quantize paletteSlot in-place;
+  // subdivision/projection still rebuild real geometry.
   const buildMeshGeometryRef = useRef<typeof import('./tiling/geometry').buildMeshGeometry | null>(null);
   const buildEdgeGeometryRef = useRef<typeof import('./tiling/geometry').buildEdgeGeometryForPatch | null>(null);
+  const buildPaletteSlotsForPatchRef = useRef<typeof import('./tiling/geometry').buildPaletteSlotsForPatch | null>(null);
   const patchRef = useRef<Patch | null>(null);
   const framedPatchRef = useRef<Patch | null>(null);
   const previewGeometryFrameRef = useRef(0);
   const previewGeometryModeRef = useRef<PreviewGeometryMode>('border');
-  const appAudioSettingBasesRef = useRef<AppAudioSettingBases>({});
+  const previewPaletteFrameRef = useRef(0);
+  const liveModulatedSettingBasesRef = useRef<LiveModulatedSettingBases>({});
   const luminanceModBaseRef = useRef<LuminanceModulationBase | null>(null);
   const luminanceModActiveRef = useRef(false);
+  const bakedGeometrySettingsRef = useRef<Settings | null>(null);
   const gainsRef = useRef<Gains>({ relief: 0.28, emissive: 0.55, film: 0.36, metal: 0.18 });
   const dragModeRef = useRef<DragMode>('ride');
   if (!liveBoostStoreRef.current) liveBoostStoreRef.current = createLiveBoostStore();
@@ -257,7 +278,7 @@ export function App() {
   const [categoryId, setCategoryId] = useState('');
   const [targetId, setTargetId] = useState(CURRENT_CONTROLS);
   const [settings, setSettings] = useState(() => normalizeSettings(DEFAULT_SETTINGS));
-  const [appAudioSettings, setAppAudioSettings] = useState<Partial<Settings>>({});
+  const [liveModulatedSettings, setLiveModulatedSettings] = useState<Partial<Settings>>({});
   const [patch, setPatch] = useState<Patch | null>(null);
   const [customColors, setCustomColors] = useState<Oklch[] | null>(null);
   const customColorsRef = useRef<Oklch[] | null>(null);
@@ -271,6 +292,9 @@ export function App() {
   const [dragMode, setDragMode] = useState<DragMode>('ride');
   const settingsRef = useRef(settings);
   const selectedColorRef = useRef(selectedColor);
+  const customColorFrameRef = useRef(0);
+  const customColorPreviewActiveRef = useRef(false);
+  const pendingCustomColorRenderRef = useRef<PendingPaletteRender | null>(null);
   const audio = useWebAudioGraph();
 
   const activeCategory = useMemo(() => (
@@ -287,22 +311,22 @@ export function App() {
   const maxGeneration = maxGenerationForFamily(settings.family);
   const colorCount = intSetting(settings, 'color_count', 2, MAX_COLORS);
   const palettePreset = intSetting(settings, 'preset', 0, MAX_PALETTE_PRESET);
-  // Slots (color_count) quantizes tiles into buckets; Spread (color_spread) sets
-  // the palette gradient's stop-count independently. 0 = follow Slots, so the
-  // default look is unchanged. See appliedColorStops.
-  const appliedStops = appliedColorStops(settings);
+  const colorSpectral = intSetting(settings, 'color_spectral', 0, 100);
   const palette = useMemo(() => (
-    buildPalette(palettePreset, appliedStops, customColors)
-  ), [appliedStops, customColors, palettePreset]);
+    buildPalette(palettePreset, colorCount, customColors, colorSpectral / 100)
+  ), [colorCount, colorSpectral, customColors, palettePreset]);
+  const editablePalette = useMemo(() => (
+    editablePaletteForSettings(settings, customColors)
+  ), [customColors, settings]);
   const renderSettings = useMemo(() => (
-    clampGeneration(normalizeSettings({ ...settings, ...appAudioSettings }))
-  ), [appAudioSettings, settings]);
+    clampGeneration(normalizeSettings({ ...settings, ...liveModulatedSettings }))
+  ), [liveModulatedSettings, settings]);
   const renderColorCount = intSetting(renderSettings, 'color_count', 2, MAX_COLORS);
   const renderPalettePreset = intSetting(renderSettings, 'preset', 0, MAX_PALETTE_PRESET);
-  const renderAppliedStops = appliedColorStops(renderSettings);
+  const renderColorSpectral = intSetting(renderSettings, 'color_spectral', 0, 100);
   const renderPalette = useMemo(() => (
-    buildPalette(renderPalettePreset, renderAppliedStops, customColors)
-  ), [customColors, renderAppliedStops, renderPalettePreset]);
+    buildPalette(renderPalettePreset, renderColorCount, customColors, renderColorSpectral / 100)
+  ), [customColors, renderColorCount, renderColorSpectral, renderPalettePreset]);
   const renderColorCountRef = useRef(renderColorCount);
   const renderPaletteRef = useRef(renderPalette);
   // Lets previewSetting read the live palette without a dependency on it, so
@@ -316,9 +340,10 @@ export function App() {
   const renderSettingsRef = useRef(renderSettings);
   const fillGeometrySettingsKey = useMemo(() => fillGeometryKey(renderSettings), [renderSettings]);
   const borderGeometrySettingsKey = useMemo(() => borderGeometryKey(renderSettings), [renderSettings]);
+  const paletteClassSettingsKey = useMemo(() => settingsKey(renderSettings, PALETTE_CLASS_SETTINGS), [renderSettings]);
   const appliedBorderGeometryRef = useRef<{ key: string; patch: Patch } | null>(null);
   const selectedColorValue: Oklch =
-    palette.colors[Math.min(selectedColor, colorCount - 1)] ?? palette.colors[0] ?? [0.78, 0.13, 80];
+    editablePalette.colors[Math.min(selectedColor, colorCount - 1)] ?? editablePalette.colors[0] ?? [0.78, 0.13, 80];
   const drawerStyle: CSSProperties & Record<'--drawer-width', string> = {
     '--drawer-width': `${drawerWidth}px`,
   };
@@ -345,21 +370,27 @@ export function App() {
       [key]: value,
     };
     previewSettingsRef.current = next;
-    // Geometry-shape settings change the baked mesh (Slots/Color mode re-quantize the
-    // paletteSlot attribute; Border width/Fill/Point and the subdivisions reshape the
-    // mesh), so the live preview must REBUILD — debounced — not merely set uniforms.
-    // This makes the drag update continuously (honoring ride/hold) instead of
-    // deferring to commit. Border colour/opacity (l/c/h/a) are runtime uniforms,
-    // handled by setSettings below.
-    const geometryMode = previewGeometryModeForSetting(key, next);
+    if (
+      LIVE_MODULATED_SETTING_KEYS.some(item => item === key)
+      && finiteModulation(audioModulationsRef.current[key]) !== null
+    ) {
+      applyLiveSettingModulationsRef.current();
+    }
+    if (isPaletteClassSetting(key)) {
+      schedulePreviewPaletteSlotsRef.current();
+      return;
+    }
+    // Geometry-shape settings change baked positions/topology. Live preview still
+    // updates continuously, but only real geometry changes take the rebuild path.
+    // Border colour/opacity (l/c/h/a) are runtime uniforms handled below.
+    const geometryMode = previewGeometryModeForSetting(key);
     if (geometryMode) {
       schedulePreviewGeometryRef.current(geometryMode);
       return;
     }
-    // Spread (and preset) only change colour *values* per bucket — recolour live
-    // with the spread-aware applied palette, no rebuild. Default spread 0 = follow
-    // Slots, so nothing changes versus the historical look.
-    const nextPalette = key === 'preset' || key === 'color_spread'
+    // Spectral (and preset) only change colour *values* per bucket; Spread changes
+    // bucket-to-slot assignment and is handled by the palette-slot path above.
+    const nextPalette = key === 'preset' || key === 'color_spectral'
       ? paletteForSettings(next, customColorsRef.current)
       : paletteRef.current;
     rendererRef.current?.setSettings(next, nextPalette);
@@ -370,10 +401,43 @@ export function App() {
     applyAudioDriveRef.current();
   }, []);
 
+  const schedulePreviewPaletteSlots = useCallback(() => {
+    if (previewPaletteFrameRef.current) return;
+    previewPaletteFrameRef.current = requestAnimationFrame(() => {
+      previewPaletteFrameRef.current = 0;
+      try {
+        const buildSlots = buildPaletteSlotsForPatchRef.current;
+        const currentPatch = patchRef.current;
+        const renderer = rendererRef.current;
+        if (!buildSlots || !currentPatch || !renderer) return;
+        const current = effectiveRenderSettings(
+          previewSettingsRef.current ?? settingsRef.current,
+          previewSettingsRef.current,
+          heldParamsRef.current,
+          dragModeRef.current,
+          audioModulationsRef.current,
+          boostRef.current ?? liveBoostStore.getSnapshot(),
+        );
+        const { paletteSlot, palette: builtPalette } = buildSlots(currentPatch, current, customColorsRef.current);
+        if (!renderer.setPaletteSlots(paletteSlot, builtPalette, { render: false })) {
+          schedulePreviewGeometryRef.current('fill');
+          return;
+        }
+        renderer.setSettings(current, builtPalette);
+        applyAudioDriveRef.current();
+      } catch (caught) {
+        setError(caught instanceof Error ? errorMessage(caught) : String(caught));
+      }
+    });
+  }, [liveBoostStore]);
+
+  useEffect(() => {
+    schedulePreviewPaletteSlotsRef.current = schedulePreviewPaletteSlots;
+  }, [schedulePreviewPaletteSlots]);
+
   // Rebuild the mesh from the live preview settings, coalesced to one rebuild per
-  // frame, so dragging Slots / Color mode re-quantizes the tiles live. Uses the
-  // lazily-imported builder cached by the geometry effect; before that first import
-  // resolves there is nothing on screen to re-quantize, so it simply no-ops.
+  // frame. Uses lazy builders cached by the geometry effect; before that import
+  // resolves there is nothing on screen to update, so it simply no-ops.
   const schedulePreviewGeometry = useCallback((mode: PreviewGeometryMode) => {
     if (mode === 'fill') previewGeometryModeRef.current = 'fill';
     if (previewGeometryFrameRef.current) return;
@@ -392,18 +456,22 @@ export function App() {
           previewSettingsRef.current ?? settingsRef.current,
           previewSettingsRef.current,
           heldParamsRef.current,
+          dragModeRef.current,
+          audioModulationsRef.current,
           boostRef.current ?? liveBoostStore.getSnapshot(),
         );
         if (scheduledMode === 'border') {
           if (!buildEdge) return;
+          const edgeBasis = borderGeometryBasisSettings(current, bakedGeometrySettingsRef.current);
           renderer.setSettings(current, paletteForSettings(current, customColorsRef.current));
-          renderer.setEdgeGeometry(buildEdge(currentPatch, current));
+          renderer.setEdgeGeometry(buildEdge(currentPatch, edgeBasis));
           appliedBorderGeometryRef.current = { key: borderGeometryKey(current), patch: currentPatch };
         } else {
           if (!buildMesh) return;
           const { geometry, edgeGeometry, palette: builtPalette } = buildMesh(currentPatch, current, customColorsRef.current);
           renderer.setSettings(current, builtPalette);
           renderer.setGeometry(geometry, edgeGeometry, { frame: false, warmup: false });
+          bakedGeometrySettingsRef.current = current;
           appliedBorderGeometryRef.current = { key: borderGeometryKey(current), patch: currentPatch };
         }
         applyAudioDriveRef.current();
@@ -428,7 +496,7 @@ export function App() {
   useEffect(() => {
     previewSettingsRef.current = settings;
     settingsRef.current = settings;
-    appAudioSettingBasesRef.current = {};
+    liveModulatedSettingBasesRef.current = {};
   }, [settings]);
 
   useEffect(() => {
@@ -452,6 +520,7 @@ export function App() {
   }, [palette]);
 
   useEffect(() => {
+    if (customColorPreviewActiveRef.current) return;
     renderPaletteRef.current = renderPalette;
   }, [renderPalette]);
 
@@ -478,53 +547,46 @@ export function App() {
     applyAudioDriveRef.current = applyAudioDrive;
   }, [applyAudioDrive]);
 
-  const applyAppAudioModulations = useCallback(() => {
+  const applyLiveSettingModulations = useCallback(() => {
     const modulations = audioModulationsRef.current;
     const heldParams = heldParamsRef.current;
     const dragMode = dragModeRef.current;
     const baselineSettings = previewSettingsRef.current ?? settingsRef.current;
     const persistentSettings = settingsRef.current;
-    const bases = appAudioSettingBasesRef.current;
-    const nextAudioSettings: Partial<Settings> = {};
+    const bases = liveModulatedSettingBasesRef.current;
+    const nextLiveSettings: Partial<Settings> = {};
 
     const applyIntegerTarget = (key: SettingKey, min: number, max: number): void => {
       const signal = finiteModulation(modulations[key]);
-      const editing = heldParams[key] === true;
-      if (signal === null || editIsHeld(dragMode, heldParams, [key])) {
+      if (signal === null || editHoldsAnyParam(dragMode, heldParams, [key])) {
         delete bases[key];
         return;
       }
       const currentBaseline = intSetting(baselineSettings, key, min, max);
-      if (dragMode === 'ride' && editing) bases[key] = currentBaseline;
+      if (editRidesParam(dragMode, heldParams, key)) bases[key] = currentBaseline;
       const base = bases[key] ?? currentBaseline;
       bases[key] = base;
       const persistentValue = intSetting(persistentSettings, key, min, max);
-      const nextValue = Math.round(clampNumber(base + signal * (max - min), min, max));
-      if (nextValue !== persistentValue) nextAudioSettings[key] = nextValue;
+      const nextValue = Math.round(applyModulationTargetRange(base, signal, min, max));
+      if (nextValue !== persistentValue) nextLiveSettings[key] = nextValue;
     };
 
-    const generationMax = maxGenerationForFamily(String(baselineSettings.family ?? DEFAULT_SETTINGS.family));
-    applyIntegerTarget('generation', 0, generationMax);
     applyIntegerTarget('color_count', 2, MAX_COLORS);
-    // Spread modulates the palette gradient only (not in GEOMETRY_SETTINGS), so it
-    // recolours live through the uniform-apply effect — no per-frame mesh rebuild,
-    // unlike color_count above.
-    applyIntegerTarget('color_spread', 0, MAX_COLORS);
-    applyIntegerTarget('hyp_fill_subdiv', 1, 8);
-    applyIntegerTarget('hyp_border_subdiv', 1, 32);
+    applyIntegerTarget('color_spread', 0, 100);
+    applyIntegerTarget('color_spectral', 0, 100);
     applyIntegerTarget('border_width', 0, 600);
     applyIntegerTarget('border_fill', 0, 100);
     applyIntegerTarget('border_point', 0, 100);
     applyIntegerTarget('border_gap', 0, 100);
 
-    setAppAudioSettings(current => (
-      sameAppAudioSettings(current, nextAudioSettings) ? current : nextAudioSettings
+    setLiveModulatedSettings(current => (
+      sameLiveModulatedSettings(current, nextLiveSettings) ? current : nextLiveSettings
     ));
 
     const selectedIndex = Math.max(0, Math.min(selectedColorRef.current, renderColorCountRef.current - 1));
     const luminanceKey = `custom_color_${selectedIndex}_luminance`;
     const luminanceSignal = finiteModulation(modulations['luminance']);
-    const luminanceHeld = editIsHeld(dragMode, heldParams, ['luminance', luminanceKey]);
+    const luminanceHeld = editHoldsAnyParam(dragMode, heldParams, ['luminance', luminanceKey]);
     const renderer = rendererRef.current;
     if (luminanceSignal === null || luminanceHeld || !renderer) {
       luminanceModBaseRef.current = null;
@@ -538,28 +600,32 @@ export function App() {
 
     const basePalette = renderPaletteRef.current;
     const sourceColor = basePalette.colors[selectedIndex] ?? basePalette.colors[0] ?? [0.78, 0.13, 80];
-    const editingLuminance = heldParams[luminanceKey] === true || heldParams['luminance'] === true;
+    const editingLuminance = editRidesAnyParam(dragMode, heldParams, [luminanceKey, 'luminance']);
     if (
       !luminanceModBaseRef.current
       || luminanceModBaseRef.current.index !== selectedIndex
-      || (dragMode === 'ride' && editingLuminance)
+      || editingLuminance
     ) {
       luminanceModBaseRef.current = { index: selectedIndex, value: sourceColor[0] };
     }
     const base = luminanceModBaseRef.current;
-    const nextLuminance = clampNumber(base.value + luminanceSignal, 0, 1);
+    const nextLuminance = clampTargetValue(base.value + luminanceSignal, 0, 1);
     renderer.applyPaletteColors(paletteWithLuminance(basePalette, selectedIndex, nextLuminance));
     renderer.render();
     luminanceModActiveRef.current = true;
   }, []);
 
-  const scheduleAppAudioModulations = useCallback(() => {
-    if (appModulationFrameRef.current) return;
-    appModulationFrameRef.current = requestAnimationFrame(() => {
-      appModulationFrameRef.current = 0;
-      applyAppAudioModulations();
+  useEffect(() => {
+    applyLiveSettingModulationsRef.current = applyLiveSettingModulations;
+  }, [applyLiveSettingModulations]);
+
+  const scheduleLiveSettingModulations = useCallback(() => {
+    if (liveSettingModulationFrameRef.current) return;
+    liveSettingModulationFrameRef.current = requestAnimationFrame(() => {
+      liveSettingModulationFrameRef.current = 0;
+      applyLiveSettingModulations();
     });
-  }, [applyAppAudioModulations]);
+  }, [applyLiveSettingModulations]);
 
   useEffect(() => {
     let cancelled = false;
@@ -581,7 +647,8 @@ export function App() {
     return () => {
       cancelled = true;
       if (boostFrameRef.current) cancelAnimationFrame(boostFrameRef.current);
-      if (appModulationFrameRef.current) cancelAnimationFrame(appModulationFrameRef.current);
+      if (customColorFrameRef.current) cancelAnimationFrame(customColorFrameRef.current);
+      if (liveSettingModulationFrameRef.current) cancelAnimationFrame(liveSettingModulationFrameRef.current);
       if (previewGeometryFrameRef.current) cancelAnimationFrame(previewGeometryFrameRef.current);
     };
   }, []);
@@ -649,9 +716,10 @@ export function App() {
     let activeGeometry: BufferGeometry | null = null;
     let activeEdgeGeometry: BufferGeometry | null = null;
     async function buildGeometry() {
-      const { buildEdgeGeometryForPatch, buildMeshGeometry } = await import('./tiling/geometry');
+      const { buildEdgeGeometryForPatch, buildMeshGeometry, buildPaletteSlotsForPatch } = await import('./tiling/geometry');
       buildMeshGeometryRef.current = buildMeshGeometry;
       buildEdgeGeometryRef.current = buildEdgeGeometryForPatch;
+      buildPaletteSlotsForPatchRef.current = buildPaletteSlotsForPatch;
       if (cancelled || !rendererRef.current) return;
       // Read the latest settings from a ref: this effect intentionally re-runs only
       // when the fill/topology key changes or the patch does — NOT on border-only
@@ -663,6 +731,8 @@ export function App() {
         renderSettingsRef.current,
         previewSettingsRef.current,
         heldParamsRef.current,
+        dragModeRef.current,
+        audioModulationsRef.current,
         boostRef.current ?? liveBoostStore.getSnapshot(),
       );
       const { geometry, edgeGeometry, palette: builtPalette } = buildMeshGeometry(currentPatch, current, customColorsRef.current);
@@ -671,6 +741,7 @@ export function App() {
       activeEdgeGeometry = edgeGeometry;
       rendererRef.current.setSettings(current, builtPalette);
       rendererRef.current.setGeometry(geometry, edgeGeometry, { frame: shouldFrame, warmup: shouldFrame });
+      bakedGeometrySettingsRef.current = current;
       framedPatchRef.current = currentPatch;
       appliedBorderGeometryRef.current = { key: borderGeometryKey(current), patch: currentPatch };
       activeGeometry = null;
@@ -689,6 +760,35 @@ export function App() {
   useEffect(() => {
     if (!patch || !rendererReady || !rendererRef.current) return;
     const currentPatch = patch;
+    let cancelled = false;
+    async function reclassifyPaletteSlots() {
+      const { buildPaletteSlotsForPatch } = await import('./tiling/geometry');
+      buildPaletteSlotsForPatchRef.current = buildPaletteSlotsForPatch;
+      if (cancelled || !rendererRef.current) return;
+      const current = effectiveRenderSettings(
+        renderSettingsRef.current,
+        previewSettingsRef.current,
+        heldParamsRef.current,
+        dragModeRef.current,
+        audioModulationsRef.current,
+        boostRef.current ?? liveBoostStore.getSnapshot(),
+      );
+      const { paletteSlot, palette: builtPalette } = buildPaletteSlotsForPatch(currentPatch, current, customColorsRef.current);
+      if (!rendererRef.current.setPaletteSlots(paletteSlot, builtPalette, { render: false })) return;
+      rendererRef.current.setSettings(current, builtPalette);
+      applyAudioDriveRef.current();
+    }
+    void reclassifyPaletteSlots().catch(caught => {
+      if (!cancelled) setError(caught instanceof Error ? errorMessage(caught) : String(caught));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [liveBoostStore, paletteClassSettingsKey, patch, rendererReady]);
+
+  useEffect(() => {
+    if (!patch || !rendererReady || !rendererRef.current) return;
+    const currentPatch = patch;
     const applied = appliedBorderGeometryRef.current;
     if (applied?.patch === currentPatch && applied.key === borderGeometrySettingsKey) return;
     let cancelled = false;
@@ -701,9 +801,12 @@ export function App() {
         renderSettingsRef.current,
         previewSettingsRef.current,
         heldParamsRef.current,
+        dragModeRef.current,
+        audioModulationsRef.current,
         boostRef.current ?? liveBoostStore.getSnapshot(),
       );
-      activeEdgeGeometry = buildEdgeGeometryForPatch(currentPatch, current);
+      const edgeBasis = borderGeometryBasisSettings(current, bakedGeometrySettingsRef.current);
+      activeEdgeGeometry = buildEdgeGeometryForPatch(currentPatch, edgeBasis);
       rendererRef.current.setSettings(current, paletteForSettings(current, customColorsRef.current));
       rendererRef.current.setEdgeGeometry(activeEdgeGeometry);
       appliedBorderGeometryRef.current = { key: borderGeometrySettingsKey, patch: currentPatch };
@@ -731,11 +834,17 @@ export function App() {
       renderSettings,
       previewSettingsRef.current,
       heldParamsRef.current,
+      dragModeRef.current,
+      audioModulationsRef.current,
       boostRef.current ?? liveBoostStore.getSnapshot(),
     );
-    const effectivePalette = effective === renderSettings ? renderPalette : paletteForSettings(effective, customColorsRef.current);
+    const currentCustomColors = customColorsRef.current;
+    const effectivePalette = effective === renderSettings && currentCustomColors === customColors
+      ? renderPalette
+      : paletteForSettings(effective, currentCustomColors);
+    renderPaletteRef.current = effectivePalette;
     rendererRef.current.setSettings(effective, effectivePalette);
-  }, [liveBoostStore, renderPalette, renderSettings, rendererReady]);
+  }, [customColors, liveBoostStore, renderPalette, renderSettings, rendererReady]);
 
   useEffect(() => {
     applyAudioDrive();
@@ -787,6 +896,8 @@ export function App() {
     setCategoryId(category.id);
     setTargetId(item.id);
     setSettings(targetSettings(item));
+    customColorPreviewActiveRef.current = false;
+    customColorsRef.current = null;
     setCustomColors(null);
     setSelectedColor(0);
   }, [manifest]);
@@ -798,30 +909,57 @@ export function App() {
       if (!nextFamily.seeds.some(seed => seed.value === String(current.seed))) {
         current.seed = nextFamily.seeds[0]!.value;
       }
+      if (nextFamily.showOrientMode === false && String(current.color_mode) === '1') {
+        current.color_mode = '0';
+      }
       current.generation = Math.min(Number(current.generation ?? 0), nextFamily.maxGeneration);
       return current;
     });
   }, [updateSettings]);
 
-  const ensureCustomColors = useCallback((): Oklch[] => {
-    if (customColors) return customColors.map(copyOklch);
-    // Seed from the *displayed* palette (Spread-aware stop count), not the raw
-    // Slots count, so starting to edit a colour doesn't snap the others from the
-    // on-screen spread gradient to a different resolution. spread 0 = follow Slots,
-    // so this is identical to the old behaviour in the default case.
-    const source = buildPalette(palettePreset, appliedStops).colors;
-    return source.map(copyOklch);
-  }, [appliedStops, customColors, palettePreset]);
+  const scheduleCustomColorRender = useCallback((settingsForRender: Settings, paletteForRender: Palette) => {
+    pendingCustomColorRenderRef.current = { settings: settingsForRender, palette: paletteForRender };
+    if (customColorFrameRef.current) return;
+    customColorFrameRef.current = requestAnimationFrame(() => {
+      customColorFrameRef.current = 0;
+      const pending = pendingCustomColorRenderRef.current;
+      pendingCustomColorRenderRef.current = null;
+      if (!pending) return;
+      rendererRef.current?.setSettings(pending.settings, pending.palette);
+      applyAudioDriveRef.current();
+    });
+  }, []);
 
-  const updateCustomColor = useCallback((updater: (color: Oklch) => Oklch) => {
-    const nextColors = ensureCustomColors();
-    const idx = Math.min(selectedColor, colorCount - 1);
-    nextColors[idx] = updater(copyOklch(nextColors[idx]!));
-    setCustomColors(nextColors);
-    if (palettePreset !== CUSTOM_PALETTE_PRESET) setSetting('preset', String(CUSTOM_PALETTE_PRESET));
-  }, [colorCount, ensureCustomColors, palettePreset, selectedColor, setSetting]);
+  const previewCustomColor = useCallback((updater: (color: Oklch) => Oklch) => {
+    const current = settingsRef.current;
+    const nextColors = editablePaletteForSettings(current, customColorsRef.current).colors.map(copyOklch);
+    const currentColorCount = intSetting(current, 'color_count', 2, MAX_COLORS);
+    const idx = Math.max(0, Math.min(selectedColorRef.current, currentColorCount - 1));
+    nextColors[idx] = updater(copyOklch(nextColors[idx] ?? nextColors[0] ?? [0.78, 0.13, 80]));
+    customColorsRef.current = nextColors;
+    const nextSettings = customPaletteSettings(current);
+    const nextRenderSettings = customPaletteSettings(renderSettingsRef.current);
+    const nextPalette = paletteForSettings(nextSettings, nextColors);
+    const nextRenderPalette = paletteForSettings(nextRenderSettings, nextColors);
+    customColorPreviewActiveRef.current = true;
+    paletteRef.current = nextPalette;
+    renderPaletteRef.current = nextRenderPalette;
+    scheduleCustomColorRender(nextRenderSettings, nextRenderPalette);
+  }, [scheduleCustomColorRender]);
+
+  const commitCustomColor = useCallback(() => {
+    const nextColors = customColorsRef.current;
+    if (!nextColors) return;
+    customColorPreviewActiveRef.current = false;
+    setCustomColors(nextColors.map(copyOklch));
+    if (intSetting(settingsRef.current, 'preset', 0, MAX_PALETTE_PRESET) !== CUSTOM_PALETTE_PRESET) {
+      setSetting('preset', String(CUSTOM_PALETTE_PRESET));
+    }
+  }, [setSetting]);
 
   const onPalette = useCallback((value: string) => {
+    customColorPreviewActiveRef.current = false;
+    customColorsRef.current = null;
     setCustomColors(null);
     setSetting('preset', value);
   }, [setSetting]);
@@ -846,8 +984,8 @@ export function App() {
   const onAudioModulation = useCallback((values: Record<string, number | undefined>) => {
     audioModulationsRef.current = values;
     applyAudioDriveRef.current();
-    scheduleAppAudioModulations();
-  }, [scheduleAppAudioModulations]);
+    scheduleLiveSettingModulations();
+  }, [scheduleLiveSettingModulations]);
 
   const onPostChain = useCallback((spec: PostChainSpec) => {
     postChainRef.current = spec;
@@ -866,18 +1004,28 @@ export function App() {
 
   const onFieldSlots = useCallback((slots: FieldSlot[]) => {
     fieldSlotsRef.current = slots;
-    rendererRef.current?.setFieldSlots(slots);
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    renderer.setFieldSlots(slots);
+    renderer.flushPendingRender();
   }, []);
 
   const applyGraphPresetState = useCallback((state: GraphPresetAppState) => {
-    setCategoryId(state.categoryId);
-    setTargetId(state.targetId);
+    const category = manifest?.categories?.find(item => item.id === state.categoryId) ?? manifest?.categories?.[0] ?? null;
+    const target = category && state.targetId !== CURRENT_CONTROLS
+      ? category.items.find(item => item.id === state.targetId) ?? null
+      : null;
+    setCategoryId(category?.id ?? state.categoryId);
+    setTargetId(target?.id ?? CURRENT_CONTROLS);
     setSettings(current => clampGeneration(normalizeSettings({ ...current, ...state.settings })));
-    setCustomColors(state.customColors ? state.customColors.map(copyOklch) : null);
+    const nextCustomColors = state.customColors ? state.customColors.map(copyOklch) : null;
+    customColorPreviewActiveRef.current = false;
+    customColorsRef.current = nextCustomColors;
+    setCustomColors(nextCustomColors);
     setSelectedColor(Math.max(0, state.selectedColor));
     setGains(current => ({ ...current, ...state.gains }));
     setDragMode(state.dragMode);
-  }, []);
+  }, [manifest]);
 
   const resetBoost = useCallback(() => {
     updateSettings(current => {
@@ -1000,7 +1148,8 @@ export function App() {
               onPreviewSetting={previewSetting}
               onPalette={onPalette}
               onSelectedColor={setSelectedColor}
-              onCustomColor={updateCustomColor}
+              onPreviewCustomColor={previewCustomColor}
+              onCommitCustomColor={commitCustomColor}
               onGain={onGain}
               onAudioModulation={onAudioModulation}
               onPostChain={onPostChain}

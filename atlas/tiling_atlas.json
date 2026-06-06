@@ -131,7 +131,7 @@
             "preset": "9",
             "color_mode": "2",
             "color_count": 10,
-            "generation": 4,
+            "generation": 3,
             "mat_iridescence": 80,
             "mat_relief": 128
           }
@@ -636,6 +636,8 @@
       "label": "Binary, Tuebingen, and stepped-boundary looks",
       "sources": [
         "docs/tilings/pentagonal-binary.md",
+        "docs/tilings/equithirds.md",
+        "docs/tilings/cromwell-krt.md",
         "docs/hyperbolic/projection-design.md"
       ],
       "defaults": {
@@ -705,6 +707,30 @@
             "color_mode": "2",
             "color_count": 8,
             "generation": 4
+          }
+        },
+        {
+          "id": "stepped-equithirds-split",
+          "name": "Equithirds triangle split",
+          "settings": {
+            "family": "13",
+            "seed": "0",
+            "preset": "8",
+            "color_mode": "0",
+            "color_count": 2,
+            "generation": 5
+          }
+        },
+        {
+          "id": "stepped-cromwell-krt-star",
+          "name": "Cromwell KRT star layers",
+          "settings": {
+            "family": "14",
+            "seed": "3",
+            "preset": "9",
+            "color_mode": "2",
+            "color_count": 5,
+            "generation": 2
           }
         },
         {

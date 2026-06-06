@@ -3,24 +3,25 @@
 Hard-won rules for this codebase. Violating the first two produced the same
 black-tile regression five times; this file exists so they don't recur.
 
-## 1. The material must reference ≤ 8 vertex attributes (hard WebGPU limit)
+## 1. The material must use ≤ 8 vertex-buffer slots (hard WebGPU limit)
 
 `maxVertexBuffers` is **8** (W3C WebGPU spec, mirrored in `docs/webGpuW3Spec/`).
-The surface material references `position`, `normal`, `uv`, `color`, and the custom
-attributes (`tileType`, `tileRing`, `tileOrient`, `tileCenter`). Keep standard
-`uv` present on geometry even when our own nodes do not sample it directly;
-Three's physical WebGPU material path assumes the standard geometry layout.
+Three counts vertex buffer slots, not just attribute names. The surface geometry
+uses separate buffers for `position`, `color`, and `paletteSlot`, then packs
+`tileType`, `tileRing`, `tileOrient`, `tileCenter`, and `tileRelief` into one
+interleaved custom buffer. That packing is why the material can read all of
+those lanes without exceeding the WebGPU limit.
 
-Adding a **ninth** referenced attribute (e.g. `attribute('edgeDistance')` in the
-edge-profile emissive) makes the pipeline invalid → the tiles render **black**.
+Adding a **ninth** backing vertex buffer (for example by introducing a new
+surface metadata attribute that is not packed with the existing tile metadata)
+makes the pipeline invalid → the tiles render **black**.
 The console shows: `THREE.Vertex buffer count (9) exceeds the maximum number of
 vertex buffers (8)`.
 
-**Rule:** never add a new `attribute(...)` reference to the surface material.
-Pack extra per-vertex data into a spare component of an existing attribute —
-e.g. carry edge distance in `tileCenter.z` (make `tileCenter` a `vec3`); it stays
-one buffer. (Edge-profile is currently reverted for this reason; this is how it
-comes back.)
+**Rule:** never add a new surface-material `attribute(...)` unless the backing
+geometry keeps the total vertex-buffer slots at eight or fewer. Pack extra
+per-vertex data into the existing interleaved tile metadata buffer, or widen that
+buffer deliberately in `web/src/tiling/geometry.ts`.
 
 ## 2. FX builders must never pass a `null` node arg
 
@@ -52,17 +53,17 @@ so a NaN factor poisons an otherwise-zero term.
 ## 4. The render is downstream of the graph (the data-flow contract)
 
 What renders is derived from the current edges every change, never from React
-props alone. The two walks that enforce this (`web/src/flow/renderInputs.ts`):
+props alone. The graph topology helpers in `web/src/flow/graphTopology.ts` and
+the render-input derivation in `web/src/flow/renderInputs.ts` enforce this:
 
 - `renderChainConnected` / `renderInputsFromEdges` — the structural inlets
   (`geometry`, `lighting`, `color`, `material`, `projection`) are booleans
   derived from edges and pushed to the renderer; each cut has a distinct
   consequence (geometry hides, lighting unlit, color flat, material neutral,
   projection flat), not one wholesale hide.
-- `derivePostChain` (in `ControlGraph.tsx`) — walks `frame` edges from the
+- `derivePostChain` — walks `frame` edges from the
   Display sink back to the Scene pass; a node only contributes when it is
-  genuinely on that wire path (toneMap included). Reference model:
-  `.local/procedural-morphology-lab` (`walkPostFxChain` / `getModulation`).
+  genuinely on that wire path (toneMap included).
 
 **Acceptance test:** cut a wire → the thing it represents stops. The standing
 form of this is `npm run graph:contract`, which exercises the canonical graph
@@ -74,11 +75,13 @@ wires and verifies that removing each one drops the represented render input.
 - `web/src/flow/controlSpecs.ts` — per-node control tuples
 - `web/src/flow/settingKeys.ts` — per-node setting groups
 - `web/src/flow/renderInputs.ts` — edge→render-input derivation
+- `web/src/flow/graphTopology.ts` — graph connection policy, DAG checks, and
+  post-FX frame-chain derivation
 - `web/src/flow/nodeData.ts` — typed accessors for node `data`
 
 `tools/check_graph_contract.mts` imports these and asserts the stable schema and
 wire-contract invariants: controls map to setting keys and preset keys, the
-surface material stays within the allowed vertex attributes, the FX catalog is
+surface material stays within the allowed vertex-buffer slots, the FX catalog is
 complete, and the material/field/source/scene-pass wires cut the render inputs
 they claim to represent.
 

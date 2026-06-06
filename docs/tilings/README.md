@@ -32,8 +32,8 @@ baseline.
    template: `catalogue.md` (the flat list of every known aperiodic prototile
    set), `bibliography.md` (the master source list, structured by this tree),
    `hyperbolic-and-tooling.md` (the H²/Escher/crystallographic overlap and the
-   external-tooling boundary), and `local-corpus-audit.md` (the `.local/**`
-   source inventory). They are listed in the Index.
+   external-tooling boundary), and `local-corpus-audit.md` (the repository
+   reference policy). They are listed in the Index.
 
 ## Document template
 
@@ -136,7 +136,7 @@ These terms have a fixed meaning across all documents here. Use them exactly.
 | [`atlas.md`](atlas.md) | reference | Shared curated render-target atlas consumed by the Android live wallpaper |
 | [`bibliography.md`](bibliography.md) | reference | Master source list for the whole tree, structured by these files |
 | [`hyperbolic-and-tooling.md`](hyperbolic-and-tooling.md) | reference | Hyperbolic (H²) tilings, the Escher / hyperbolic-crochet lineage, EPINET, and the crystallographic-tooling boundary |
-| [`local-corpus-audit.md`](local-corpus-audit.md) | reference | File-level audit of `.local/**` docs and their tiling usefulness |
+| [`local-corpus-audit.md`](local-corpus-audit.md) | reference | Public citation policy |
 | [`ROADMAP.md`](ROADMAP.md) | reference | Ranked candidate additions for future work — families, docs, tooling |
 
 ## Conventions
@@ -147,7 +147,7 @@ These terms have a fixed meaning across all documents here. Use them exactly.
   describe, or link to a source.
 - **Renderer mapping is mandatory.** Every system says, explicitly, whether
   it is implemented in the renderer and what a `Family` entry would cost. The
-  app currently implements thirteen families — P3, P2 and P1 (see
+  app currently implements seventeen families — P3, P2 and P1 (see
   `pentagonal-penrose.md`), the Chair L-tromino tiling (a 4-fold substitution
   not covered by the source PDFs; documented as a renderer note only), the
   de Bruijn rhomb-square dodecagonal, Ammann–Beenker and heptagonal tilings
@@ -156,7 +156,7 @@ These terms have a fixed meaning across all documents here. Use them exactly.
   `pinwheel.md`), the Godrèche–Lançon binary and Tübingen-triangle tilings
   (see `pentagonal-binary.md`), and the Danzer sevenfold triangle substitution
   (see `heptagonal.md`), plus the Hat and Spectre monotiles (see
-  `einstein.md`).
+  `einstein.md`), Equithirds, Cromwell KRT, Gailiunas spiral families, and Cairo.
 - **Primary source.** Most of this material is synthesised from John Savard's
   tiling series at `http://www.quadibloc.com/math` (page IDs are cited per
   system), cross-checked against the primary academic literature each page

@@ -7,6 +7,7 @@ export type Settings = {
   color_mode: SettingValue;
   color_count: SettingValue;
   color_spread: SettingValue;
+  color_spectral: SettingValue;
   border_on: SettingValue;
   border_join: SettingValue;
   border_width: SettingValue;
@@ -72,7 +73,8 @@ export const DEFAULT_SETTINGS: Settings = {
   preset: '4',
   color_mode: '0',
   color_count: 8,
-  color_spread: 0,
+  color_spread: 100,
+  color_spectral: 0,
   border_on: true,
   border_join: '0',
   border_width: 65,

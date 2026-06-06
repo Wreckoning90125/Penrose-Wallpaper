@@ -50,9 +50,9 @@ internal class Settings(
     val lightIntensity: Float,
     val lightWarmth: Float,
     val lightAmbient: Float,
-    // Per-preset characteristic colours. No slider UI today — these are
-    // seeded by the Material preset picker so each preset has its own
-    // sheen tint and iridescence band; defaults match MaterialParams.
+    // Per-preset characteristic colours. The Material screen exposes direct
+    // controls, and the preset picker seeds coherent sheen tint and
+    // iridescence-band defaults that match MaterialParams.
     val matSheenColorR: Float,
     val matSheenColorG: Float,
     val matSheenColorB: Float,
@@ -161,8 +161,8 @@ internal class Settings(
         const val KEY_LIGHT_AMBIENT   = "light_ambient"
 
         // Per-preset characteristic colours (sheen tint + iridescent
-        // thin-film range). Set by the Material preset picker only;
-        // todo.md tracks adding picker / slider UI for direct tuning.
+        // thin-film range). The Material screen can tune them directly;
+        // the preset picker writes coherent defaults.
         const val KEY_MAT_SHEEN_COLOR_R  = "mat_sheen_color_r"
         const val KEY_MAT_SHEEN_COLOR_G  = "mat_sheen_color_g"
         const val KEY_MAT_SHEEN_COLOR_B  = "mat_sheen_color_b"
@@ -202,7 +202,7 @@ internal class Settings(
 
         // Must equal kMaxColors in cpp/color/color.h — the native float
         // array layout (jni_bridge kFloatCount) depends on the match.
-        const val CUSTOM_SLOTS  = 16
+        const val CUSTOM_SLOTS  = 18
 
         fun customSlotKey(slot: Int, channel: Char): String = "custom_${slot}_${channel}"
 
@@ -223,6 +223,8 @@ internal class Settings(
             0.40f, 0.08f, 270.0f,
             0.85f, 0.06f, 100.0f,
             0.30f, 0.05f, 320.0f,
+            0.70f, 0.15f, 160.0f,
+            0.70f, 0.15f, 240.0f,
         )
 
         // All pref reads go through safeStr / safeInt / safeBool /

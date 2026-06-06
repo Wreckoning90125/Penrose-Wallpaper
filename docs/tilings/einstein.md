@@ -52,15 +52,14 @@ version answered by the Spectre.
 
 ### Renderer mapping
 Implemented as `Family::Hat` (enum index 11). Seeds are H, T, P, and F
-metatiles. `generateHat` ports `.local/hat-spectre/hatviz-main/hat.js`,
+metatiles. `generateHat` ports Craig S. Kaplan's Hat visualizer generator,
 normalizes the emitted patch to the unit disk, and caps at generation 5
 (54,289 Hat tiles for the H seed).
 
 ### References
 Smith, Myers, Kaplan, and Goodman-Strauss, "An aperiodic monotile,"
-*Combinatorial Theory* 4(1), 2024; arXiv:2303.10798. Local source:
-`.local/hat-spectre/2303.10798v3.pdf`. Implementation source:
-`.local/hat-spectre/hatviz-main/hat.js`.
+*Combinatorial Theory* 4(1), 2024; arXiv:2303.10798. Implementation source:
+Craig S. Kaplan's public Hat visualizer.
 
 ## Spectre monotile
 
@@ -111,12 +110,11 @@ and mathematical concern that the Hat requires reflected copies.
 ### Renderer mapping
 Implemented as `Family::Spectre` (enum index 12). Seeds are the nine generator
 labels Gamma, Delta, Theta, Lambda, Xi, Pi, Sigma, Phi, and Psi.
-`generateSpectre` ports `.local/hat-spectre/spectre/spectre.js`, normalizes the
+`generateSpectre` ports Kaplan's public Spectre generator, normalizes the
 emitted patch to the unit disk, and caps at generation 5 (about 30k-35k tiles,
 depending on seed).
 
 ### References
 Smith, Myers, Kaplan, and Goodman-Strauss, "A chiral aperiodic monotile,"
-*Combinatorial Theory* 4(2), 2024; arXiv:2305.17743. Local source:
-`.local/hat-spectre/2305.17743.pdf`. Implementation source:
-`.local/hat-spectre/spectre/spectre.js`.
+*Combinatorial Theory* 4(2), 2024; arXiv:2305.17743. Implementation source:
+Kaplan's public Spectre generator.

@@ -84,13 +84,15 @@ internal object NativeBridge {
     external fun pushAudio(samples: FloatArray, count: Int, sampleRate: Int)
 
     /**
-     * Read the latest smoothed bands + beat envelope from the global
-     * analyzer. `out` must have length ≥ 9 (8 bands + 1 beat). Used
-     * by the modulation matrix evaluator each Choreographer frame.
+     * Read the latest analyzer features from the global analyzer. `out`
+     * must have length >= 9 for 8 bands + beat; length >= 15 also receives
+     * RMS, spectral flux, onset strength, CWT transient, crest factor, and
+     * beat confidence.
+     * Used by the modulation matrix evaluator each Choreographer frame.
      */
     external fun readAudio(out: FloatArray)
 
-    /** Force the global analyzer to fade its smoothed state toward zero. */
+    /** Clear the global analyzer's temporal state after playback stops. */
     external fun clearAudio()
 
     /** Toggle the ImGui-based node graph editor overlay on/off. */

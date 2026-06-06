@@ -10,8 +10,8 @@ import type TextureNode from 'three/src/nodes/accessors/TextureNode.js';
 import type Node from 'three/src/nodes/core/Node.js';
 import type UniformNode from 'three/src/nodes/core/UniformNode.js';
 import {
-  Fn, float, vec2, vec3, uv, texture, convertToTexture, nodeObject,
-  max, mix, sin, cos, cross, dot, normalize, distance, smoothstep, step, sign, passTexture,
+  Fn, float, vec2, vec3, vec4, uv, texture, convertToTexture, nodeObject,
+  max, mix, cross, dot, normalize, distance, smoothstep, step, sign, passTexture, uniform,
 } from 'three/tsl';
 
 const _size = new Vector2();
@@ -27,30 +27,47 @@ export type TrailsMode = 'afterimage' | 'trails' | 'both';
 // structural, so it changes only on recompile — no per-frame uniform needed).
 export type TrailsInputs = {
   decay: UniformNode<'float', number>;
-  zoom: UniformNode<'float', number>;
-  rotate: UniformNode<'float', number>;
-  hue: UniformNode<'float', number>;
+  hueCos: UniformNode<'float', number>;
+  hueSin: UniformNode<'float', number>;
   maskMode: number;
+  rotateCos: UniformNode<'float', number>;
+  rotateSin: UniformNode<'float', number>;
+  zoom: UniformNode<'float', number>;
   bg: UniformNode<'vec3', Vector3>;
 };
 
-const hueRotate = Fn(([color, angle]: [Node<'vec3'>, Node<'float'>]) => {
+const hueRotate = Fn(([color, c, s]: [Node<'vec3'>, Node<'float'>, Node<'float'>]) => {
   const k = normalize(vec3(1, 1, 1));
-  const c = cos(angle.mul(6.28318530718));
-  const s = sin(angle.mul(6.28318530718));
   return color.mul(c).add(cross(k, color).mul(s)).add(k.mul(dot(k, color)).mul(float(1).sub(c)));
+});
+
+const feedbackPresence = Fn(([color, bg]: [Node<'vec3'>, Node<'vec3'>]) =>
+  smoothstep(0.003, 0.012, distance(color, bg)));
+
+const backgroundRelativeMax = Fn(([current, history, bg]: [Node<'vec4'>, Node<'vec4'>, Node<'vec3'>]) => {
+  const useHistory = step(distance(current.rgb, bg), distance(history.rgb, bg));
+  return vec4(mix(current.rgb, history.rgb, useHistory), current.a);
+});
+
+const backgroundRebasedHistory = Fn(([color, historyBg, bg]: [Node<'vec3'>, Node<'vec3'>, Node<'vec3'>]) => {
+  const bgChanged = smoothstep(0.0001, 0.002, distance(historyBg, bg));
+  const content = feedbackPresence(color, historyBg);
+  return mix(color, mix(bg, color, content), bgChanged);
 });
 
 class TrailsNode extends TempNode {
   textureNode: TextureNode;
   mode: TrailsMode;
   decay: UniformNode<'float', number>;
+  hueCos: UniformNode<'float', number>;
+  hueSin: UniformNode<'float', number>;
+  rotateCos: UniformNode<'float', number>;
+  rotateSin: UniformNode<'float', number>;
   zoom: UniformNode<'float', number>;
-  rotate: UniformNode<'float', number>;
-  hue: UniformNode<'float', number>;
   bg: UniformNode<'vec3', Vector3>;
 
   private _maskMode: number;
+  private _historyBg: UniformNode<'vec3', Vector3>;
   private _compRT: RenderTarget;
   private _oldRT: RenderTarget;
   private _textureNode: TextureNode;
@@ -64,11 +81,16 @@ class TrailsNode extends TempNode {
     this.mode = mode;
 
     this.decay = inputs.decay;
+    this.hueCos = inputs.hueCos;
+    this.hueSin = inputs.hueSin;
+    this.rotateCos = inputs.rotateCos;
+    this.rotateSin = inputs.rotateSin;
     this.zoom = inputs.zoom;
-    this.rotate = inputs.rotate;
-    this.hue = inputs.hue;
     this.bg = inputs.bg;
     this._maskMode = inputs.maskMode;
+    // New render targets begin as black; the shader rebases old pixels from this
+    // stored background into the live scene background before applying decay.
+    this._historyBg = uniform(new Vector3(0, 0, 0));
 
     this._compRT = new RenderTarget(1, 1, { depthBuffer: false });
     this._compRT.texture.name = 'TrailsNode.comp';
@@ -93,8 +115,10 @@ class TrailsNode extends TempNode {
   }
 
   setSize(width: number, height: number): void {
+    const resized = this._oldRT.width !== width || this._oldRT.height !== height;
     this._compRT.setSize(width, height);
     this._oldRT.setSize(width, height);
+    if (resized) this._historyBg.value.set(0, 0, 0);
   }
 
   override updateBefore(frame: NodeFrame): boolean | undefined {
@@ -127,6 +151,7 @@ class TrailsNode extends TempNode {
     const temp = this._oldRT;
     this._oldRT = this._compRT;
     this._compRT = temp;
+    this._historyBg.value.copy(this.bg.value);
 
     RendererUtils.restoreRendererState(renderer, _rendererState);
     return undefined;
@@ -140,12 +165,19 @@ class TrailsNode extends TempNode {
 
     const fragment = Fn(() => {
       const cur = textureNode.sample(textureNode.uvNode || uv()).toVar();
+      const bgFeedback = smoothstep(0.001, 0.02, distance(this.bg, vec3(0)));
 
       if (this.mode === 'afterimage') {
         const old = textureNodeOld.sample(textureNodeOld.uvNode || uv()).toVar();
+        const oldRgb = backgroundRebasedHistory(old.rgb, this._historyBg, this.bg);
         const oldGate = max(sign(old.sub(0.1)), 0.0);
-        old.mulAssign(this.decay.mul(oldGate));
-        const accum = max(cur, old);
+        const oldSample = vec4(oldRgb, old.a);
+        const blackAccum = max(cur, oldSample.mul(this.decay.mul(oldGate)));
+        const history = vec4(
+          mix(this.bg, oldRgb, this.decay.mul(feedbackPresence(old.rgb, this._historyBg))),
+          old.a,
+        );
+        const accum = mix(blackAccum, backgroundRelativeMax(cur, history, this.bg), bgFeedback);
         if (this._maskMode === 0) return accum;
         const bgDist = distance(cur.rgb, this.bg);
         const surface = smoothstep(0.003, 0.012, bgDist);
@@ -156,16 +188,33 @@ class TrailsNode extends TempNode {
 
       const center = vec2(0.5, 0.5);
       const p = uv().sub(center).mul(float(1).add(this.zoom));
-      const sa = sin(this.rotate);
-      const ca = cos(this.rotate);
-      const wuv = vec2(ca.mul(p.x).sub(sa.mul(p.y)), sa.mul(p.x).add(ca.mul(p.y))).add(center);
+      const wuv = vec2(
+        this.rotateCos.mul(p.x).sub(this.rotateSin.mul(p.y)),
+        this.rotateSin.mul(p.x).add(this.rotateCos.mul(p.y)),
+      ).add(center);
       const old = textureNodeOld.sample(wuv).toVar();
-      old.rgb.assign(hueRotate(old.rgb, this.hue));
-      old.mulAssign(this.decay);
+      const oldRgb = backgroundRebasedHistory(old.rgb, this._historyBg, this.bg);
+      const blackOld = vec4(hueRotate(oldRgb, this.hueCos, this.hueSin), old.a).mul(this.decay);
+      const historyRgb = this.bg.add(hueRotate(oldRgb.sub(this.bg), this.hueCos, this.hueSin));
+      const history = vec4(
+        mix(this.bg, historyRgb, this.decay.mul(feedbackPresence(old.rgb, this._historyBg))),
+        old.a,
+      );
 
       const accum = this.mode === 'both'
-        ? max(cur, max(old, textureNodeOld.sample(textureNodeOld.uvNode || uv()).mul(this.decay))).toVar()
-        : max(cur, old).toVar();
+        ? (() => {
+            const direct = textureNodeOld.sample(textureNodeOld.uvNode || uv()).toVar();
+            const directRgb = backgroundRebasedHistory(direct.rgb, this._historyBg, this.bg);
+            const directSample = vec4(directRgb, direct.a);
+            const blackAccum = max(cur, max(blackOld, directSample.mul(this.decay)));
+            const directHistory = vec4(
+              mix(this.bg, directRgb, this.decay.mul(feedbackPresence(direct.rgb, this._historyBg))),
+              direct.a,
+            );
+            const historyAccum = backgroundRelativeMax(history, directHistory, this.bg);
+            return mix(blackAccum, backgroundRelativeMax(cur, historyAccum, this.bg), bgFeedback);
+          })()
+        : mix(max(cur, blackOld), backgroundRelativeMax(cur, history, this.bg), bgFeedback);
       if (this._maskMode === 0) return accum;
       const bgDist = distance(cur.rgb, this.bg);
       const surface = smoothstep(0.003, 0.012, bgDist);

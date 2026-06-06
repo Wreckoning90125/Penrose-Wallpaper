@@ -281,34 +281,6 @@ export function edgeFromPreset(edge: GraphPresetEdge): Edge {
   };
 }
 
-const CURRENT_DEFAULT_FIELD_HANDLES = new Set(['displace', 'relief', 'color', 'undulate']);
-
-function isCurrentDefaultFieldEdge(edge: Edge): boolean {
-  const sourceHandle = edge.sourceHandle ?? null;
-  return edge.source === 'postfx'
-    && edge.target === 'renderer'
-    && sourceHandle !== null
-    && sourceHandle === (edge.targetHandle ?? null)
-    && CURRENT_DEFAULT_FIELD_HANDLES.has(sourceHandle);
-}
-
-function isCurrentClockPhaseEdge(edge: Edge): boolean {
-  return edge.source === 'clock'
-    && edge.sourceHandle === 'out'
-    && edge.target === 'postfx'
-    && edge.targetHandle === 'phase';
-}
-
-export function isObsoletePipelineEdge(edge: Edge): boolean {
-  return (edge.source === 'tiling' && edge.target === 'palette')
-    || (edge.source === 'projection' && edge.target === 'renderer')
-    || (edge.source === 'palette' && edge.target === 'renderer')
-    || (edge.source === 'postprocess' && edge.target === 'renderer')
-    || (edge.source === 'postfx' && edge.target === 'renderer' && !isCurrentDefaultFieldEdge(edge))
-    || (edge.source === 'postfx' && edge.target === 'material')
-    || (edge.source === 'clock' && edge.target === 'postfx' && !isCurrentClockPhaseEdge(edge));
-}
-
 export function nodeWithPresetData(node: Node, preset: GraphPresetNode): Node {
   const values = preset.data.values;
   const selectValues = preset.data.selectValues;

@@ -35,7 +35,7 @@ import { MultiSwitch } from './MultiSwitch';
 import { RangeControl } from './RangeControl';
 import { DISPLAY_INLETS, NodeFrame, SCENE_PASS_INLETS, portSpecsFromControls } from './nodeFrame';
 import { fxIconComponent } from './fxIcons';
-import { MeterOutlet, drawWheel, formatTime, settingRangeHandlers, settingWithLiveBoost } from './nodeHelpers';
+import { MeterOutlet, MeterRow, drawWheel, formatTime, positionWheelMarker, settingRangeHandlers, settingWithLiveBoost } from './nodeHelpers';
 import { FAMILIES, familyByValue, seedLabel } from '../tiling/families';
 import { dataObject, numberRecordFromObject, stringRecordFromObject } from './nodeData';
 import { fxDescriptor } from '../render/postFxCatalog';
@@ -178,21 +178,40 @@ export const TilingNode = memo(function TilingNode({ data }: NodeComponentProps<
 
 export const PaletteNode = memo(function PaletteNode({ data }: NodeComponentProps<PaletteNodeData>) {
   const wheelRef = useRef<HTMLCanvasElement | null>(null);
+  const wheelMarkerRef = useRef<HTMLDivElement | null>(null);
+  const wheelEditingRef = useRef(false);
   const selected = data.selectedColorValue;
+  const wheelParamKey = `custom_color_${data.selectedColor}_chroma_hue`;
+  const family = familyByValue(data.settings.family);
+  const typeModeLabel = family.value === '15' ? 'Arm' : 'Type';
+  const colorModes = family.showOrientMode === false
+    ? [{ label: typeModeLabel, value: 0 }, { label: 'Phase', value: 3 }, { label: 'Ring', value: 2 }]
+    : [{ label: typeModeLabel, value: 0 }, { label: 'Phase', value: 3 }, { label: 'Orient', value: 1 }, { label: 'Ring', value: 2 }];
 
   useEffect(() => {
     drawWheel(wheelRef.current, selected);
+    positionWheelMarker(wheelMarkerRef.current, selected);
   }, [selected]);
 
   const applyWheel = (event: WheelPointer) => {
     const canvas = wheelRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = (event.clientX - rect.left) / rect.width * 2 - 1;
-    const y = (event.clientY - rect.top) / rect.height * 2 - 1;
+    const radiusPx = Math.max(1, Math.min(rect.width, rect.height) * 0.5);
+    const x = (event.clientX - (rect.left + rect.width * 0.5)) / radiusPx;
+    const y = (event.clientY - (rect.top + rect.height * 0.5)) / radiusPx;
     const radius = Math.min(1, Math.hypot(x, y));
     const hue = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
-    data.onCustomColor(color => oklch(color[0], radius * 0.37, hue));
+    const updater = (color: Oklch) => oklch(color[0], radius * 0.37, hue);
+    data.onPreviewCustomColor(updater);
+    positionWheelMarker(wheelMarkerRef.current, updater(selected));
+  };
+
+  const finishWheelEdit = () => {
+    if (!wheelEditingRef.current) return;
+    wheelEditingRef.current = false;
+    data.onCommitCustomColor();
+    data.onEndEdit(wheelParamKey);
   };
 
   return (
@@ -206,6 +225,7 @@ export const PaletteNode = memo(function PaletteNode({ data }: NodeComponentProp
         { id: 'in', label: 'Projection' },
         { id: 'color_count', label: 'Slots' },
         { id: 'color_spread', label: 'Spread' },
+        { id: 'color_spectral', label: 'Spectral' },
         { id: 'luminance', label: 'Lum' },
       ]}
       outlets={[{ id: 'color', label: 'Color' }]}
@@ -235,10 +255,10 @@ export const PaletteNode = memo(function PaletteNode({ data }: NodeComponentProp
         />
         <RangeControl
           label="Spread"
-          title="Palette gradient stops, independent of Slots. 0 = follow Slots (auto); above 0 overrides the gradient resolution for a recolor sweep."
-          value={intSetting(data.settings, 'color_spread', 0, MAX_COLORS)}
+          title="Bucket spread across the selected Slots. 0% collapses to slot 1; 100% uses the full slot range."
+          value={intSetting(data.settings, 'color_spread', 0, 100)}
           min={0}
-          max={MAX_COLORS}
+          max={100}
           step={1}
           paramKey="color_spread"
           onBeginEdit={data.onBeginEdit}
@@ -246,14 +266,28 @@ export const PaletteNode = memo(function PaletteNode({ data }: NodeComponentProp
           onCommit={value => data.onSetting('color_spread', value)}
           onEndEdit={data.onEndEdit}
         />
+        <RangeControl
+          label="Spectral"
+          title="Blend the selected palette toward Spectra. 0 keeps Greys/Paper/etc. literal; higher values intentionally add chroma for modulation."
+          value={intSetting(data.settings, 'color_spectral', 0, 100)}
+          min={0}
+          max={100}
+          step={1}
+          paramKey="color_spectral"
+          onBeginEdit={data.onBeginEdit}
+          onChange={value => data.onPreviewSetting('color_spectral', value)}
+          onCommit={value => data.onSetting('color_spectral', value)}
+          onEndEdit={data.onEndEdit}
+        />
       </div>
       <div className="segmented nodrag nopan">
-        {['Type', 'Orient', 'Ring'].map((label, idx) => (
+        {colorModes.map(({ label, value }) => (
           <button
             key={label}
             type="button"
-            className={intSetting(data.settings, 'color_mode', 0, 2) === idx ? 'active' : ''}
-            onClick={() => data.onSetting('color_mode', String(idx))}
+            className={intSetting(data.settings, 'color_mode', 0, 3) === value ? 'active' : ''}
+            title={label === 'Phase' ? 'Continuous class phase: each type/arm gets a palette segment and progresses through it by ring depth or spiral order.' : undefined}
+            onClick={() => data.onSetting('color_mode', String(value))}
           >
             {label}
           </button>
@@ -272,20 +306,40 @@ export const PaletteNode = memo(function PaletteNode({ data }: NodeComponentProp
         ))}
       </div>
       <div className="color-editor nodrag nopan">
-        <canvas
-          ref={wheelRef}
-          id="colorWheel"
-          width="220"
-          height="220"
-          aria-label="OKLCH hue and chroma selector"
-          onPointerDown={event => {
-            event.currentTarget.setPointerCapture(event.pointerId);
-            applyWheel(event);
-          }}
-          onPointerMove={event => {
-            if (event.buttons) applyWheel(event);
-          }}
-        />
+        <div className="color-wheel-frame">
+          <canvas
+            ref={wheelRef}
+            id="colorWheel"
+            width="220"
+            height="220"
+            aria-label="OKLCH hue and chroma selector"
+            onPointerDown={event => {
+              if (!event.isPrimary || event.button !== 0) return;
+              event.preventDefault();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              wheelEditingRef.current = true;
+              data.onBeginEdit(wheelParamKey);
+              applyWheel(event);
+            }}
+            onPointerMove={event => {
+              if (!wheelEditingRef.current || !event.isPrimary || (event.buttons & 1) === 0) return;
+              event.preventDefault();
+              applyWheel(event);
+            }}
+            onPointerUp={event => {
+              event.preventDefault();
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+              finishWheelEdit();
+            }}
+            onPointerCancel={event => {
+              event.preventDefault();
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+              finishWheelEdit();
+            }}
+            onLostPointerCapture={() => finishWheelEdit()}
+          />
+          <div ref={wheelMarkerRef} className="color-wheel-marker" aria-hidden="true" />
+        </div>
         <RangeControl
           label="Luminance"
           value={selected[0]}
@@ -295,7 +349,13 @@ export const PaletteNode = memo(function PaletteNode({ data }: NodeComponentProp
           digits={3}
           paramKey={`custom_color_${data.selectedColor}_luminance`}
           onBeginEdit={data.onBeginEdit}
-          onChange={value => data.onCustomColor(color => oklch(value, color[1], color[2]))}
+          onChange={value => {
+            const updater = (color: Oklch) => oklch(value, color[1], color[2]);
+            data.onPreviewCustomColor(updater);
+            drawWheel(wheelRef.current, updater(selected));
+            positionWheelMarker(wheelMarkerRef.current, updater(selected));
+          }}
+          onCommit={() => data.onCommitCustomColor()}
           onEndEdit={data.onEndEdit}
         />
         <div className="gamut">{data.gamut}</div>
@@ -667,6 +727,8 @@ export const AudioAnalysisNode = memo(function AudioAnalysisNode({ data }: NodeC
 
 export const OperatorNode = memo(function OperatorNode({ data }: NodeComponentProps<OperatorNodeData>) {
   const flow = useReactFlow<Node, Edge>();
+  const operatorSignals = useSyncExternalStore(data.operatorSignals.subscribe, data.operatorSignals.getSnapshot, data.operatorSignals.getSnapshot);
+  const outputSignals = operatorSignals[data.id] ?? {};
   const [selectValues, setSelectValues] = useState(data.selectValues);
   const [values, setValues] = useState(data.values);
 
@@ -754,6 +816,11 @@ export const OperatorNode = memo(function OperatorNode({ data }: NodeComponentPr
         <span>In: {data.spec.inputs.join(', ')}</span>
         <span>Out: {data.spec.outputs.join(', ')}</span>
       </div>
+      <div className="operator-output-meters">
+        {data.spec.outputs.map(output => (
+          <MeterRow key={output} label={output} value={outputSignals[output] ?? 0} />
+        ))}
+      </div>
       <div className="control-grid">
         {(data.spec.selects ?? []).map(select => (
           <label key={select.key} className="nodrag nopan">
@@ -772,7 +839,7 @@ export const OperatorNode = memo(function OperatorNode({ data }: NodeComponentPr
           <RangeControl
             key={key}
             label={label}
-            value={values[key] ?? min}
+            value={values[key] ?? data.spec.defaults?.[key] ?? min}
             min={min}
             max={max}
             step={step}

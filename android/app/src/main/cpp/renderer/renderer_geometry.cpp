@@ -32,6 +32,13 @@ namespace {
 constexpr float kBorderWidthScale = 0.005f;
 constexpr float kPi = 3.14159265358979323846f;
 
+int typeBucketCount(const std::vector<Tile>& tiles, Family family, const ClassSpec& cs) {
+    if (family != Family::GailiunasSpiral) return cs.typeBuckets > 0 ? cs.typeBuckets : 1;
+    uint8_t maxType = 0;
+    for (const Tile& tile : tiles) maxType = std::max(maxType, tile.type);
+    return static_cast<int>(maxType) + 1;
+}
+
 // Edge-dedup map record. Each unique edge midpoint is hit by up to two
 // tiles; we record both kinds so hideSeam can decide whether the seam
 // is internal-to-rhombus (drop) or perimeter (keep).
@@ -39,21 +46,61 @@ struct EdgeRec {
     float    p1x, p1y, p2x, p2y;
     uint8_t  t1, t2;
     EdgeKind k1, k2;
+    uint8_t  ownerCount;
     bool     secondSet;
 };
 
 struct EdgeKey {
-    int32_t mx, my;
-    bool operator==(const EdgeKey& o) const { return mx == o.mx && my == o.my; }
+    int32_t ax, ay;
+    int32_t bx, by;
+    bool operator==(const EdgeKey& o) const {
+        return ax == o.ax && ay == o.ay && bx == o.bx && by == o.by;
+    }
 };
 
 struct EdgeKeyHash {
     size_t operator()(const EdgeKey& k) const noexcept {
-        const uint64_t a = static_cast<uint32_t>(k.mx);
-        const uint64_t b = static_cast<uint32_t>(k.my);
+        uint64_t h = 1469598103934665603ULL;
+        const auto mix = [&h](int32_t value) {
+            h ^= static_cast<uint32_t>(value);
+            h *= 1099511628211ULL;
+        };
+        mix(k.ax);
+        mix(k.ay);
+        mix(k.bx);
+        mix(k.by);
+        return std::hash<uint64_t>{}(h);
+    }
+};
+
+struct EndpointKey {
+    int32_t x, y;
+    bool operator==(const EndpointKey& o) const { return x == o.x && y == o.y; }
+};
+
+struct EndpointKeyHash {
+    size_t operator()(const EndpointKey& k) const noexcept {
+        const uint64_t a = static_cast<uint32_t>(k.x);
+        const uint64_t b = static_cast<uint32_t>(k.y);
         return std::hash<uint64_t>{}(a * 0x9E3779B97F4A7C15ULL + b);
     }
 };
+
+inline int32_t quantizeCoord(float value, float scale) {
+    return static_cast<int32_t>(std::lround(value * scale));
+}
+
+inline EdgeKey canonicalEdgeKey(const Edge& e, float scale) {
+    int32_t ax = quantizeCoord(e.p1x, scale);
+    int32_t ay = quantizeCoord(e.p1y, scale);
+    int32_t bx = quantizeCoord(e.p2x, scale);
+    int32_t by = quantizeCoord(e.p2y, scale);
+    if (bx < ax || (bx == ax && by < ay)) {
+        std::swap(ax, bx);
+        std::swap(ay, by);
+    }
+    return EdgeKey{ax, ay, bx, by};
+}
 
 // Edge-distance barycentric basis for one emitted triangle. p0/p1/p2 are
 // the tile-polygon vertex indices of the triangle's three corners, or -1
@@ -63,6 +110,15 @@ struct EdgeKeyHash {
 // barycentric component pinned to 1 at every vertex so the fragment
 // shader's min(bary) never dips to 0 along a seam that is not a tile edge.
 struct Bary3 { float v[3][3]; };
+
+struct TriIdx { int a, b, c; };
+
+struct SourceTri {
+    float x0, y0, z0;
+    float x1, y1, z1;
+    float x2, y2, z2;
+    int   p0, p1, p2;
+};
 
 inline Bary3 computeBary(int vcount, int p0, int p1, int p2) {
     Bary3 b;
@@ -106,6 +162,185 @@ inline void bulgeDir(float p0x, float p0y, float p1x, float p1y,
     const float ry = (-e2x * a + e1x * b) * inv;
     const float rl = std::sqrt(rx * rx + ry * ry);
     if (rl > 1e-9f) { gx = rx / rl; gy = ry / rl; }
+}
+
+inline double orient2(double ax, double ay, double bx, double by, double cx, double cy) {
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+}
+
+inline bool pointOnSegment(double ax, double ay, double bx, double by, double px, double py) {
+    constexpr double kEps = 1e-10;
+    return std::fabs(orient2(ax, ay, bx, by, px, py)) <= kEps
+        && px >= std::min(ax, bx) - kEps && px <= std::max(ax, bx) + kEps
+        && py >= std::min(ay, by) - kEps && py <= std::max(ay, by) + kEps;
+}
+
+inline bool segmentsIntersect(double ax, double ay, double bx, double by,
+                              double cx, double cy, double dx, double dy) {
+    constexpr double kEps = 1e-10;
+    if (std::max(ax, bx) + kEps < std::min(cx, dx)
+        || std::max(cx, dx) + kEps < std::min(ax, bx)
+        || std::max(ay, by) + kEps < std::min(cy, dy)
+        || std::max(cy, dy) + kEps < std::min(ay, by)) return false;
+    const double o1 = orient2(ax, ay, bx, by, cx, cy);
+    const double o2 = orient2(ax, ay, bx, by, dx, dy);
+    const double o3 = orient2(cx, cy, dx, dy, ax, ay);
+    const double o4 = orient2(cx, cy, dx, dy, bx, by);
+    if (std::fabs(o1) <= kEps && pointOnSegment(ax, ay, bx, by, cx, cy)) return true;
+    if (std::fabs(o2) <= kEps && pointOnSegment(ax, ay, bx, by, dx, dy)) return true;
+    if (std::fabs(o3) <= kEps && pointOnSegment(cx, cy, dx, dy, ax, ay)) return true;
+    if (std::fabs(o4) <= kEps && pointOnSegment(cx, cy, dx, dy, bx, by)) return true;
+    return (o1 > 0.0) != (o2 > 0.0) && (o3 > 0.0) != (o4 > 0.0);
+}
+
+bool pointInPolygon(const Tile& t, double px, double py) {
+    bool inside = false;
+    for (int i = 0, j = t.vcount - 1; i < t.vcount; j = i, ++i) {
+        const double ax = t.x[j], ay = t.y[j];
+        const double bx = t.x[i], by = t.y[i];
+        if (pointOnSegment(ax, ay, bx, by, px, py)) return true;
+        const bool crosses = (ay > py) != (by > py);
+        if (crosses) {
+            const double x = ax + (py - ay) * (bx - ax) / (by - ay);
+            if (x > px) inside = !inside;
+        }
+    }
+    return inside;
+}
+
+bool segmentCrossesPolygonBoundary(const Tile& t, double sx, double sy, int endIndex) {
+    const double ex = t.x[endIndex], ey = t.y[endIndex];
+    for (int i = 0; i < t.vcount; ++i) {
+        const int j = (i + 1) % t.vcount;
+        if (i == endIndex || j == endIndex) continue;
+        if (segmentsIntersect(sx, sy, ex, ey, t.x[i], t.y[i], t.x[j], t.y[j])) return true;
+    }
+    return false;
+}
+
+bool centerFanContained(const Tile& t, double cx, double cy) {
+    if (!pointInPolygon(t, cx, cy)) return false;
+    for (int i = 0; i < t.vcount; ++i) {
+        if (segmentCrossesPolygonBoundary(t, cx, cy, i)) return false;
+    }
+    return true;
+}
+
+bool pointInTriangle(const Tile& t, int p, int a, int b, int c, bool ccw) {
+    const double ab = orient2(t.x[a], t.y[a], t.x[b], t.y[b], t.x[p], t.y[p]);
+    const double bc = orient2(t.x[b], t.y[b], t.x[c], t.y[c], t.x[p], t.y[p]);
+    const double ca = orient2(t.x[c], t.y[c], t.x[a], t.y[a], t.x[p], t.y[p]);
+    constexpr double kEps = 1e-10;
+    return ccw ? (ab >= -kEps && bc >= -kEps && ca >= -kEps)
+               : (ab <=  kEps && bc <=  kEps && ca <=  kEps);
+}
+
+std::vector<TriIdx> triangulatePolygon(const Tile& t) {
+    std::vector<TriIdx> out;
+    if (t.vcount < 3) return out;
+    if (t.vcount == 3) {
+        out.push_back({0, 1, 2});
+        return out;
+    }
+    const double area = tileSignedArea(t);
+    if (std::fabs(area) <= 1e-12) return out;
+    const bool ccw = area > 0.0;
+    std::vector<int> remaining;
+    remaining.reserve(t.vcount);
+    for (int i = 0; i < t.vcount; ++i) remaining.push_back(i);
+
+    while (remaining.size() > 3) {
+        int earAt = -1;
+        for (int i = 0; i < static_cast<int>(remaining.size()); ++i) {
+            const int ia = remaining[(i + remaining.size() - 1) % remaining.size()];
+            const int ib = remaining[i];
+            const int ic = remaining[(i + 1) % remaining.size()];
+            const double turn = orient2(t.x[ia], t.y[ia], t.x[ib], t.y[ib], t.x[ic], t.y[ic]);
+            if (ccw ? turn <= 1e-12 : turn >= -1e-12) continue;
+            bool blocked = false;
+            for (int idx : remaining) {
+                if (idx == ia || idx == ib || idx == ic) continue;
+                if (pointInTriangle(t, idx, ia, ib, ic, ccw)) {
+                    blocked = true;
+                    break;
+                }
+            }
+            if (!blocked) {
+                out.push_back({ia, ib, ic});
+                earAt = i;
+                break;
+            }
+        }
+        if (earAt < 0) return {};
+        remaining.erase(remaining.begin() + earAt);
+    }
+    out.push_back({remaining[0], remaining[1], remaining[2]});
+    return out;
+}
+
+float distanceToSegment(float px, float py, float ax, float ay, float bx, float by) {
+    const float dx = bx - ax;
+    const float dy = by - ay;
+    const float lenSq = dx * dx + dy * dy;
+    if (lenSq <= 1e-12f) return std::sqrt((px - ax) * (px - ax) + (py - ay) * (py - ay));
+    const float t = std::clamp(((px - ax) * dx + (py - ay) * dy) / lenSq, 0.0f, 1.0f);
+    const float qx = ax + dx * t;
+    const float qy = ay + dy * t;
+    return std::sqrt((px - qx) * (px - qx) + (py - qy) * (py - qy));
+}
+
+float distanceToBoundary(const Tile& t, float px, float py) {
+    float best = 1e30f;
+    for (int i = 0; i < t.vcount; ++i) {
+        const int j = (i + 1) % t.vcount;
+        best = std::min(best, distanceToSegment(px, py, t.x[i], t.y[i], t.x[j], t.y[j]));
+    }
+    return best < 1e29f ? best : 0.0f;
+}
+
+float tileDepthAt(const Tile& t, float px, float py, float cx, float cy, float apexDepth) {
+    if (std::fabs(apexDepth) <= 1e-7f) return 0.0f;
+    const float boundary = distanceToBoundary(t, px, py);
+    const float centerDist = std::sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy));
+    const float denom = boundary + centerDist;
+    return denom > 1e-7f ? apexDepth * boundary / denom : 0.0f;
+}
+
+std::vector<SourceTri> sourceTrianglesForCenterDepth(const Tile& t, float cx, float cy, float centerDepth) {
+    std::vector<SourceTri> out;
+    if (centerFanContained(t, cx, cy)) {
+        out.reserve(t.vcount);
+        for (int v = 0; v < t.vcount; ++v) {
+            const int w = (v + 1) % t.vcount;
+            out.push_back({ cx, cy, centerDepth, t.x[v], t.y[v], 0.0f, t.x[w], t.y[w], 0.0f, -1, v, w });
+        }
+        return out;
+    }
+
+    const std::vector<TriIdx> ears = triangulatePolygon(t);
+    out.reserve(ears.size() * 3);
+    for (const TriIdx& tri : ears) {
+        const float hx = (t.x[tri.a] + t.x[tri.b] + t.x[tri.c]) / 3.0f;
+        const float hy = (t.y[tri.a] + t.y[tri.b] + t.y[tri.c]) / 3.0f;
+        const float hd = tileDepthAt(t, hx, hy, cx, cy, centerDepth);
+        const auto add = [&](int first, int second) {
+            const int diff = std::abs(first - second);
+            const bool boundary = diff == 1 || diff == t.vcount - 1;
+            if (boundary) {
+                out.push_back({ hx, hy, hd, t.x[first], t.y[first], 0.0f, t.x[second], t.y[second], 0.0f, -1, first, second });
+                return;
+            }
+            const float mx = (t.x[first] + t.x[second]) * 0.5f;
+            const float my = (t.y[first] + t.y[second]) * 0.5f;
+            const float md = tileDepthAt(t, mx, my, cx, cy, centerDepth);
+            out.push_back({ hx, hy, hd, t.x[first], t.y[first], 0.0f, mx, my, md, -1, first, -1 });
+            out.push_back({ hx, hy, hd, mx, my, md, t.x[second], t.y[second], 0.0f, -1, -1, second });
+        };
+        add(tri.a, tri.b);
+        add(tri.b, tri.c);
+        add(tri.c, tri.a);
+    }
+    return out;
 }
 
 inline bool hideSeam(Family fam, EdgeKind k1, EdgeKind k2) {
@@ -210,10 +445,9 @@ bool Renderer::buildGeometry() {
         const uint32_t paletteIdx = static_cast<uint32_t>(
             bucketToPaletteIdx(cls.bucket[i], cls.numBuckets, settings_.colorCount));
         const int vc = t.vcount;
-        float sx = 0.0f, sy = 0.0f;
-        for (int v = 0; v < vc; ++v) { sx += t.x[v]; sy += t.y[v]; }
-        const float cx = sx / static_cast<float>(vc);
-        const float cy = sy / static_cast<float>(vc);
+        const TilePoint center = tileAreaCentroid(t);
+        const float cx = static_cast<float>(center.x);
+        const float cy = static_cast<float>(center.y);
         // Parallax depth shading. type 0 bulges toward the viewer (+1),
         // every other type recedes (-1); the depthAmount slider scales the
         // effect in the fragment shader. The bulge sits on one vertex for a
@@ -227,8 +461,9 @@ bool Renderer::buildGeometry() {
         // direction of the classifier edge as orientation, and the
         // centroid radius. Shared by all of this tile's fill vertices.
         const ClassSpec& cs = fi.cls;
-        const float typeNorm = (cs.typeBuckets > 1)
-            ? static_cast<float>(t.type) / static_cast<float>(cs.typeBuckets - 1)
+        const int typeBuckets = typeBucketCount(tiles, settings_.family, cs);
+        const float typeNorm = (typeBuckets > 1)
+            ? static_cast<float>(t.type) / static_cast<float>(typeBuckets - 1)
             : 0.0f;
         const float odx  = t.x[cs.angB] - t.x[cs.angA];
         const float ody  = t.y[cs.angB] - t.y[cs.angA];
@@ -251,19 +486,25 @@ bool Renderer::buildGeometry() {
             emitFillTri(t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2],
                         paletteIdx, cx, cy, bgx, bgy, bary, mat);
         } else if (fi.centroidFan) {
-            // Concave polygons (P1 star / boat) — fan from the centroid so
-            // the triangulation stays inside a star-shaped tile. The
-            // centroid carries the bulge, so each tile reads as a shallow
-            // dome (type 0 = pentagon) or dimple.
+            // Center-depth polygons: use the area centroid as the material
+            // center and relief apex, but only use a centroid fan when that fan
+            // is actually contained in the tile. Concave monotiles/spirals that
+            // are not star-shaped are ear-triangulated and get local contained
+            // depth hubs instead.
             const float cd = fi.depthParallax ? dsign : 0.0f;
-            for (int v = 0; v < vc; ++v) {
-                const int w = (v + 1) % vc;
-                // Corners: centroid (-1), polygon vertex v, polygon vertex w.
-                const Bary3 bary = computeBary(vc, -1, v, w);
+            const std::vector<SourceTri> sources = sourceTrianglesForCenterDepth(t, cx, cy, cd);
+            if (sources.empty()) {
+                LOGE("failed to triangulate tile family=%d type=%u vertices=%u",
+                     static_cast<int>(settings_.family), static_cast<unsigned>(t.type),
+                     static_cast<unsigned>(t.vcount));
+                return false;
+            }
+            for (const SourceTri& tri : sources) {
+                const Bary3 bary = computeBary(vc, tri.p0, tri.p1, tri.p2);
                 float bgx, bgy;
-                bulgeDir(cx, cy, t.x[v], t.y[v], t.x[w], t.y[w],
-                         cd, 0.0f, 0.0f, bgx, bgy);
-                emitFillTri(cx, cy, t.x[v], t.y[v], t.x[w], t.y[w],
+                bulgeDir(tri.x0, tri.y0, tri.x1, tri.y1, tri.x2, tri.y2,
+                         tri.z0, tri.z1, tri.z2, bgx, bgy);
+                emitFillTri(tri.x0, tri.y0, tri.x1, tri.y1, tri.x2, tri.y2,
                             paletteIdx, cx, cy, bgx, bgy, bary, mat);
             }
         } else {
@@ -307,7 +548,7 @@ bool Renderer::buildGeometry() {
     geomRmax_ = std::sqrt(rSqMax);
 
     // -------- Border geometry: indexed triangle quads -----------------------
-    // For each unique edge (dedup via midpoint hash, honouring hideSeam) we
+    // For each unique edge (dedup via canonical endpoint pair, honouring hideSeam) we
     // emit 4 verts + 6 indices. The vertex shader expands each quad by
     // ± borderHalfWidth along the edge normal, so the slider yields a real
     // world-space thickness.
@@ -355,20 +596,20 @@ bool Renderer::buildGeometry() {
         edgeMap.reserve(edges.size() / 2 + 16);
         constexpr float kKeyScale = 1.0e5f;
         for (const Edge& e : edges) {
-            const float mx = (e.p1x + e.p2x) * 0.5f;
-            const float my = (e.p1y + e.p2y) * 0.5f;
-            EdgeKey key{ static_cast<int32_t>(std::lround(mx * kKeyScale)),
-                         static_cast<int32_t>(std::lround(my * kKeyScale)) };
+            const EdgeKey key = canonicalEdgeKey(e, kKeyScale);
             auto it = edgeMap.find(key);
             if (it == edgeMap.end()) {
                 EdgeRec r{ e.p1x, e.p1y, e.p2x, e.p2y,
                            e.tileType, uint8_t{0},
-                           e.kind, EdgeKind::Leg, false };
+                           e.kind, EdgeKind::Leg, uint8_t{1}, false };
                 edgeMap.emplace(key, r);
             } else {
-                it->second.t2 = e.tileType;
-                it->second.k2 = e.kind;
-                it->second.secondSet = true;
+                if (it->second.ownerCount == 1) {
+                    it->second.t2 = e.tileType;
+                    it->second.k2 = e.kind;
+                    it->second.secondSet = true;
+                }
+                if (it->second.ownerCount < 255) ++it->second.ownerCount;
             }
         }
         // -------- Miter joinery pre-pass ---------------------------------
@@ -394,14 +635,14 @@ bool Renderer::buildGeometry() {
         // a near-180° joint where the offset lines are effectively
         // parallel, so the miter falls back to the edge normal at scale 1.
         //
-        // The same midpoint hash used for edge dedup is too coarse here
-        // (it keys on midpoint, not endpoint); we build a separate
-        // endpoint hash over the kept edges.
+        // Edge identity uses full endpoint pairs; this pass still builds a
+        // looser endpoint hash over kept edges so joinery can find every
+        // incident angular neighbour at a graph vertex.
         std::vector<const EdgeRec*> keptEdges;
         keptEdges.reserve(edgeMap.size());
         for (const auto& kv : edgeMap) {
             const EdgeRec& r = kv.second;
-            if (r.secondSet && r.t1 == r.t2 && hideSeam(settings_.family, r.k1, r.k2)) continue;
+            if (r.ownerCount == 2 && r.secondSet && r.t1 == r.t2 && hideSeam(settings_.family, r.k1, r.k2)) continue;
             const float dx = r.p2x - r.p1x;
             const float dy = r.p2y - r.p1y;
             if ((dx * dx + dy * dy) < 1e-12f) continue;
@@ -427,16 +668,15 @@ bool Renderer::buildGeometry() {
             uint8_t  end;     // 0 = p1, 1 = p2
             float    angle;   // atan2 of outward tangent at this endpoint
         };
-        // Endpoint clustering is intentionally looser than the midpoint
-        // dedup above. The midpoint key distinguishes edges; the endpoint
-        // key only needs to collect incident kept edges at the same graph
-        // vertex so the join pass can see its angular neighbours.
+        // Endpoint clustering is intentionally looser than the edge-pair
+        // dedup above. It only needs to collect incident kept edges at the
+        // same graph vertex so the join pass can see its angular neighbours.
         constexpr float kEndpointKeyScale = 1.0e3f;
-        std::unordered_map<EdgeKey, std::vector<EndRef>, EdgeKeyHash> endHash;
+        std::unordered_map<EndpointKey, std::vector<EndRef>, EndpointKeyHash> endHash;
         endHash.reserve(keptEdges.size());
         auto endpointKey = [&](float x, float y) {
-            return EdgeKey{ static_cast<int32_t>(std::lround(x * kEndpointKeyScale)),
-                            static_cast<int32_t>(std::lround(y * kEndpointKeyScale)) };
+            return EndpointKey{ quantizeCoord(x, kEndpointKeyScale),
+                                quantizeCoord(y, kEndpointKeyScale) };
         };
         for (uint32_t i = 0; i < keptEdges.size(); ++i) {
             const EdgeRec& r = *keptEdges[i];
@@ -504,7 +744,7 @@ bool Renderer::buildGeometry() {
         // angular side. Same-ray entries are a zero-width wedge, not a
         // join; skip them so edge-to-partial-edge and hidden-seam remnants
         // still miter against the next real angular sector.
-        auto findNeighbour = [&endHash](EdgeKey key, uint32_t edgeIdx,
+        auto findNeighbour = [&endHash](EndpointKey key, uint32_t edgeIdx,
                                         uint8_t end, int angularOffset)
                               -> const EndRef* {
             auto it = endHash.find(key);
@@ -554,9 +794,9 @@ bool Renderer::buildGeometry() {
                                float worldSide) -> std::array<float, 3> {
             const EdgeRec& r = *keptEdges[edgeIdx];
             const EdgeGeom& g = egeom[edgeIdx];
-            const EdgeKey k1 = endpointKey(r.p1x, r.p1y);
-            const EdgeKey k2 = endpointKey(r.p2x, r.p2y);
-            const EdgeKey vkey = (end == 0) ? k1 : k2;
+            const EndpointKey k1 = endpointKey(r.p1x, r.p1y);
+            const EndpointKey k2 = endpointKey(r.p2x, r.p2y);
+            const EndpointKey vkey = (end == 0) ? k1 : k2;
             const float outX = (end == 0) ?  g.tx : -g.tx;
             const float outY = (end == 0) ?  g.ty : -g.ty;
             const float localSide = worldSideForLocal(end, worldSide);
@@ -721,7 +961,9 @@ bool Renderer::buildGeometry() {
 // -----------------------------------------------------------------------------
 
 void Renderer::updatePaletteUbo() {
-    if (!paletteUboMapped_) return;
+    bool anyMapped = false;
+    for (void* mapped : paletteUboMapped_) anyMapped = anyMapped || mapped != nullptr;
+    if (!anyMapped) return;
     PresetResult ps = buildPreset(settings_.preset, settings_.colorCount,
                                   settings_.customOklch);
     PaletteUbo ubo{};
@@ -771,16 +1013,15 @@ void Renderer::updatePaletteUbo() {
     ubo.effects[2] = settings_.rippleSpeed;
     ubo.effects[3] = static_cast<float>(settings_.rippleKind);
 
-    float bands[AudioAnalyzer::kBands];
-    float beat = 0.0f;
-    globalAudioAnalyzer().snapshot(bands, beat);
+    AudioAnalyzer::FeatureSnapshot audio{};
+    globalAudioAnalyzer().snapshot(audio);
     for (int i = 0; i < 8; ++i) {
-        ubo.audioBands[i >> 2][i & 3] = bands[i];
+        ubo.audioBands[i >> 2][i & 3] = audio.bands[i];
     }
-    ubo.audioBeat[0] = beat;
-    ubo.audioBeat[1] = 0.0f;
-    ubo.audioBeat[2] = 0.0f;
-    ubo.audioBeat[3] = 0.0f;
+    ubo.audioBeat[0] = audio.beat;
+    ubo.audioBeat[1] = audio.onsetStrength;
+    ubo.audioBeat[2] = audio.cwtTransient;
+    ubo.audioBeat[3] = audio.beatConfidence;
 
     // Physical material: the eight user-facing controls come from the
     // settings sliders; the rest hold the MaterialParams defaults (a
@@ -810,7 +1051,9 @@ void Renderer::updatePaletteUbo() {
                        settings_.lightAmbient);
     writeMaterialRows(&ubo.matNormal[0], m);
 
-    std::memcpy(paletteUboMapped_, &ubo, sizeof(ubo));
+    for (void* mapped : paletteUboMapped_) {
+        if (mapped) std::memcpy(mapped, &ubo, sizeof(ubo));
+    }
 }
 
 } // namespace penrose

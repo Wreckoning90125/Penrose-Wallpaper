@@ -30,6 +30,10 @@ FAMILY_MAX_SEED = {
     10: 1,
     11: 3,
     12: 8,
+    13: 1,
+    14: 3,
+    15: 51,
+    16: 0,
 }
 
 FAMILY_MAX_GEN = {
@@ -39,6 +43,10 @@ FAMILY_MAX_GEN = {
     10: 7,
     11: 5,
     12: 5,
+    13: 10,
+    14: 5,
+    15: 8,
+    16: 8,
 }
 
 PREF_SCHEMA = {
@@ -48,6 +56,8 @@ PREF_SCHEMA = {
     "preset": str,
     "color_count": int,
     "color_mode": str,
+    "color_spread": int,
+    "color_spectral": int,
     "border_on": bool,
     "border_join": str,
     "border_width": int,
@@ -101,10 +111,10 @@ PREF_SCHEMA = {
 }
 
 STRING_VALUES = {
-    "family": {str(v) for v in range(13)},
-    "seed": {str(v) for v in range(9)},
+    "family": {str(v) for v in range(max(FAMILY_MAX_SEED) + 1)},
+    "seed": {str(v) for v in range(52)},
     "preset": {str(v) for v in range(12)},
-    "color_mode": {"0", "1", "2"},
+    "color_mode": {"0", "1", "2", "3"},
     "bg_mode": {"0", "1"},
     "border_join": {"0", "1", "2"},
     "pan_mode": {"0", "1"},
@@ -112,8 +122,10 @@ STRING_VALUES = {
 }
 
 INT_RANGES = {
-    "generation": (0, 8),
-    "color_count": (2, 16),
+    "generation": (0, 10),
+    "color_count": (2, 18),
+    "color_spread": (0, 100),
+    "color_spectral": (0, 100),
     "border_width": (0, 600),
     "border_l": (0, 100),
     "border_c": (0, 37),

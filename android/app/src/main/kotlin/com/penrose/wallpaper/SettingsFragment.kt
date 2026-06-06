@@ -637,6 +637,10 @@ class SettingsFragment : PreferenceFragmentCompat(),
             10 -> R.array.seed_danzer_entries to R.array.seed_danzer_values
             11 -> R.array.seed_hat_entries to R.array.seed_hat_values
             12 -> R.array.seed_spectre_entries to R.array.seed_spectre_values
+            13 -> R.array.seed_equithirds_entries to R.array.seed_equithirds_values
+            14 -> R.array.seed_cromwell_krt_entries to R.array.seed_cromwell_krt_values
+            15 -> R.array.seed_gailiunas_spiral_entries to R.array.seed_gailiunas_spiral_values
+            16 -> R.array.seed_cairo_entries to R.array.seed_cairo_values
             else -> R.array.seed_p3_entries to R.array.seed_p3_values
         }
         val entries = resources.getStringArray(entriesId)
@@ -656,7 +660,9 @@ class SettingsFragment : PreferenceFragmentCompat(),
             2 -> 7       // Chair
             4 -> 6       // Pinwheel
             9, 10 -> 7   // P1, Danzer
-            11, 12 -> 5  // Hat, Spectre
+            13 -> 10     // Equithirds
+            11, 12, 14 -> 5  // Hat, Spectre, Cromwell KRT
+            15, 16 -> 8  // Gailiunas spirals, Cairo pentagons
             else -> 8
         }
         generationPref.max = maxGen

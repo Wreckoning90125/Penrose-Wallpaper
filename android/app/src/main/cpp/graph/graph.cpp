@@ -62,6 +62,14 @@ const NodeDescriptor kDescriptors[] = {
     { NodeKind::OutHypBoostY,      "Hyperbolic boost Y","Target"   },
     { NodeKind::OutHypScale,       "Hyperbolic scale",  "Target"   },
     { NodeKind::SrcPageScroll,   "Home-screen scroll",  "Source"   },
+    { NodeKind::SrcRms,          "RMS level",           "Source"   },
+    { NodeKind::SrcSpectralFlux, "Spectral flux",       "Source"   },
+    { NodeKind::SrcOnsetStrength,"Onset strength",      "Source"   },
+    { NodeKind::SrcCwtTransient, "CWT transient",       "Source"   },
+    { NodeKind::SrcCrestFactor,  "Crest factor",        "Source"   },
+    { NodeKind::SrcBeatConfidence,"Beat confidence",    "Source"   },
+    { NodeKind::OpThresholdCompare,"Threshold compare", "Operator" },
+    { NodeKind::OpLag,           "Lag",                 "Operator" },
 };
 static_assert(sizeof(kDescriptors) / sizeof(kDescriptors[0])
                   == static_cast<size_t>(NodeKind::Count_),
@@ -193,6 +201,12 @@ private:
             case NodeKind::SrcBand6:    return c.bands[6];
             case NodeKind::SrcBand7:    return c.bands[7];
             case NodeKind::SrcBeat:       return c.beat;
+            case NodeKind::SrcRms:        return c.rms;
+            case NodeKind::SrcSpectralFlux: return c.spectralFlux;
+            case NodeKind::SrcOnsetStrength: return c.onsetStrength;
+            case NodeKind::SrcCwtTransient: return c.cwtTransient;
+            case NodeKind::SrcCrestFactor: return c.crestFactor;
+            case NodeKind::SrcBeatConfidence: return c.beatConfidence;
             case NodeKind::SrcTime:       return c.timeSec;
             case NodeKind::SrcPageScroll: return c.pageScroll;
             case NodeKind::SrcConstant:   return p0;
@@ -224,6 +238,14 @@ public:
                 break;
             case NodeKind::OpScaleBias:
                 p0 = 1.0f; p1 = 0.0f;
+                addIN<float>("x", 0.0f, filt);
+                break;
+            case NodeKind::OpThresholdCompare:
+                p0 = 0.5f;
+                addIN<float>("x", 0.0f, filt);
+                break;
+            case NodeKind::OpLag:
+                p0 = 0.25f;
                 addIN<float>("x", 0.0f, filt);
                 break;
             case NodeKind::OpAbs:
@@ -259,6 +281,14 @@ public:
                 ImGui::SetNextItemWidth(150.0f);
                 ImGui::SliderFloat("##bias", &p1, -1.0f, 1.0f, "bias %.2f");
                 break;
+            case NodeKind::OpThresholdCompare:
+                ImGui::SetNextItemWidth(150.0f);
+                ImGui::SliderFloat("##threshold", &p0, 0.0f, 1.0f, "threshold %.2f");
+                break;
+            case NodeKind::OpLag:
+                ImGui::SetNextItemWidth(150.0f);
+                ImGui::SliderFloat("##time", &p0, 0.0f, 2.0f, "time %.2fs");
+                break;
             default: break;
         }
     }
@@ -271,7 +301,7 @@ private:
             case NodeKind::OpMultiply:
                 return getInVal<float>("a") * getInVal<float>("b");
             case NodeKind::OpClamp:
-                return std::clamp(getInVal<float>("x"), p0, p1);
+                return std::max(p0, std::min(p1, getInVal<float>("x")));
             case NodeKind::OpSmoothstep: {
                 const float x = getInVal<float>("x");
                 if (p1 - p0 < 1e-6f) return 0.0f;
@@ -287,9 +317,20 @@ private:
             case NodeKind::OpAbs:       return std::fabs(getInVal<float>("x"));
             case NodeKind::OpInvert:    return 1.0f - getInVal<float>("x");
             case NodeKind::OpScaleBias: return getInVal<float>("x") * p0 + p1;
+            case NodeKind::OpThresholdCompare:
+                return getInVal<float>("x") >= p0 ? 1.0f : 0.0f;
+            case NodeKind::OpLag: {
+                const float x = getInVal<float>("x");
+                const float dt = std::max(0.0f, graph_->context().dtSeconds);
+                const float alpha = p0 <= 0.0f ? 1.0f : std::clamp(1.0f - std::exp(-dt / p0), 0.0f, 1.0f);
+                lagState_ += (x - lagState_) * alpha;
+                return lagState_;
+            }
             default:                    return 0.0f;
         }
     }
+
+    float lagState_ = 0.0f;
 };
 
 class TargetNode : public FlowNode {

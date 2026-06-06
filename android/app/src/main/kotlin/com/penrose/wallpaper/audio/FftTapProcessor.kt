@@ -25,7 +25,7 @@ internal class FftTapProcessor(
     private var pcmEncoding: Int = C.ENCODING_PCM_16BIT
     private var channelCount: Int = 2
     private var sampleRate: Int = 48000
-    private var scratch: FloatArray = FloatArray(4096)
+    private val scratch: FloatArray = FloatArray(4096)
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         pcmEncoding = inputAudioFormat.encoding
@@ -56,39 +56,54 @@ internal class FftTapProcessor(
             output.flip()
             return
         }
-        if (scratch.size < frames) scratch = FloatArray(frames)
-
         val dup = inputBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
         when (pcmEncoding) {
             C.ENCODING_PCM_16BIT -> {
                 val sb = dup.asShortBuffer()
                 val inv = 1.0f / (channelCount.toFloat() * 32768f)
-                for (f in 0 until frames) {
-                    var sum = 0
-                    for (c in 0 until channelCount) sum += sb.get().toInt()
-                    scratch[f] = sum * inv
+                var remaining = frames
+                while (remaining > 0) {
+                    val chunk = minOf(remaining, scratch.size)
+                    for (f in 0 until chunk) {
+                        var sum = 0
+                        for (c in 0 until channelCount) sum += sb.get().toInt()
+                        scratch[f] = sum * inv
+                    }
+                    onPcm(scratch, chunk, sampleRate)
+                    remaining -= chunk
                 }
             }
             C.ENCODING_PCM_FLOAT -> {
                 val fb = dup.asFloatBuffer()
                 val inv = 1.0f / channelCount.toFloat()
-                for (f in 0 until frames) {
-                    var sum = 0f
-                    for (c in 0 until channelCount) sum += fb.get()
-                    scratch[f] = sum * inv
+                var remaining = frames
+                while (remaining > 0) {
+                    val chunk = minOf(remaining, scratch.size)
+                    for (f in 0 until chunk) {
+                        var sum = 0f
+                        for (c in 0 until channelCount) sum += fb.get()
+                        scratch[f] = sum * inv
+                    }
+                    onPcm(scratch, chunk, sampleRate)
+                    remaining -= chunk
                 }
             }
             C.ENCODING_PCM_8BIT -> {
                 val inv = 1.0f / (channelCount.toFloat() * 128f)
-                for (f in 0 until frames) {
-                    var sum = 0
-                    for (c in 0 until channelCount) sum += (dup.get().toInt() - 128)
-                    scratch[f] = sum * inv
+                var remaining = frames
+                while (remaining > 0) {
+                    val chunk = minOf(remaining, scratch.size)
+                    for (f in 0 until chunk) {
+                        var sum = 0
+                        for (c in 0 until channelCount) sum += ((dup.get().toInt() and 0xff) - 128)
+                        scratch[f] = sum * inv
+                    }
+                    onPcm(scratch, chunk, sampleRate)
+                    remaining -= chunk
                 }
             }
         }
 
-        onPcm(scratch, frames, sampleRate)
         output.put(inputBuffer)
         output.flip()
     }

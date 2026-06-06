@@ -273,8 +273,10 @@ h1 {
 }
 
 .react-flow__node {
-  background: transparent;
-  border: 0;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 8px;
+  padding: 0;
   touch-action: none;
   /* Let the card stretch to the grid-snapped minHeight set during layout so
      row gaps stay even (even-gap regulation). */
@@ -380,10 +382,12 @@ h1 {
   gap: 8px;
   margin: 0 -12px 10px;
   padding: 9px 12px;
+  border-radius: 7px 7px 0 0;
   border-bottom: 1px solid color-mix(in oklch, white 18%, transparent);
   color: white;
   cursor: grab;
   background: color-mix(in oklch, var(--node-accent) 72%, black);
+  overflow: hidden;
 }
 
 /* The node-type icon, seated top-left of the title immediately before the label
@@ -789,13 +793,35 @@ input[type="range"] {
   padding-inline: var(--node-content-pad);
 }
 
-#colorWheel {
+.color-wheel-frame {
+  position: relative;
   width: min(210px, 100%);
+  aspect-ratio: 1;
+}
+
+#colorWheel {
+  width: 100%;
+  aspect-ratio: 1;
   height: auto;
   border: 1px solid var(--line);
   border-radius: 50%;
   background: #111;
   cursor: crosshair;
+  display: block;
+  touch-action: none;
+}
+
+.color-wheel-marker {
+  position: absolute;
+  left: var(--wheel-marker-x, 50%);
+  top: var(--wheel-marker-y, 50%);
+  width: 12px;
+  height: 12px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.72);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
 }
 
 .gamut {

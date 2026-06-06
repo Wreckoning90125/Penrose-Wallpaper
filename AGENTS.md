@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 Guidance for AI assistants working in this repo. Keep it accurate — delete or fix
 anything that drifts.

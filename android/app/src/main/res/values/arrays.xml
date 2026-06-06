@@ -2,7 +2,8 @@
 <resources>
     <!-- Display order groups the families by symmetry: the three Penrose
          systems, the other 5-fold tilings, then ascending fold order, with
-         the pinwheel (infinitely many orientations) and the Chair last. Each
+         the pinwheel (infinitely many orientations), the Chair, then explicit
+         spiral constructions. Each
          <item> here is paired by index with family_values, which carries the
          Family enum index the C++ side expects — so the menu can be reordered
          freely without disturbing stored preferences or the enum. -->
@@ -13,6 +14,8 @@
         <item>Hat monotile</item>
         <item>Spectre monotile</item>
         <item>Tübingen triangle (5-fold)</item>
+        <item>Equithirds</item>
+        <item>Cromwell KRT</item>
         <item>Binary (Godrèche–Lançon)</item>
         <item>Ammann–Beenker (8-fold)</item>
         <item>Dodecagonal (rhomb&#8211;square)</item>
@@ -20,6 +23,8 @@
         <item>Danzer triangle (7-fold)</item>
         <item>Pinwheel (right triangles)</item>
         <item>Chair (L-trominoes)</item>
+        <item>Cairo pentagons</item>
+        <item>Gailiunas spirals</item>
     </string-array>
     <string-array name="family_values">
         <item>0</item>
@@ -28,6 +33,8 @@
         <item>11</item>
         <item>12</item>
         <item>8</item>
+        <item>13</item>
+        <item>14</item>
         <item>7</item>
         <item>5</item>
         <item>3</item>
@@ -35,6 +42,8 @@
         <item>10</item>
         <item>4</item>
         <item>2</item>
+        <item>16</item>
+        <item>15</item>
     </string-array>
 
     <!-- Seeds per family — SettingsFragment swaps these into the seed
@@ -184,6 +193,144 @@
         <item>6</item>
         <item>7</item>
         <item>8</item>
+    </string-array>
+
+    <string-array name="seed_equithirds_entries">
+        <item>Equilateral</item>
+        <item>Wide</item>
+    </string-array>
+    <string-array name="seed_equithirds_values">
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+
+    <string-array name="seed_cromwell_krt_entries">
+        <item>Kite</item>
+        <item>Rhombus</item>
+        <item>Trapezium</item>
+        <item>Star</item>
+    </string-array>
+    <string-array name="seed_cromwell_krt_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+    </string-array>
+
+    <string-array name="seed_cairo_entries">
+        <item>Standard</item>
+    </string-array>
+    <string-array name="seed_cairo_values">
+        <item>0</item>
+    </string-array>
+
+    <string-array name="seed_gailiunas_spiral_entries">
+        <item>{3,6,3}</item>
+        <item>{3,9,4}</item>
+        <item>{3,12,5}</item>
+        <item>{3,15,6}</item>
+        <item>{3,18,7}</item>
+        <item>{3,21,8}</item>
+        <item>{3,24,9}</item>
+        <item>{3,27,10}</item>
+        <item>{3,30,11}</item>
+        <item>{3,33,12}</item>
+        <item>{3,36,13}</item>
+        <item>{4,8,3}</item>
+        <item>{4,12,4}</item>
+        <item>{4,16,5}</item>
+        <item>{4,20,6}</item>
+        <item>{4,24,7}</item>
+        <item>{4,28,8}</item>
+        <item>{4,32,9}</item>
+        <item>{4,36,10}</item>
+        <item>{5,10,3}</item>
+        <item>{5,15,4}</item>
+        <item>{5,20,5}</item>
+        <item>{5,25,6}</item>
+        <item>{5,30,7}</item>
+        <item>{5,35,8}</item>
+        <item>{6,12,3}</item>
+        <item>{6,18,4}</item>
+        <item>{6,24,5}</item>
+        <item>{6,30,6}</item>
+        <item>{6,36,7}</item>
+        <item>{7,14,3}</item>
+        <item>{7,21,4}</item>
+        <item>{7,28,5}</item>
+        <item>{7,35,6}</item>
+        <item>{8,16,3}</item>
+        <item>{8,24,4}</item>
+        <item>{8,32,5}</item>
+        <item>{9,18,3}</item>
+        <item>{9,27,4}</item>
+        <item>{9,36,5}</item>
+        <item>{10,20,3}</item>
+        <item>{10,30,4}</item>
+        <item>{11,22,3}</item>
+        <item>{11,33,4}</item>
+        <item>{12,24,3}</item>
+        <item>{12,36,4}</item>
+        <item>{13,26,3}</item>
+        <item>{14,28,3}</item>
+        <item>{15,30,3}</item>
+        <item>{16,32,3}</item>
+        <item>{17,34,3}</item>
+        <item>{18,36,3}</item>
+    </string-array>
+    <string-array name="seed_gailiunas_spiral_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>7</item>
+        <item>8</item>
+        <item>9</item>
+        <item>10</item>
+        <item>11</item>
+        <item>12</item>
+        <item>13</item>
+        <item>14</item>
+        <item>15</item>
+        <item>16</item>
+        <item>17</item>
+        <item>18</item>
+        <item>19</item>
+        <item>20</item>
+        <item>21</item>
+        <item>22</item>
+        <item>23</item>
+        <item>24</item>
+        <item>25</item>
+        <item>26</item>
+        <item>27</item>
+        <item>28</item>
+        <item>29</item>
+        <item>30</item>
+        <item>31</item>
+        <item>32</item>
+        <item>33</item>
+        <item>34</item>
+        <item>35</item>
+        <item>36</item>
+        <item>37</item>
+        <item>38</item>
+        <item>39</item>
+        <item>40</item>
+        <item>41</item>
+        <item>42</item>
+        <item>43</item>
+        <item>44</item>
+        <item>45</item>
+        <item>46</item>
+        <item>47</item>
+        <item>48</item>
+        <item>49</item>
+        <item>50</item>
+        <item>51</item>
     </string-array>
 
     <string-array name="preset_entries">

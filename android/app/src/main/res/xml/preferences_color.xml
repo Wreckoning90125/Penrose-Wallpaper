@@ -25,12 +25,12 @@
         <SeekBarPreference
             android:key="color_count"
             android:title="Colors"
-            android:min="2" android:max="16" android:defaultValue="2"
+            android:min="2" android:max="18" android:defaultValue="2"
             app:showSeekBarValue="true" />
         <SeekBarPreference
             android:key="brightness"
             android:title="@string/brightness_title"
-            android:min="0" android:max="200" android:defaultValue="100"
+            android:min="0" android:max="100" android:defaultValue="100"
             app:showSeekBarValue="true" />
         <SeekBarPreference
             android:key="depth_amount"
@@ -41,6 +41,6 @@
         <Preference
             android:key="nav_custom_palette"
             android:title="@string/custom_palette_title"
-            android:summary="Edit the 10 OKLCH slots used by the Custom preset" />
+            android:summary="Edit the 18 OKLCH slots used by the Custom preset" />
     </PreferenceCategory>
 </PreferenceScreen>

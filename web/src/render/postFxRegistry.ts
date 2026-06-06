@@ -164,7 +164,16 @@ export const FX_BUILDERS: Record<FxKind, FxBuilder> = {
     // in fxStructuralSignature), so they bake at build time; `bg` comes from the
     // shared context; disposal is generic (TrailsNode owns render targets, so the
     // renderer's disposePostTree frees it like bloom/afterImage).
-    createUniforms: () => ({ trail: uniform(afterImageDamp(0)), zoom: uniform(0), rotate: uniform(0), hue: uniform(0) }),
+    createUniforms: () => ({
+      trail: uniform(afterImageDamp(0)),
+      zoom: uniform(0),
+      rotate: uniform(0),
+      rotateSin: uniform(0),
+      rotateCos: uniform(1),
+      hue: uniform(0),
+      hueSin: uniform(0),
+      hueCos: uniform(1),
+    }),
     apply: (input, u, node, ctx) => {
       const mode: TrailsMode = node.selects['mode'] === 'afterimage' ? 'afterimage'
         : node.selects['mode'] === 'both' ? 'both' : 'trails';
@@ -174,7 +183,16 @@ export const FX_BUILDERS: Record<FxKind, FxBuilder> = {
       // transform params are zero, because those params are uniforms and can be
       // dragged or audio-driven later without a structural rebuild.
       if (maskMode === 0 && mode === 'afterimage') return afterImage(input, u['trail']!);
-      return trails(input, mode, { decay: u['trail']!, zoom: u['zoom']!, rotate: u['rotate']!, hue: u['hue']!, maskMode, bg: ctx.bg });
+      return trails(input, mode, {
+        decay: u['trail']!,
+        hueCos: u['hueCos']!,
+        hueSin: u['hueSin']!,
+        maskMode,
+        rotateCos: u['rotateCos']!,
+        rotateSin: u['rotateSin']!,
+        zoom: u['zoom']!,
+        bg: ctx.bg,
+      });
     },
   },
   aa: {

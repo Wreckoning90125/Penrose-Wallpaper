@@ -47,7 +47,7 @@
             android:key="mat_sheen"
             android:title="Sheen"
             android:summary="Velvet grazing-angle lobe"
-            android:min="0" android:max="200" android:defaultValue="35"
+            android:min="0" android:max="100" android:defaultValue="35"
             app:showSeekBarValue="true" />
         <SeekBarPreference
             android:key="mat_clearcoat"
@@ -65,7 +65,7 @@
             android:key="mat_emissive"
             android:title="Emissive glow"
             android:summary="Glow on the ripple crests"
-            android:min="0" android:max="200" android:defaultValue="60"
+            android:min="0" android:max="100" android:defaultValue="60"
             app:showSeekBarValue="true" />
         <SeekBarPreference
             android:key="mat_relief"

@@ -47,11 +47,10 @@ ShaderColor oklchToShaderColor(Oklch c, float alpha, bool wideGamutP3, bool line
 // Palette presets
 // =============================================================================
 // Each preset returns up to kMaxColors OKLCH triples for a given K.
-// The renderer reads the first state.colorCount entries. 16 slots give the
-// higher-symmetry families (12-fold, 14-fold) enough distinct colours for a
-// full per-orientation or per-ring palette.
+// The renderer reads the first state.colorCount entries. 18 slots cover the
+// largest Gailiunas arm count while still fitting comfortably in one UBO.
 
-constexpr int kMaxColors = 16;
+constexpr int kMaxColors = 18;
 
 enum class Preset : int {
     BW = 0,
@@ -86,14 +85,14 @@ PresetResult buildPreset(Preset p, int k, const Oklch* customSource = nullptr);
 // =============================================================================
 
 enum class ColorMode : int {
-    Type = 0,    // L/S for Penrose, orient 0..3 for chair
-    Orient = 1,  // 10 bins for Penrose (base direction), orient 0..3 for chair
+    Type = 0,    // family tile kind; Gailiunas uses arm index
+    Orient = 1,  // family orientation bins
     Ring = 2,    // K bins by distance from origin
 };
 
 // Returns, for each tile in `tiles`, the bucket index in [0, numBuckets).
-// numBuckets is 10 for Penrose orient mode, K for ring mode, family-natural
-// for type mode (2 for Penrose, 4 for chair).
+// numBuckets is family-natural for Type/Orient and K for Ring; Gailiunas Type
+// cycles arms through K slots to mirror the source notebook's color count.
 struct Classification {
     std::vector<uint8_t> bucket; // one byte per tile
     int numBuckets;

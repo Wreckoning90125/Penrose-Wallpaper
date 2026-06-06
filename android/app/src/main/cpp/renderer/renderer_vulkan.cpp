@@ -30,9 +30,11 @@ namespace penrose {
 namespace {
 
 // Preferred swapchain (format, colorSpace) tuples, in order of preference.
-// The renderer picks the first match the surface advertises. Wide-gamut P3
-// wins; sRGB hardware-encoded path when only sRGB shows up; bare UNORM
-// last because we'd have to encode in software.
+// The renderer draws fill + translucent border directly into the swapchain.
+// Prefer _SRGB attachments because fixed-function blending happens in linear
+// light there. Direct Display-P3/UNORM is kept as a last-resort display path;
+// a fully correct P3 path needs an offscreen linear scene target plus a
+// present/tone-transfer pass.
 struct SwapchainPref {
     VkFormat        format;
     VkColorSpaceKHR colorSpace;
@@ -41,11 +43,11 @@ struct SwapchainPref {
 };
 
 constexpr SwapchainPref kSwapchainPrefs[] = {
-    { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT, true,  false },
     { VK_FORMAT_R8G8B8A8_SRGB,            VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,       false, true  },
     { VK_FORMAT_B8G8R8A8_SRGB,            VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,       false, true  },
     { VK_FORMAT_R8G8B8A8_UNORM,           VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,       false, false },
     { VK_FORMAT_B8G8R8A8_UNORM,           VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,       false, false },
+    { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT, true,  false },
 };
 
 } // namespace
@@ -211,11 +213,13 @@ bool Renderer::initDeviceForSurface() {
 bool Renderer::createDescriptorObjects() {
     paletteUboSize_ = sizeof(PaletteUbo);
 
-    if (!createBuffer(paletteUboSize_, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                      paletteUbo_, paletteUboMem_)) return false;
-    VK_CHECK(vkMapMemory(device_, paletteUboMem_, 0, paletteUboSize_, 0, &paletteUboMapped_));
+    for (uint32_t i = 0; i < kFramesInFlight; ++i) {
+        if (!createBuffer(paletteUboSize_, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                          paletteUbo_[i], paletteUboMem_[i])) return false;
+        VK_CHECK(vkMapMemory(device_, paletteUboMem_[i], 0, paletteUboSize_, 0, &paletteUboMapped_[i]));
+    }
 
     VkDescriptorSetLayoutBinding b{};
     b.binding = 0;
@@ -229,43 +233,49 @@ bool Renderer::createDescriptorObjects() {
     dsl.pBindings = &b;
     VK_CHECK(vkCreateDescriptorSetLayout(device_, &dsl, nullptr, &descSetLayout_));
 
-    VkDescriptorPoolSize ps{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 };
+    VkDescriptorPoolSize ps{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFramesInFlight };
     VkDescriptorPoolCreateInfo dpc{};
     dpc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    dpc.maxSets = 1;
+    dpc.maxSets = kFramesInFlight;
     dpc.poolSizeCount = 1;
     dpc.pPoolSizes = &ps;
     VK_CHECK(vkCreateDescriptorPool(device_, &dpc, nullptr, &descPool_));
 
+    std::array<VkDescriptorSetLayout, kFramesInFlight> layouts{};
+    layouts.fill(descSetLayout_);
     VkDescriptorSetAllocateInfo dsa{};
     dsa.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     dsa.descriptorPool = descPool_;
-    dsa.descriptorSetCount = 1;
-    dsa.pSetLayouts = &descSetLayout_;
-    VK_CHECK(vkAllocateDescriptorSets(device_, &dsa, &descSet_));
+    dsa.descriptorSetCount = kFramesInFlight;
+    dsa.pSetLayouts = layouts.data();
+    VK_CHECK(vkAllocateDescriptorSets(device_, &dsa, descSets_.data()));
 
-    VkDescriptorBufferInfo dbi{ paletteUbo_, 0, paletteUboSize_ };
-    VkWriteDescriptorSet wds{};
-    wds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    wds.dstSet = descSet_;
-    wds.dstBinding = 0;
-    wds.descriptorCount = 1;
-    wds.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    wds.pBufferInfo = &dbi;
-    vkUpdateDescriptorSets(device_, 1, &wds, 0, nullptr);
+    for (uint32_t i = 0; i < kFramesInFlight; ++i) {
+        VkDescriptorBufferInfo dbi{ paletteUbo_[i], 0, paletteUboSize_ };
+        VkWriteDescriptorSet wds{};
+        wds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wds.dstSet = descSets_[i];
+        wds.dstBinding = 0;
+        wds.descriptorCount = 1;
+        wds.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        wds.pBufferInfo = &dbi;
+        vkUpdateDescriptorSets(device_, 1, &wds, 0, nullptr);
+    }
     return true;
 }
 
 void Renderer::destroyDescriptorObjects() {
-    if (paletteUboMapped_) {
-        vkUnmapMemory(device_, paletteUboMem_);
-        paletteUboMapped_ = nullptr;
+    for (uint32_t i = 0; i < kFramesInFlight; ++i) {
+        if (paletteUboMapped_[i]) {
+            vkUnmapMemory(device_, paletteUboMem_[i]);
+            paletteUboMapped_[i] = nullptr;
+        }
+        if (paletteUbo_[i])    { vkDestroyBuffer(device_, paletteUbo_[i], nullptr);       paletteUbo_[i] = VK_NULL_HANDLE; }
+        if (paletteUboMem_[i]) { vkFreeMemory(device_, paletteUboMem_[i], nullptr);       paletteUboMem_[i] = VK_NULL_HANDLE; }
     }
-    if (paletteUbo_)     { vkDestroyBuffer(device_, paletteUbo_, nullptr);                  paletteUbo_ = VK_NULL_HANDLE; }
-    if (paletteUboMem_)  { vkFreeMemory(device_, paletteUboMem_, nullptr);                  paletteUboMem_ = VK_NULL_HANDLE; }
     if (descPool_)       { vkDestroyDescriptorPool(device_, descPool_, nullptr);            descPool_ = VK_NULL_HANDLE; }
     if (descSetLayout_)  { vkDestroyDescriptorSetLayout(device_, descSetLayout_, nullptr);  descSetLayout_ = VK_NULL_HANDLE; }
-    descSet_ = VK_NULL_HANDLE;
+    descSets_.fill(VK_NULL_HANDLE);
 }
 
 // -----------------------------------------------------------------------------
@@ -349,22 +359,28 @@ bool Renderer::buildPipelines() {
     ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    // Premultiplied alpha. Border alpha < 1 composites correctly over fills.
-    VkPipelineColorBlendAttachmentState cba{};
-    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
-                       | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    cba.blendEnable = VK_TRUE;
-    cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-    cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    cba.colorBlendOp = VK_BLEND_OP_ADD;
-    cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    cba.alphaBlendOp = VK_BLEND_OP_ADD;
+    VkPipelineColorBlendAttachmentState fillCba{};
+    fillCba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+                            | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    fillCba.blendEnable = VK_FALSE;
 
-    VkPipelineColorBlendStateCreateInfo cb{};
-    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    cb.attachmentCount = 1;
-    cb.pAttachments = &cba;
+    // Premultiplied alpha. Border alpha < 1 composites correctly over fills.
+    VkPipelineColorBlendAttachmentState borderCba = fillCba;
+    borderCba.blendEnable = VK_TRUE;
+    borderCba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    borderCba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    borderCba.colorBlendOp = VK_BLEND_OP_ADD;
+    borderCba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    borderCba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    borderCba.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    VkPipelineColorBlendStateCreateInfo fillCb{};
+    fillCb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    fillCb.attachmentCount = 1;
+    fillCb.pAttachments = &fillCba;
+
+    VkPipelineColorBlendStateCreateInfo borderCb = fillCb;
+    borderCb.pAttachments = &borderCba;
 
     VkPipelineViewportStateCreateInfo vp{};
     vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
@@ -438,7 +454,7 @@ bool Renderer::buildPipelines() {
     fillGpi.pViewportState = &vp;
     fillGpi.pRasterizationState = &rs;
     fillGpi.pMultisampleState = &ms;
-    fillGpi.pColorBlendState = &cb;
+    fillGpi.pColorBlendState = &fillCb;
     fillGpi.pDynamicState = &dyn;
     fillGpi.layout = pipelineLayout_;
     fillGpi.renderPass = VK_NULL_HANDLE;
@@ -490,6 +506,7 @@ bool Renderer::buildPipelines() {
     borderGpi.pStages = borderStages;
     borderGpi.pVertexInputState = &borderVi;
     borderGpi.pInputAssemblyState = &triIA;
+    borderGpi.pColorBlendState = &borderCb;
     VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &borderGpi, nullptr, &borderPipeline_));
 
     pipelinesBuilt_ = true;

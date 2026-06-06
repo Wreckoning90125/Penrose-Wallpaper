@@ -69,6 +69,17 @@ public:
     // Three CWT kernels, targeted at the percussive bands per cwt.rs.
     static constexpr int kCwtKernels = 3;
 
+    struct FeatureSnapshot {
+        float bands[kBands] = {};
+        float beat = 0.0f;
+        float rms = 0.0f;
+        float spectralFlux = 0.0f;
+        float onsetStrength = 0.0f;
+        float cwtTransient = 0.0f;
+        float crestFactor = 0.0f;
+        float beatConfidence = 0.0f;
+    };
+
     AudioAnalyzer();
 
     // Reconfigure for a new playback stream. Resets ring state, DSP
@@ -88,15 +99,21 @@ public:
     // autocorrelation lag to BPM.
     void analyzeFrame(float dtSeconds);
 
-    // Snapshot the smoothed bands + beat under analyzeMutex_. Both
-    // outputs are in the 0..1 range under typical content; transient
-    // peaks above 1 get soft-clipped by the smoother. See the threading
-    // contract at the top of this header for why a snapshot is needed
-    // instead of returning raw pointers.
+    // Snapshot the latest analyzer features under analyzeMutex_. See the
+    // threading contract at the top of this header for why a snapshot is
+    // needed instead of returning raw pointers.
+    void snapshot(FeatureSnapshot& out) const;
+
+    // Compatibility view for existing shader/graph code that only consumes
+    // the smoothed octave bands and beat envelope.
     void snapshot(float (&outBands)[kBands], float& outBeat) const;
 
     // Mark the stream as silent (no playback). Drives bands toward 0.
     void quiesce();
+
+    // Explicit stop/reset from the playback service. Clears temporal DSP
+    // state so a later track starts with fresh onset, CWT, and tempo memory.
+    void clear();
 
 private:
     void initStaticTables();
@@ -122,6 +139,7 @@ private:
     float scratchRe_[kFftSize]      = {};
     float scratchIm_[kFftSize]      = {};
     float window_[kFftSize]         = {};
+    float windowSum_                = 0.0f;
     int   bitRev_[kFftSize]         = {};
     float twiddleCos_[kFftSize / 2] = {};
     float twiddleSin_[kFftSize / 2] = {};
@@ -177,6 +195,11 @@ private:
     // Smoothing state. Mutated by analyzeFrame and read by snapshot.
     float bandsSmoothed_[kBands] = {};
     float beatSmoothed_          = 0.0f;
+    float rms_                   = 0.0f;
+    float spectralFlux_          = 0.0f;
+    float onsetStrength_         = 0.0f;
+    float cwtTransient_          = 0.0f;
+    float crestFactor_           = 0.0f;
     mutable std::mutex analyzeMutex_;
 
     // Stream-active sentinel: time since last pushPcm. Beyond a small

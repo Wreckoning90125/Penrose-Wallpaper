@@ -6,29 +6,27 @@ becomes the source of truth that _compiles_ the render pipeline ("full
 authority"), starting with a chainable post-FX system and the node architecture
 the rest of the overhaul reuses.
 
-Governing rules live in and are NOT restated here — read first:
+Governing rules live in and are not restated here — read first:
 
 - [`tsl-post-fx-model.md`](tsl-post-fx-model.md) — renderer layer boundary, r184 TSL chain shape, repo ownership rules.
 - [`../platform/control-graph-regressions.md`](../platform/control-graph-regressions.md) — graph/renderer failure cases that are hard requirements (no inert ports, ride/hold, no graph-wide `setNodes` for frame-rate state, frame-in/out, target-range modulation, measured handles).
-- `../../.local/Zorin/MANIFEST.md` — the ranked technique backlog mined from the Zorin corpus (sources for the field/contour/projection work).
-- Reference implementations: `.local/procedural-morphology-lab` (chainable FX + node-scoped routing), `.local/three-docs` + `.local/three-examples` (r184 `pass→effect→outputNode`), `.local/tpmsTsl.ts` (Mikkelsen luminance relief/contours), `.local/renderer.ts` (the `trails` "acid hands" feedback + mask modes), `.local/controls` (`MultiSwitch` 3-way pattern).
+- `docs/render/webgpu-constraints.md` — WebGPU vertex-buffer, FX constructor, render-target lifetime, and graph-render contract rules.
+- Reference model: Three.js WebGPU/TSL r184 `pass → effect → outputNode` composition, plus the committed render docs and public source citations used by implementation notes.
 
-Code anchors (verified): `web/src/render/webgpuRenderer.ts` (renderer, `rebuildPostPipeline`, material/position nodes, `setAudioDrive`), `web/src/tiling/geometry.ts` (CPU mesh builder: `classify`, `createProjector`, emits `tileOrient/tileRing/tileCenter`), `web/src/flow/ControlGraph.tsx` (the graph; `evaluateAudioModulations`, `isValidGraphConnection`, presets), `web/src/types.ts`.
+Code anchors (verified): `web/src/render/webgpuRenderer.ts` (renderer, `rebuildPostPipeline`, material/position nodes, `setAudioDrive`), `web/src/tiling/geometry.ts` (CPU mesh builder: `classify`, `createProjector`, emits `tileOrient/tileRing/tileCenter`), `web/src/flow/ControlGraph.tsx` (graph orchestration, `evaluateAudioModulations`, presets), `web/src/flow/graphTopology.ts` (connection policy, DAG checks, frame-chain derivation), `web/src/types.ts`.
 
 ---
 
 ## 1. Problem & intent
 
-The graph today is two things tangled together: a **decorative backbone**
-(`atlas→tiling→…→display` edges that change zero pixels — verified: the edge list
-never crosses the prop boundary; only `evaluateAudioModulations` reads edges, and
-only for handles in `AUDIO_TARGET_RANGES`) and a **real modulation patch bay**
-(analysis/clock/operators → setting-handle targets) that is keyed by **handle name
-only**, so target-node identity is discarded.
+The graph is the render contract and the modulation patch bay. Structural wires
+derive renderer inputs and the ordered post-FX chain; analysis/clock/operator
+wires drive setting and effect-parameter inlets through explicit target ranges.
 
-The post-FX layer is a single hardcoded chain in `rebuildPostPipeline`
-(pixelate→posterize→film→rgbShift→sobel-mix→optional afterImage), rebuilt only
-when afterImage crosses zero. Everything else is uniform-driven.
+The post-FX layer is now graph-derived. `ControlGraph` walks `frame` edges into a
+`PostChainSpec`, and `webgpuRenderer.ts` compiles that spec through
+`rebuildPostPipeline`. Uniform-only parameter changes stay live; topology,
+bypass, no-op status, or structural select changes rebuild the output node.
 
 Intent: make the graph the **authoritative, serializable description** the renderer
 compiles, starting with post-FX, on rails that later carry surface/field and
@@ -42,7 +40,13 @@ from the graph and pushes it to the renderer (new callback, sibling to
 `onAudioModulation`). The spec is plain JSON-able data:
 
 ```
-PostChainSpec = Array<{ id: string, kind: string, bypass: boolean, params: Record<string, number> }>
+PostChainSpec = Array<{
+  id: string;
+  kind: string;
+  bypass: boolean;
+  params: Record<string, number>;
+  selects: Record<string, string>;
+}>
 ```
 
 `params` already include this frame's resolved node-scoped modulation. This is the
@@ -55,11 +59,10 @@ TSL builders + GPU resource lifecycles (RenderTargets, `updateBefore`, dispose)
 live here — never in the UI. (`tsl-post-fx-model.md` boundary; R3F-style
 declarative-description + reconciling-backend.)
 
-**2.3 Recompile vs uniform split.** Signature = `spec.map(n => `${n.id}:${n.kind}:${n.bypass}`).join('|')`.
-Topology/bypass change → rebuild `RenderPipeline.outputNode`. Param/modulation
-change → write uniforms only (no recompile). This retires the afterImage rebuild
-(afterimage becomes a normal node). Matches r184 `needsUpdate`-on-structure and
-morphology's `lastChainSignature`.
+**2.3 Recompile vs uniform split.** Signature =
+`id:kind:bypass:no-op:fxStructuralSignature(params, selects)`. Topology,
+bypass, no-op status, or structural select changes rebuild
+`RenderPipeline.outputNode`. Param/modulation changes write uniforms only.
 
 **2.4 Pure-data catalog (shared, `three`-free).** `postFxCatalog` describes each
 kind: label, icon, params (key/label/min/max/default/step), ports, domain,
@@ -86,24 +89,22 @@ Standard node: `frame` in → `frame` out, one modulation inlet per param, a
 `bypass` toggle. All params bind to `uniform()` (live, no recompile) unless marked
 _structural_ (loop counts) which recompile. `L`=linear/pre-tonemap, `D`=display/post-tonemap.
 
-Ranges are wide-on-purpose (user reviews numbers on screen). Full table with
-defaults: see conversation §2 catalog; summary:
+Ranges are wide-on-purpose and live in `web/src/render/postFxCatalog.ts`. Summary:
 
-- **The six (rebuilt atomic):** Pixelate (custom `pixelateNode`, D) · Posterize (`posterize`, D) · Film grain (`film`, D) · RGB shift (`rgbShift`, D) · Sobel (mix `mix(in,sobel(in),m)`, D) · Afterimage (remapped to trail half-life → `damp=0.5^(1/frames)`, cap ≤0.985, D).
+- **Core display effects:** Pixelate (custom `pixelateNode`, D) · Posterize (`posterize`, D) · Film grain (`film`, D) · RGB shift (`rgbShift`, D) · Sobel (mix `mix(in,sobel(in),m)`, D) · Afterimage (remapped to trail half-life → `damp=0.5^(1/frames)`, cap ≤0.985, D).
 - **New r184 (verified frame-in/out, three 0.184.0):** Bloom (additive, L) · Dot screen (D) · Chromatic aberration (D) · Sepia (blend, D) · Bleach (blend, D) · Blur (`hashBlur`, L) · Anamorphic (additive, L; `samples` structural) · AA (one node, mode OFF/FXAA/SMAA; FXAA=D, SMAA=L; TAA later, needs velocity MRT).
-- **Feedback node (3-way):** one node, `MultiSwitch` mode = **Afterimage / Trails / Both**. Internally two atomic kinds (`afterImage`, `trails`) so the data keeps them separable; the node emits one or both into the spec. `trails` = r184 port of `.local/renderer.ts` "acid hands": ping-pong `max(prev·decay, frame)` + feedback UV zoom/rotate + hue-per-cycle + mask 3-way (none/surface/inverse) via background-color distance (`palette.bg`, no MRT). Persistence remapped like afterimage; display-domain (bounded).
+- **Feedback node (3-way):** catalog kind `feedback`, with mode = **Afterimage / Trails / Both**. `TrailsNode` owns the ping-pong history, `max(prev·decay, frame)`, feedback UV zoom/rotate, hue-per-cycle, and mask 3-way (none/surface/inverse) via background-color distance (`palette.bg`, no MRT). Persistence is remapped like afterimage; display-domain (bounded).
 - **Contours (luminance, colorable):** Mikkelsen luminance-isolines (frame subset of `tpmsTsl.ts`) — `fwidth`-thresholded lines from luminance gradient; line **color is an independent control**. Source-selectable later (§5 unifies luminance/curvature/biharmonic/SDF sources).
-- **SDF edge profiles (parilov):** bevel / halo / glow / relief keyed to **distance-from-tile-edge**. We already emit tile-edge geometry → bake/provide an edge SDF; profile is a 1-D ramp. Post-FX/field hybrid; folded into Block 1.
-- **Tone-map node (output transform):** explicit positioned `renderOutput(node, AgX, sRGB)` with `RenderPipeline.outputColorTransform=false`; defaults just before Display; linear effects upstream, display effects downstream; soft warning if an effect is on the wrong side.
+- **Tone-map node:** explicit positioned AgX tone-curve node; `RenderPipeline.outputColorTransform` stays `true` so sRGB output encoding is never skipped. Linear effects sit upstream, display effects downstream.
 
 ## 4. Compiler + graph UX (§3)
 
 - **Compile:** walk `frame` edges Display→scene; collect ordered FX nodes; build `outputNode` by folding `registry[kind].apply` (replace/blend `out=f(in)`, additive `out=in.add(f(in))`, feedback = internal state). Recompile on signature change only.
 - **Add** = add. **Delete** = delete
 - **Add menu + toolbar go icon-based (lucide-react)** — the dense word-button row is replaced with compact icons (codex's prior attempt regressed; do it right per `control-graph-regressions.md` chrome rules).
-- **3-way switches** (Feedback mode, Trails mask, future Contour source) reuse the `.local/controls` `MultiSwitch` pattern.
+- **3-way switches** (Feedback mode, Trails mask, future Contour source) use the same segmented-control pattern across the graph UI.
 - **Ride/hold** applies to every FX param slider + its modulation (existing begin/end-edit + heldParams path).
-- Honor all regression rules: measured handles + `useUpdateNodeInternals`, no graph-wide `setNodes` for frame-rate state, `nodrag/nopan/nowheel` discipline, No inert ports. no fake wires. IF A WIRE CAN BE DELETED AND NOTHING CHANGES ITS FAKE. IF I CAN REMOVE ALL WIRES FROM TILE TO RENDER SINK THE WHOLE APP IS FAKE.
+- Honor all regression rules: measured handles plus `useUpdateNodeInternals`, no graph-wide `setNodes` for frame-rate state, `nodrag/nopan/nowheel` discipline, and no inert ports. If a wire can be deleted without changing the render contract it represents, that wire should not exist.
 
 ## 5. Surface/field-domain (Block 2 — next wave, same rails)
 
@@ -127,7 +128,7 @@ material/position/attribute nodes (per `tsl-post-fx-model.md` surface layer).
 
 - **Continuous** Euclid↔disk↔ball as GPU sliders (move the projection math to the
   shader; `boostCoordinateNodes` already proves Möbius works live). `hyp_scale`
-  stops being dual-role/dead-in-Poincaré.
+  is live in the renderer instead of forcing a geometry rebuild.
 - **Closed-form conformal / holomorphic warps** beyond Möbius (`z^k`, `exp`,
   Joukowski, Schwarz–Christoffel, elliptic) — cheap per-pixel, angle-preserving,
   richer than Möbius. **Not** the solver-based conformal papers (`weber*`, Penner,
@@ -137,9 +138,9 @@ material/position/attribute nodes (per `tsl-post-fx-model.md` surface layer).
 - **Optional exotic:** Hopf fibration (parent `Hongwan_Liu-Hopf_fibration`),
   conformal cone-foci (hand-rolled closed-form, not the solver).
 
-## 7. The rest of the overhaul (do not forget)
+## 7. Overhaul Areas
 
-- **Graph honesty pass:** every backbone wire becomes real / locked-annotation / removed (done for the §0 inputs); the swapped `postfx` node is now the wired `Field source` (displace/relief/color outlets → renderer inlets, surface-domain), distinct from `postprocess` ("Post-FX" = frame); remaining: split Projection's live vs rebuild controls.
+- **Graph honesty pass:** every backbone wire becomes real / locked-annotation / removed (done for the §0 inputs); the swapped `postfx` node is now the wired `Field source` (displace/relief/color outlets → renderer inlets, surface-domain), distinct from `postprocess` ("Post-FX" = frame). Projection separates live controls from geometry-rebuild controls.
 - **Node-scoped modulation unification:** migrate all targets to `(nodeId,handle)`.
 - **Presets serialize everything:** nodes+positions, edges, settings, palette/custom colors, modulation routing, post-chain, viewport; auto-layout only for on-load default/explicit-align, never silently over user presets.
 - **Optional geometry:** `kovacs2010rcs` real-time creased subdivision / `tosun2011mbs` closed-form manifold surfaces for smoother tiles.
@@ -147,7 +148,7 @@ material/position/attribute nodes (per `tsl-post-fx-model.md` surface layer).
 
 ## 8. Constraints / preservation
 
-- **Cost tiers** (keep continuous controls in the uniform tier): live uniform (mat*\*, light*\_, brightness, depth, ripple\_\_, fx\_\*, boost) · buffer update (palette colors) · CPU rebuild (family/seed/generation, projection mode, Poincaré hyp_scale, subdivisions, color_count/mode, border) · pipeline rebuild.
+- **Cost tiers** (keep continuous controls in the uniform tier): live uniform (mat*\*, light*\_, brightness, depth, ripple\_\_, fx\_\*, boost, Poincaré hyp_scale) · buffer update (palette colors) · CPU rebuild (family/seed/generation, projection mode, subdivisions, color_count/mode, border) · pipeline rebuild.
 - **r184 correctness:** color-space domains respected via the tone-map node (Sobel/FXAA after, Bloom/SMAA before); multi-pass/MRT effects (TAA/GTAO/SSR/DOF…) follow the stateful-pass ownership rules in `tsl-post-fx-model.md`.
 - **Render verification** is visual/headed-browser work, not center-pixel polling. Device loss uses the canonical WebGPU path.
 
@@ -158,10 +159,10 @@ material/position/attribute nodes (per `tsl-post-fx-model.md` surface layer).
 3. **Block 3:** projection (continuous + conformal/holomorphic + quasicrystal + exotic).
 4. **Cross-cutting:** graph honesty pass, modulation unification, presets, GIF/phase, icons that are more understandable and widely recognized.
 
-## 10. Open questions / risks (do not be a bitch and defer or you're fired)
+## 10. Implementation Risks
 
 - Edge-SDF generation for parilov: bake per geometry build vs. compute-pass; needs the tile-edge set already produced in `buildEdgeGeometry`.
 - Feedback ping-pong in r184 TSL: model on `AfterImageNode`'s history-RT mechanism; "Both" mode ordering.
-- Tone-map node + `outputColorTransform=false`: verify no double color transform; confirm pass texture is pre-tonemap linear (verified in r184 RenderPipeline).
+- Tone-map node ordering: keep AgX as the optional graph node while leaving `outputColorTransform=true` for the required output encode.
 - Persistence remap curve constants (afterimage/trails) tuned on screen with the user.
-- Catalog ranges/defaults are first-draft; user retunes against live output.
+- Catalog ranges/defaults are tuned against live output.

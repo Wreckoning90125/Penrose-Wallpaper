@@ -107,8 +107,10 @@ AudioAnalyzer::AudioAnalyzer() {
 
 void AudioAnalyzer::initStaticTables() {
     // Hann window — softens spectral leakage from the rectangular slice.
+    windowSum_ = 0.0f;
     for (int i = 0; i < kFftSize; ++i) {
         window_[i] = 0.5f * (1.0f - std::cos(2.0f * kPi * i / (kFftSize - 1)));
+        windowSum_ += window_[i];
     }
     // Bit-reversal lookup for in-place Cooley-Tukey.
     const int bits = log2int(kFftSize);
@@ -161,6 +163,12 @@ void AudioAnalyzer::rebuildCwtKernels() {
     const float sr = static_cast<float>(sampleRate_);
     for (int k = 0; k < kCwtKernels; ++k) {
         const float fTarget = kTargetHz[k];
+        if (fTarget >= sr * 0.5f) {
+            cwtKernelLen_[k] = 0;
+            cwtRe_[k].clear();
+            cwtIm_[k].clear();
+            continue;
+        }
         const float a = (kMorletOmega0 * sr) / (2.0f * kPi * fTarget);
         const int halfRaw = static_cast<int>(std::ceil(3.0f * a));
         const int half    = std::clamp(halfRaw, kCwtHalfMin, kCwtHalfMax);
@@ -204,6 +212,11 @@ void AudioAnalyzer::resetDspStateUnlocked() {
     periodFrames_ = 60.0f * 60.0f / 120.0f;
     fpsEma_       = 60.0f;
     beatSmoothed_ = 0.0f;
+    rms_          = 0.0f;
+    spectralFlux_ = 0.0f;
+    onsetStrength_ = 0.0f;
+    cwtTransient_ = 0.0f;
+    crestFactor_ = 0.0f;
     onsetAvg_     = 0.0f;
     onsetVar_     = 0.0f;
     cwtAvg_       = 0.0f;
@@ -227,18 +240,39 @@ void AudioAnalyzer::quiesce() {
     quiesceUnlocked();
 }
 
+void AudioAnalyzer::clear() {
+    std::lock_guard<std::mutex> g(analyzeMutex_);
+    resetDspStateUnlocked();
+}
+
 void AudioAnalyzer::quiesceUnlocked() {
     for (int b = 0; b < kBands; ++b) bandsSmoothed_[b] *= 0.85f;
     beatSmoothed_ *= 0.85f;
+    rms_ *= 0.85f;
+    spectralFlux_ *= 0.85f;
+    onsetStrength_ *= 0.85f;
+    cwtTransient_ *= 0.85f;
+    crestFactor_ *= 0.85f;
+    beatConf_ *= 0.85f;
+}
+
+void AudioAnalyzer::snapshot(FeatureSnapshot& out) const {
+    std::lock_guard<std::mutex> g(analyzeMutex_);
+    for (int b = 0; b < kBands; ++b) out.bands[b] = bandsSmoothed_[b];
+    out.beat = beatSmoothed_;
+    out.rms = rms_;
+    out.spectralFlux = spectralFlux_;
+    out.onsetStrength = onsetStrength_;
+    out.cwtTransient = cwtTransient_;
+    out.crestFactor = crestFactor_;
+    out.beatConfidence = beatConf_;
 }
 
 void AudioAnalyzer::snapshot(float (&outBands)[kBands], float& outBeat) const {
-    // Held under analyzeMutex_ to keep the 8-band vector + beat scalar
-    // self-consistent against a concurrent analyzeFrame on another
-    // render thread.
-    std::lock_guard<std::mutex> g(analyzeMutex_);
-    for (int b = 0; b < kBands; ++b) outBands[b] = bandsSmoothed_[b];
-    outBeat = beatSmoothed_;
+    FeatureSnapshot snap{};
+    snapshot(snap);
+    for (int b = 0; b < kBands; ++b) outBands[b] = snap.bands[b];
+    outBeat = snap.beat;
 }
 
 void AudioAnalyzer::fftRadix2(float* re, float* im) const {
@@ -332,20 +366,23 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
     // taper themselves; a second Hann taper would attenuate the snare
     // hit we're trying to detect).
     float rawWindow[kFftSize];
+    float rawSumSq = 0.0f;
+    float rawPeak = 0.0f;
     for (int i = 0; i < kFftSize; ++i) {
         const float s = ring_[(start + i) & (kRingSamples - 1)];
         rawWindow[i] = s;
+        rawSumSq += s * s;
+        rawPeak = std::max(rawPeak, std::fabs(s));
         scratchRe_[i] = s * window_[i];
         scratchIm_[i] = 0.0f;
     }
     fftRadix2(scratchRe_, scratchIm_);
 
     // -------- Spectral magnitudes, SuperFlux onset, and 8 bands --------
-    // Magnitude in each band, normalized so a full-scale sine wave in the
-    // band gives ~1.0. Hann window halves the effective amplitude, hence
-    // the 2/N scale. Aggregate by RMS within the band (energy domain) so
-    // a single loud bin doesn't dominate over a wide ridge.
-    const float scale = 2.0f / static_cast<float>(kFftSize);
+    // Magnitude in each band, normalized against the actual window gain.
+    // Aggregate by RMS within the band (energy domain) so a single loud bin
+    // doesn't dominate over a wide ridge.
+    const float scale = windowSum_ > 0.0f ? 2.0f / windowSum_ : 0.0f;
     const int   nMag  = kFftSize / 2;
     float bandSumSq[kBands] = {};
     float bandCount[kBands] = {};
@@ -353,6 +390,7 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
     // SuperFlux onset = sum over bins of max(0, mag_i - prevMag_i) *
     // (i + 1). The HFC weighting tilts onset sensitivity toward
     // percussive content where transients live.
+    float spectralFlux = 0.0f;
     float superFlux = 0.0f;
 
     for (int i = 1; i < nMag; ++i) {
@@ -362,6 +400,7 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
 
         const float diff = mag - prevMag_[i];
         if (diff > 0.0f) {
+            spectralFlux += diff;
             superFlux += diff * static_cast<float>(i + 1);
         }
         prevMag_[i] = mag;
@@ -424,6 +463,11 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
     // Result is ~0 on the typical loudness floor, ~1 on a clean transient.
     const float onsetZ = updateAndZ(superFlux, onsetAvg_, onsetVar_);
     const float onsetStrength = std::min(2.0f, onsetZ);
+    const float rawRms = std::sqrt(rawSumSq / static_cast<float>(kFftSize));
+    rms_ = std::clamp(rawRms * 3.0f, 0.0f, 1.0f);
+    spectralFlux_ = std::clamp((spectralFlux / static_cast<float>(nMag)) * 8.0f, 0.0f, 1.0f);
+    onsetStrength_ = std::clamp(onsetStrength, 0.0f, 1.0f);
+    crestFactor_ = std::clamp((rawPeak / std::max(0.0001f, rawRms) - 1.0f) / 8.0f, 0.0f, 1.0f);
 
     // -------- BeatDetector: autocorrelation tempo + PLL phase ----------
     // 1) Push the latest onset into the ring.
@@ -531,6 +575,7 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
     }
     const float cwtZ = updateAndZ(cwtPeak, cwtAvg_, cwtVar_);
     const float cwtStrength = std::min(2.0f, cwtZ);
+    cwtTransient_ = std::clamp(cwtStrength, 0.0f, 1.0f);
 
     // -------- Final composition --------
     // Band asymmetric smoothing: fast attack so peaks pop, slow release

@@ -1,8 +1,9 @@
 // Graph contract check (standalone). Asserts the STABLE data invariants of the
 // extracted pure schema modules — "a control was added without its setting key /
 // preset key", the 8-vertex-buffer attribute cap, FX-catalog completeness — plus
-// the §0 wire contract (the render is a function of graph topology). The broader
-// not-yet-final graph BEHAVIOUR is still deliberately left untested. Run:
+// the §0 wire contract (the render is a function of graph topology). Interactive
+// graph behavior stays in the ReactFlow runtime; this script checks stable schema
+// and wire invariants. Run:
 // npm run graph:contract
 import { readFileSync } from 'node:fs';
 import type { Edge, Node } from '@xyflow/react';
@@ -56,18 +57,33 @@ for (const node of NODES) {
   }
 }
 
-// Render contract: the surface material may reference only this set of custom
-// vertex attributes. WebGPU caps vertex buffers at 8; the implicit ones
-// (position/normal/uv/color/tangent) leave room for ~4 custom, so a 5th makes the
-// pipeline invalid and the tiles render black. A new per-vertex value must be
-// packed into a spare component of one of these, never given its own attribute.
-const ALLOWED_CUSTOM_ATTRS = new Set<string>(['tileType', 'tileRing', 'tileOrient', 'tileCenter']);
+// Render contract: the fill and edge meshes intentionally have different vertex
+// interfaces. Track the TSL attribute names directly so a renderer edit cannot
+// silently add a ninth WebGPU vertex buffer again. Three/TSL calls often use
+// attribute<'float'>('name', 'float'), so this regex must accept the generic
+// form as well as bare attribute('name') calls.
+const FILL_CUSTOM_ATTRS = new Set<string>(['tileType', 'tileRing', 'tileOrient', 'tileCenter', 'tileRelief']);
+const EDGE_CUSTOM_ATTRS = new Set<string>(['tileRing', 'tileOrient', 'tileCenter', 'tileRelief', 'edgeSide', 'edgeSlope']);
+const ALLOWED_CUSTOM_ATTRS = new Set<string>([...FILL_CUSTOM_ATTRS, ...EDGE_CUSTOM_ATTRS]);
 const renderer = readFileSync('web/src/render/webgpuRenderer.ts', 'utf8');
-for (const match of renderer.matchAll(/attribute\(\s*['"](\w+)['"]/g)) {
+const geometrySrc = readFileSync('web/src/tiling/geometry.ts', 'utf8');
+for (const match of renderer.matchAll(/attribute(?:<[^>]+>)?\(\s*['"](\w+)['"]/g)) {
   const name = match[1];
   if (name && !ALLOWED_CUSTOM_ATTRS.has(name)) {
-    violations.push(`renderer: material references vertex attribute '${name}' beyond the allowed set {${[...ALLOWED_CUSTOM_ATTRS].join(', ')}} — risks exceeding the 8-vertex-buffer limit (black tiles). Pack it into a spare component of an existing attribute instead.`);
+    violations.push(`renderer: material references vertex attribute '${name}' beyond the allowed fill/edge interface {${[...ALLOWED_CUSTOM_ATTRS].join(', ')}} — risks exceeding the WebGPU vertex-buffer limit (black tiles). Add it deliberately to the interface or pack it into an existing attribute.`);
   }
+}
+
+if (!geometrySrc.includes('function setFillCustomAttributes') || !geometrySrc.includes('function setEdgeCustomAttributes')) {
+  violations.push('renderer: custom fill/edge attributes must be packed through setFillCustomAttributes/setEdgeCustomAttributes so attribute count does not become vertex-buffer count');
+}
+const fillVertexBuffers = 4; // position + color + paletteSlot + interleaved custom lanes
+const edgeVertexBuffers = 2; // position + interleaved custom lanes
+if (fillVertexBuffers > 8) {
+  violations.push(`renderer: fill mesh uses ${fillVertexBuffers} vertex buffers; WebGPU limit is 8`);
+}
+if (edgeVertexBuffers > 8) {
+  violations.push(`renderer: edge mesh uses ${edgeVertexBuffers} vertex buffers; WebGPU limit is 8`);
 }
 
 // FX catalog completeness: every FxKind must have an EFFECT_CATALOG entry, so no
@@ -200,14 +216,17 @@ if (splicedInputs.fieldPhase) {
 }
 
 const graphPresetSrc = readFileSync('web/src/flow/graphPreset.ts', 'utf8');
-if (!graphPresetSrc.includes("!isCurrentDefaultFieldEdge(edge)")) {
-  violations.push('wire-contract: graphPreset obsolete-edge migration must preserve current postfx->renderer field wires');
+const controlGraphSrc = readFileSync('web/src/flow/ControlGraph.tsx', 'utf8');
+const graphTopologySrc = readFileSync('web/src/flow/graphTopology.ts', 'utf8');
+for (const token of ['isObsoletePipelineEdge', 'isCurrentDefaultFieldEdge', 'isCurrentClockPhaseEdge']) {
+  if (graphPresetSrc.includes(token) || controlGraphSrc.includes(token) || graphTopologySrc.includes(token)) {
+    violations.push(`wire-contract: runtime graph code must validate current edges instead of carrying ${token}`);
+  }
 }
-if (!graphPresetSrc.includes('isCurrentClockPhaseEdge')) {
-  violations.push('wire-contract: graphPreset obsolete-edge migration must preserve current clock->field-source phase wire');
-}
-if (/\|\|\s*\(edge\.source === 'postfx' && edge\.target === 'renderer'\)\s*(?:\n|$)/.test(graphPresetSrc)) {
-  violations.push('wire-contract: graphPreset must not treat every postfx->renderer edge as obsolete; current field wires are canonical');
+for (const token of ["next.source === 'tiling'", "next.source === 'projection'", "next.source === 'palette' &&", "next.source === 'postprocess'"]) {
+  if (controlGraphSrc.includes(token) || graphTopologySrc.includes(token)) {
+    violations.push(`wire-contract: preset load must not repair stale pipeline topology through '${token}' branches`);
+  }
 }
 
 if (violations.length > 0) {

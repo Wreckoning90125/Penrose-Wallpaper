@@ -198,7 +198,7 @@ vec3 shadeLight(vec3 N, vec3 L, vec3 V, vec3 T, vec3 B,
 
 void main() {
     uint idx = vColorIdx;
-    if (idx >= 16u) idx = 15u;
+    if (idx >= 18u) idx = 17u;
     vec4 c = ubo.palette[idx];
 
     // Unpack the material + lighting parameters from the UBO.

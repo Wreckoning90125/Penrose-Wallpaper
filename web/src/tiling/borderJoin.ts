@@ -36,7 +36,7 @@ export function buildTileRing(
   fill: number,
   point: number,
   gap: number,
-  pushTri: (p0: Point, p1: Point, p2: Point, ring: number, orient: Point, center: Point) => void,
+  pushTri: (p0: Point, p1: Point, p2: Point, ring: number, orient: Point, center: Point, surfaceHint?: readonly number[]) => void,
 ): void {
   const { centroid, ring, orient, center } = tile;
   const k = tile.edges.length;
@@ -71,21 +71,24 @@ export function buildTileRing(
     reflex.push(ccw ? turn < -1e-9 : turn > 1e-9);
   }
   const anyReflex = reflex.some(Boolean);
+  const edgeSurfaceHints: readonly number[][] = Array.from({ length: k }, (_, e) => [(e - 1 + k) % k, e, (e + 1) % k]);
+  const cornerSurfaceHints: readonly number[][] = Array.from({ length: k }, (_, i) => [(i - 1 + k) % k, i]);
 
-  // Width cap: never fold the ring. For convex tiles that's the incircle; for any tile
-  // a fraction of the shortest edge keeps the inset local feature size positive.
-  let inradius = Infinity;
+  // Width cap: never fold the ring. The centroid clearance is a conservative
+  // local limit, and the shortest-edge fraction keeps reflex/skinny features
+  // positive without pretending this is a true polygon inradius.
+  let centroidClearance = Infinity;
   let minEdge = Infinity;
   for (let e = 0; e < k; e++) {
     const a = corners[e]!;
     const b = corners[(e + 1) % k]!;
     const dist = (centroid[0] - a[0]) * inward[e]![0] + (centroid[1] - a[1]) * inward[e]![1];
-    if (dist > 0) inradius = Math.min(inradius, dist);
+    if (dist > 0) centroidClearance = Math.min(centroidClearance, dist);
     minEdge = Math.min(minEdge, Math.hypot(b[0] - a[0], b[1] - a[1]));
   }
   const cap = anyReflex
     ? minEdge * 0.2
-    : Math.min(minEdge * 0.42, Number.isFinite(inradius) ? inradius * 0.92 : minEdge * 0.42);
+    : Math.min(minEdge * 0.42, Number.isFinite(centroidClearance) ? centroidClearance * 0.92 : minEdge * 0.42);
   const h = Math.min(halfWidth, cap);
   if (h <= 1e-7) return;
 
@@ -222,8 +225,8 @@ export function buildTileRing(
       const o1 = outerAt(t1);
       const i0 = innerAt(t0);
       const i1 = innerAt(t1);
-      pushTri(o0, o1, i1, ring, orient, center);
-      pushTri(o0, i1, i0, ring, orient, center);
+      pushTri(o0, o1, i1, ring, orient, center, edgeSurfaceHints[e]);
+      pushTri(o0, i1, i0, ring, orient, center, edgeSurfaceHints[e]);
     }
   }
 
@@ -236,8 +239,9 @@ export function buildTileRing(
     const v = corners[i]!;
     const cIn = innerEnd[ip]!;   // incoming edge's inner endpoint at corner i
     const cOut = innerStart[i]!; // outgoing edge's inner endpoint at corner i
+    const surfaceHint = cornerSurfaceHints[i];
     if (reflex[i]) {
-      pushTri(v, cIn, cOut, ring, orient, center); // reflex notch (untouched by Point)
+      pushTri(v, cIn, cOut, ring, orient, center, surfaceHint); // reflex notch (untouched by Point)
     } else if (trim > 1e-9) {
       continue; // convex spike trimmed flat — no apex fill
     } else if (cut > 0 && joinStyle === 1) {
@@ -251,11 +255,11 @@ export function buildTileRing(
           it * it * cIn[0] + 2 * it * t * m[0] + t * t * cOut[0],
           it * it * cIn[1] + 2 * it * t * m[1] + t * t * cOut[1],
         ];
-        pushTri(v, prev, p, ring, orient, center);
+        pushTri(v, prev, p, ring, orient, center, surfaceHint);
         prev = p;
       }
     } else if (cut > 0) {
-      pushTri(v, cIn, cOut, ring, orient, center);
+      pushTri(v, cIn, cOut, ring, orient, center, surfaceHint);
     }
   }
 }

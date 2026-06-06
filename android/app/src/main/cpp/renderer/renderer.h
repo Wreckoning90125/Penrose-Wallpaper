@@ -10,6 +10,7 @@
 #include <android/native_window.h>
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -168,14 +169,17 @@ private:
     VkShaderModule borderVert_ = VK_NULL_HANDLE;
     VkShaderModule borderFrag_ = VK_NULL_HANDLE;
 
-    // Palette UBO (set 0, binding 0). Layout mirrored in cpp/renderer.cpp's
-    // PaletteUbo struct and in all four shader uniform blocks.
+    static constexpr uint32_t kFramesInFlight = 2;
+
+    // Palette UBO (set 0, binding 0). One mapped buffer/descriptor per
+    // in-flight frame, so per-vsync graph/audio writes never overwrite a range
+    // still referenced by a submitted command buffer.
     VkDescriptorSetLayout descSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
-    VkDescriptorSet descSet_ = VK_NULL_HANDLE;
-    VkBuffer paletteUbo_ = VK_NULL_HANDLE;
-    VkDeviceMemory paletteUboMem_ = VK_NULL_HANDLE;
-    void* paletteUboMapped_ = nullptr;
+    std::array<VkDescriptorSet, kFramesInFlight> descSets_{};
+    std::array<VkBuffer, kFramesInFlight> paletteUbo_{};
+    std::array<VkDeviceMemory, kFramesInFlight> paletteUboMem_{};
+    std::array<void*, kFramesInFlight> paletteUboMapped_{};
     VkDeviceSize paletteUboSize_ = 0;
 
     // Fills: one triangle per Penrose tri, 4 triangles per Chair L-tromino.
@@ -283,7 +287,6 @@ private:
     bool swapchainReady_ = false;
     bool pipelinesBuilt_ = false;
 
-    static constexpr uint32_t kFramesInFlight = 2;
 };
 
 } // namespace penrose

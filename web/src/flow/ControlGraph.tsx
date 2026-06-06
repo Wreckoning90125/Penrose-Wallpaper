@@ -28,10 +28,10 @@ import {
   Unlink,
   Upload,
 } from 'lucide-react';
-import { EFFECT_CATALOG, fxDescriptor, fxParamDefaults, fxSelectDefaults, isFxKind } from '../render/postFxCatalog';
+import { EFFECT_CATALOG, fxParamDefaults, fxSelectDefaults, isFxKind } from '../render/postFxCatalog';
 import { fxIconComponent } from './fxIcons';
 import { isSignalSource, isSignalTarget, signalKey } from './signalUtils';
-import { isMaterialLaneHandle, spliceMaterialFieldBypasses } from './materialLanes';
+import { spliceMaterialFieldBypasses } from './materialLanes';
 import {
   evaluateSignals,
   fieldModulatedValues,
@@ -42,6 +42,15 @@ import {
   type LiveOperatorDataMap,
 } from './signalEval';
 import { deriveFieldSlots, FIELD_SOURCE_PHASE_INLET, fieldParamDefaults } from './fieldSourceSpec';
+import { createOperatorSignalStore, operatorSignalSnapshot, type OperatorSignalStore } from './operatorSignals';
+import {
+  derivePostChain,
+  domainMismatchedFxIds,
+  canAddGraphConnection,
+  edgeConflictsWithConnection,
+  edgesWithoutConnectionConflicts,
+  type GraphConnectionLike,
+} from './graphTopology';
 import { renderInputsFromEdges } from './renderInputs';
 import { dataBoolean, dataObject, dataString, numberRecordFromObject, stringRecordFromObject } from './nodeData';
 import {
@@ -94,7 +103,6 @@ import {
   graphPresetFromText,
   graphPresetSettingsFromSettings,
   isGainKey,
-  isObsoletePipelineEdge,
   nodeWithPresetData,
   type GainKey,
   type GraphPreset,
@@ -183,7 +191,8 @@ type ControlGraphProps = {
   onPreviewSetting: (key: SettingKey, value: SettingValue) => void;
   onPalette: (palette: string) => void;
   onSelectedColor: (index: number) => void;
-  onCustomColor: (updater: (color: Oklch) => Oklch) => void;
+  onPreviewCustomColor: (updater: (color: Oklch) => Oklch) => void;
+  onCommitCustomColor: () => void;
   onGain: (key: GainKey, value: number) => void;
   onAudioModulation: (values: AudioModulationValues) => void;
   onPostChain: (spec: PostChainSpec) => void;
@@ -235,136 +244,8 @@ const DELETABLE_BASE_NODE_IDS = new Set([
   'postfx',
 ]);
 
-const DEFAULT_FIELD_HANDLES = new Set(['displace', 'relief', 'color', 'undulate']);
-const ADDABLE_FIELD_HANDLES = new Set(['relief', 'undulate', 'color']);
-
-function isMaterialLaneSource(connection: GraphConnectionLike): boolean {
-  return connection.source === 'material'
-    && isMaterialLaneHandle(connection.sourceHandle);
-}
-
-function isDefaultFieldConnection(connection: GraphConnectionLike): boolean {
-  const sourceHandle = connection.sourceHandle ?? null;
-  return connection.source === 'postfx'
-    && connection.target === 'renderer'
-    && sourceHandle !== null
-    && sourceHandle === (connection.targetHandle ?? null)
-    && DEFAULT_FIELD_HANDLES.has(sourceHandle);
-}
-
-type GraphConnectionLike = {
-  source: string | null;
-  sourceHandle?: string | null;
-  target: string | null;
-  targetHandle?: string | null;
-};
-
-function nodeById(nodes: readonly Node[], id: string | null): Node | null {
-  if (!id) return null;
-  return nodes.find(node => node.id === id) ?? null;
-}
-
-function isValidGraphConnection(connection: GraphConnectionLike, nodes: readonly Node[]): boolean {
-  const source = nodeById(nodes, connection.source);
-  const target = nodeById(nodes, connection.target);
-  const sourceHandle = connection.sourceHandle ?? null;
-  const targetHandle = connection.targetHandle ?? null;
-  if (!source || !target || source.id === target.id || !sourceHandle || !targetHandle) return false;
-
-  if (source.id === 'atlas') return sourceHandle === 'out' && target.id === 'tiling' && targetHandle === 'in';
-  if (source.id === 'tiling') return sourceHandle === 'out' && target.id === 'projection' && targetHandle === 'in';
-  if (source.id === 'projection') return sourceHandle === 'out' && target.id === 'palette' && targetHandle === 'in';
-  if (source.id === 'palette') return sourceHandle === 'color' && target.id === 'material' && targetHandle === 'color';
-  if (source.id === 'material') {
-    if (sourceHandle === 'surface') return target.id === 'renderer' && targetHandle === 'surface';
-    if (isMaterialLaneHandle(sourceHandle)) {
-      return targetHandle === sourceHandle
-        && (
-          target.id === 'renderer'
-          || target.id === 'postfx'
-          || target.type === 'fieldSource'
-        );
-    }
-    return false;
-  }
-  if (source.id === 'lighting') return sourceHandle === 'out' && target.id === 'renderer' && targetHandle === 'lighting';
-  if (source.id === 'postfx') {
-    // Field source: its four field outlets each wire only to the matching
-    // renderer field inlet. Without this rule a cut field wire can't be re-added.
-    return isDefaultFieldConnection(connection);
-  }
-  if (source.id === 'edgeProfile') return sourceHandle === 'border' && target.id === 'renderer' && targetHandle === 'border';
-  if (source.id === 'clock' && sourceHandle === 'out' && targetHandle === FIELD_SOURCE_PHASE_INLET.id) {
-    return (target.id === 'postfx' || target.type === 'fieldSource') && targetHandle === FIELD_SOURCE_PHASE_INLET.id;
-  }
-  if (source.type === 'fieldSource') {
-    // Addable field source: each field outlet wires only to its matching renderer
-    // field inlet, exactly like the default field source.
-    return target.id === 'renderer' && sourceHandle === targetHandle && ADDABLE_FIELD_HANDLES.has(sourceHandle);
-  }
-  if (source.id === 'transport') return sourceHandle === 'out' && target.id === 'analysis' && targetHandle === 'transport';
-
-  if (sourceHandle === 'frame' && targetHandle === 'frame') {
-    const sourceIsFrame = source.id === 'renderer' || source.type === 'fx';
-    const targetIsFrame = target.id === 'display' || target.type === 'fx';
-    return sourceIsFrame && targetIsFrame;
-  }
-
-  return isSignalSource(source, sourceHandle) && isSignalTarget(target, targetHandle);
-}
-
-// True only when a complete path exists from the geometry source to the display
-// sink: atlas -> tiling -> projection -> palette -> material -> renderer (scene
-// pass) -> frame chain -> display. Cut one link and the mesh stops reaching the
-// sink, so the renderer hides it (the tiling disappears).
-// Walk the actual frame wires backward from the Display sink toward the Scene
-// source. The chain is the FX nodes physically on that path — and it is only a
-// valid chain if the walk reaches the renderer (the scene source). A frame
-// inlet left dangling, or a reroute that skips the renderer, yields [] — so a
-// node only contributes when it is genuinely on the wire path from source to
-// sink, never by merely existing. toneMap obeys this rule like every FX node.
-function derivePostChain(nodes: readonly Node[], edges: readonly Edge[]): PostChainSpec {
-  const byId = new Map(nodes.map(node => [node.id, node]));
-  const incomingFrame = (id: string): Edge | undefined =>
-    edges.find(edge => edge.target === id && edge.targetHandle === 'frame');
-  const chain: PostChainSpec = [];
-  const seen = new Set<string>();
-  let cursor = incomingFrame('display')?.source;
-  for (let i = 0; i < 64 && cursor && !seen.has(cursor); i += 1) {
-    if (cursor === 'renderer') return chain.reverse();
-    seen.add(cursor);
-    const node = byId.get(cursor);
-    if (!node || node.type !== 'fx') break;
-    const values = numberRecordFromObject(dataObject(node.data, 'values'));
-    chain.push({
-      id: node.id,
-      kind: dataString(node.data, 'kind'),
-      bypass: dataBoolean(node.data, 'bypass'),
-      params: values,
-      selects: stringRecordFromObject(dataObject(node.data, 'selects')),
-    });
-    cursor = incomingFrame(node.id)?.source;
-  }
-  return [];
-}
-
-// Non-blocking domain check: a `linear`-domain effect (bloom, blur, anamorphic…)
-// expects scene-referred/HDR input, so placing it *downstream* of the tone-map
-// node — where the signal is already display-referred — is usually a mistake. We
-// flag those nodes so the UI can show a caution marker. Purely advisory; it never
-// blocks or rewires. Derived from the same frame-chain walk + each kind's domain.
-function domainMismatchedFxIds(nodes: readonly Node[], edges: readonly Edge[]): Set<string> {
-  const warned = new Set<string>();
-  const chain = derivePostChain(nodes, edges);
-  let pastToneMap = false;
-  for (const node of chain) {
-    // Only an *active* tone-map establishes the display-referred boundary; a
-    // bypassed one is skipped by the renderer, so the signal is still linear and a
-    // downstream linear effect is fine (no false-positive warning).
-    if (node.kind === 'toneMap') { pastToneMap = pastToneMap || !node.bypass; continue; }
-    if (pastToneMap && fxDescriptor(node.kind)?.domain === 'linear') warned.add(node.id);
-  }
-  return warned;
+function emptyAudioOperatorState(): AudioOperatorRuntimeState {
+  return { gateChangedAt: {}, gateOpen: {}, held: {}, previous: {}, triggerHigh: {} };
 }
 
 function liveOperatorDataFromNode(node: Node): LiveOperatorData | null {
@@ -438,10 +319,9 @@ const nodeTypes = {
 
 function initialOperatorValues(spec: OperatorSpec): Record<string, number> {
   const values: Record<string, number> = {};
-  for (const [key, _label, min, max] of spec.controls) {
-    values[key] = key === 'pivot' || key === 'blend' || key === 'threshold' ? (min + max) / 2 : min;
+  for (const [key, _label, min] of spec.controls) {
+    values[key] = spec.defaults?.[key] ?? min;
   }
-  if (spec.kind === 'gain') values['gain'] = 1;
   if (spec.kind === 'math') values['valB'] = MATH_IDENTITY.multiply;
   return values;
 }
@@ -458,6 +338,7 @@ function createOperatorNode(
   position: { x: number; y: number },
   editCallbacks: EditCallbacks,
   onOperatorPreview: OperatorNodeData['onOperatorPreview'],
+  operatorSignals: OperatorSignalStore,
 ): Node {
   const spec = operatorSpec(kind);
   return {
@@ -469,6 +350,7 @@ function createOperatorNode(
       onBeginEdit: editCallbacks.onBeginEdit,
       onEndEdit: editCallbacks.onEndEdit,
       onOperatorPreview,
+      operatorSignals,
       spec,
       selectValues: initialOperatorSelectValues(spec),
       values: initialOperatorValues(spec),
@@ -484,6 +366,7 @@ function createGainOperatorNode(
   onGain: (key: GainKey, value: number) => void,
   editCallbacks: EditCallbacks,
   onOperatorPreview: OperatorNodeData['onOperatorPreview'],
+  operatorSignals: OperatorSignalStore,
 ): Node {
   const spec = { ...operatorSpec('gain'), label: operator.label };
   return {
@@ -497,6 +380,7 @@ function createGainOperatorNode(
       onEndEdit: editCallbacks.onEndEdit,
       onGain,
       onOperatorPreview,
+      operatorSignals,
       selectValues: initialOperatorSelectValues(spec),
       spec,
       values: { gain },
@@ -561,6 +445,10 @@ function settingsSignature(settings: Settings, keys: readonly SettingKey[]): str
 
 function editKeyIsIn(paramKey: string | null, keys: readonly SettingKey[]): boolean {
   return paramKey !== null && keys.some(key => key === paramKey);
+}
+
+function isPaletteEditKey(paramKey: string | null): boolean {
+  return editKeyIsIn(paramKey, PALETTE_SETTING_KEYS) || (paramKey?.startsWith('custom_color_') ?? false);
 }
 
 function sortedRecordSignature(record: Record<string, number | string | boolean | null | undefined>): string {
@@ -665,7 +553,8 @@ export function ControlGraph(props: ControlGraphProps) {
   const initialAudioRef = useRef(props.audio);
   const initialSettingsRef = useRef(props.settings);
   const initialGainsRef = useRef(props.gains);
-  const audioOperatorStateRef = useRef<AudioOperatorRuntimeState>({ held: {}, previous: {}, triggerHigh: {} });
+  const operatorSignalStore = useMemo(() => createOperatorSignalStore(), []);
+  const audioOperatorStateRef = useRef<AudioOperatorRuntimeState>(emptyAudioOperatorState());
   const liveOperatorDataRef = useRef<LiveOperatorDataMap>({});
   const nodesRef = useRef<readonly Node[]>([]);
   const edgesRef = useRef<readonly Edge[]>([]);
@@ -732,6 +621,7 @@ export function ControlGraph(props: ControlGraphProps) {
       now,
       clockEpochRef.current,
     );
+    operatorSignalStore.set(operatorSignalSnapshot(nodesForRuntime, signals));
     const phaseForNode = (nodeId: string): number => {
       const edge = edgesRef.current.find(item => item.target === nodeId && item.targetHandle === FIELD_SOURCE_PHASE_INLET.id);
       if (!edge) return 0;
@@ -760,7 +650,7 @@ export function ControlGraph(props: ControlGraphProps) {
       node => fieldModulatedValues(node, edgesRef.current, signals, activeEditRef.current, props.dragMode),
       node => phaseForNode(node.id),
     ));
-  }, [props.audio, props.dragMode, props.onAudioModulation, props.onFieldPhase, props.onFieldSlots, props.onPostChain, runtimeNodes]);
+  }, [operatorSignalStore, props.audio, props.dragMode, props.onAudioModulation, props.onFieldPhase, props.onFieldSlots, props.onPostChain, runtimeNodes]);
 
   const scheduleEmitAudioGraph = useCallback(() => {
     if (emitGraphFrameRef.current) return;
@@ -826,7 +716,8 @@ export function ControlGraph(props: ControlGraphProps) {
         onSetting: props.onSetting,
         onPreviewSetting: props.onPreviewSetting,
         onSelectedColor: props.onSelectedColor,
-        onCustomColor: props.onCustomColor,
+        onPreviewCustomColor: props.onPreviewCustomColor,
+        onCommitCustomColor: props.onCommitCustomColor,
       },
     },
     {
@@ -916,8 +807,9 @@ export function ControlGraph(props: ControlGraphProps) {
       props.onGain,
       editCallbacks,
       onOperatorPreview,
+      operatorSignalStore,
     )),
-    createOperatorNode('operator-invert-1', 'invert', pendingLayoutPosition(), editCallbacks, onOperatorPreview),
+    createOperatorNode('operator-invert-1', 'invert', pendingLayoutPosition(), editCallbacks, onOperatorPreview, operatorSignalStore),
     {
       id: 'postfx',
       type: 'postfx',
@@ -960,6 +852,7 @@ export function ControlGraph(props: ControlGraphProps) {
     onClockPreviewSetting,
     onClockSetting,
     onOperatorPreview,
+    operatorSignalStore,
     props.liveBoostStore,
     props.onGain,
     props.onPreviewSetting,
@@ -1138,7 +1031,7 @@ export function ControlGraph(props: ControlGraphProps) {
   ]);
 
   useEffect(() => {
-    if (editKeyIsIn(activeEditRef.current, PALETTE_SETTING_KEYS)) return;
+    if (isPaletteEditKey(activeEditRef.current)) return;
     setNodes(current => current.map(node => node.id === 'palette'
       ? {
           ...node,
@@ -1147,7 +1040,8 @@ export function ControlGraph(props: ControlGraphProps) {
             colorCount: props.colorCount,
             gamut: props.gamut,
             onBeginEdit: editCallbacks.onBeginEdit,
-            onCustomColor: props.onCustomColor,
+            onPreviewCustomColor: props.onPreviewCustomColor,
+            onCommitCustomColor: props.onCommitCustomColor,
             onEndEdit: editCallbacks.onEndEdit,
             onPalette: props.onPalette,
             onSelectedColor: props.onSelectedColor,
@@ -1166,8 +1060,9 @@ export function ControlGraph(props: ControlGraphProps) {
     paletteSettingsKey,
     props.colorCount,
     props.gamut,
-    props.onCustomColor,
+    props.onCommitCustomColor,
     props.onPalette,
+    props.onPreviewCustomColor,
     props.onPreviewSetting,
     props.onSelectedColor,
     props.onSetting,
@@ -1326,10 +1221,11 @@ export function ControlGraph(props: ControlGraphProps) {
             onEndEdit: editCallbacks.onEndEdit,
             onGain: props.onGain,
             onOperatorPreview,
+            operatorSignals: operatorSignalStore,
           },
       }
       : node));
-  }, [editCallbacks, onOperatorPreview, props.onGain, setNodes]);
+  }, [editCallbacks, onOperatorPreview, operatorSignalStore, props.onGain, setNodes]);
 
   useEffect(() => {
     if (activeEditRef.current?.startsWith('gain:')) return;
@@ -1432,29 +1328,21 @@ export function ControlGraph(props: ControlGraphProps) {
   }, [props.onRenderInputs, runtimeGraphKey]);
 
   const onConnect = useCallback((connection: Connection) => {
-    if (!isValidGraphConnection(connection, nodes)) return;
+    if (!canAddGraphConnection(connection, nodes, edgesWithoutConnectionConflicts(edges, connection))) return;
     setEdges(current => {
-      const next = current.filter(edge => {
-        if (edge.target === connection.target && edge.targetHandle === connection.targetHandle) return false;
-        if (isMaterialLaneSource(connection) && edge.source === 'material' && edge.sourceHandle === connection.sourceHandle) return false;
-        return true;
-      });
+      const next = edgesWithoutConnectionConflicts(current, connection);
       return addEdge({ ...connection, animated: true }, next);
     });
-  }, [nodes, setEdges]);
+  }, [edges, nodes, setEdges]);
 
   const onReconnect = useCallback((oldEdge: Edge, connection: Connection) => {
-    if (!isValidGraphConnection(connection, nodes)) return;
+    const edgesWithoutOld = edges.filter(edge => edge.id !== oldEdge.id);
+    if (!canAddGraphConnection(connection, nodes, edgesWithoutConnectionConflicts(edgesWithoutOld, connection))) return;
     setEdges(current => {
-      const withoutTargetConflict = current.filter(edge => (
-        edge.id === oldEdge.id || (
-          !(edge.target === connection.target && edge.targetHandle === connection.targetHandle)
-          && !(isMaterialLaneSource(connection) && edge.source === 'material' && edge.sourceHandle === connection.sourceHandle)
-        )
-      ));
+      const withoutTargetConflict = current.filter(edge => edge.id === oldEdge.id || !edgeConflictsWithConnection(edge, connection));
       return reconnectEdge(oldEdge, connection, withoutTargetConflict);
     });
-  }, [nodes, setEdges]);
+  }, [edges, nodes, setEdges]);
 
   const onBeforeDelete = useCallback<OnBeforeDelete<Node, Edge>>(async ({ nodes: deletingNodes, edges: deletingEdges }) => {
     const deletableNodeIds = new Set(deletingNodes.filter(node => !PROTECTED_NODE_IDS.has(node.id)).map(node => node.id));
@@ -1499,9 +1387,9 @@ export function ControlGraph(props: ControlGraphProps) {
         const sourceNode = nodeOf(bridge.source);
         const targetNode = nodeOf(bridge.target);
         const featureMainline = sourceNode?.id === 'analysis' && targetNode?.type !== 'operator';
-        if (featureMainline || !isValidGraphConnection(bridge, allNodes)) continue;
-        next = next.filter(edge => edge !== fromEdge && edge !== toEdge);
-        next = [...next, {
+        const candidateEdges = next.filter(edge => edge !== fromEdge && edge !== toEdge);
+        if (featureMainline || !canAddGraphConnection(bridge, allNodes, candidateEdges)) continue;
+        next = [...candidateEdges, {
           id: `${bridge.source}-${bridge.target}-${bridge.targetHandle ?? 'signal'}`,
           source: bridge.source, sourceHandle: bridge.sourceHandle,
           target: bridge.target, targetHandle: bridge.targetHandle, animated: true,
@@ -1554,7 +1442,10 @@ export function ControlGraph(props: ControlGraphProps) {
 
   const applyGraphPreset = useCallback((preset: GraphPreset) => {
     if (preset.appState) props.onGraphPresetState(preset.appState);
-    const presetById = new Map(preset.nodes.map(node => [node.id, node]));
+    const presetById = new Map<string, GraphPreset['nodes'][number]>();
+    for (const node of preset.nodes) {
+      if (!presetById.has(node.id)) presetById.set(node.id, node);
+    }
     const baseIds = new Set(baseNodes.map(node => node.id));
     const nextNodes: Node[] = [];
     for (const node of baseNodes) {
@@ -1572,6 +1463,7 @@ export function ControlGraph(props: ControlGraphProps) {
           presetNode.position,
           editCallbacks,
           onOperatorPreview,
+          operatorSignalStore,
         );
       }
       if (presetNode.type === 'clock' && presetNode.data.deletableClock) {
@@ -1623,68 +1515,35 @@ export function ControlGraph(props: ControlGraphProps) {
       }
       if (nextNode) nextNodes.push(nodeWithPresetData(nextNode, presetNode));
     }
+    const seenNodeIds = new Set<string>();
+    for (let i = 0; i < nextNodes.length; i += 1) {
+      const node = nextNodes[i]!;
+      if (seenNodeIds.has(node.id)) {
+        nextNodes.splice(i, 1);
+        i -= 1;
+        continue;
+      }
+      seenNodeIds.add(node.id);
+    }
 
     const nodeIds = new Set(nextNodes.map(node => node.id));
     const nextEdges: Edge[] = [];
     const pushRequiredEdge = (edge: Edge): void => {
       if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) return;
-      if (!isValidGraphConnection(edge, nextNodes)) return;
-      for (let i = nextEdges.length - 1; i >= 0; i -= 1) {
-        const item = nextEdges[i]!;
-        if (
-          (item.target === edge.target && item.targetHandle === edge.targetHandle)
-          || (isMaterialLaneSource(edge) && item.source === 'material' && item.sourceHandle === edge.sourceHandle)
-        ) {
-          nextEdges.splice(i, 1);
-        }
-      }
+      const candidateEdges = edgesWithoutConnectionConflicts(nextEdges, edge);
+      if (candidateEdges.some(item => item.id === edge.id)) return;
+      if (!canAddGraphConnection(edge, nextNodes, candidateEdges)) return;
+      nextEdges.splice(0, nextEdges.length, ...candidateEdges);
       nextEdges.push(edge);
     };
     for (const edge of preset.edges) {
       const next = edgeFromPreset(edge);
-      if (
-        next.source === 'tiling'
-        && next.target === 'palette'
-      ) {
-        continue;
-      }
-      if (
-        next.source === 'projection'
-        && next.target === 'renderer'
-      ) {
-        continue;
-      }
-      if (
-        next.source === 'palette'
-        && next.target === 'renderer'
-      ) {
-        continue;
-      }
-      if (
-        next.source === 'postprocess'
-        && next.target === 'renderer'
-      ) {
-        continue;
-      }
-      if (
-        next.source === 'palette'
-        && next.target === 'material'
-      ) {
-        pushRequiredEdge({ ...next, id: 'palette-material', sourceHandle: 'color', targetHandle: 'color' });
-        continue;
-      }
-      if (
-        next.source === 'material'
-        && next.target === 'renderer'
-      ) {
-        pushRequiredEdge({ ...next, id: 'material-renderer', sourceHandle: 'surface', targetHandle: 'surface' });
-        continue;
-      }
-      if (nodeIds.has(next.source) && nodeIds.has(next.target) && isValidGraphConnection(next, nextNodes)) {
+      if (nodeIds.has(next.source) && nodeIds.has(next.target)) {
         pushRequiredEdge(next);
       }
     }
     liveOperatorDataRef.current = liveOperatorDataFromNodes(nextNodes);
+    audioOperatorStateRef.current = emptyAudioOperatorState();
     // Seed the FX value cache for loaded fx nodes, otherwise the first slider
     // drag on a loaded effect (onFxValue merges off this ref) would wipe its
     // other values.
@@ -1722,7 +1581,7 @@ export function ControlGraph(props: ControlGraphProps) {
         fieldIdRef.current = Math.max(fieldIdRef.current, suffix + 1);
       }
     }
-  }, [baseNodes, editCallbacks, onOperatorPreview, props, setEdges, setNodes]);
+  }, [baseNodes, editCallbacks, onOperatorPreview, operatorSignalStore, props, setEdges, setNodes]);
 
   const loadGraphPresetFile = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0] ?? null;
@@ -1756,10 +1615,10 @@ export function ControlGraph(props: ControlGraphProps) {
   const addOperatorNode = useCallback((kind: OperatorKind) => {
     const id = `operator-${kind}-${operatorIdRef.current}`;
     operatorIdRef.current += 1;
-    setNodes(current => [...current, createOperatorNode(id, kind, nextAddPosition(), editCallbacks, onOperatorPreview)]);
+    setNodes(current => [...current, createOperatorNode(id, kind, nextAddPosition(), editCallbacks, onOperatorPreview, operatorSignalStore)]);
     setIsAddMenuOpen(false);
     setAddMenuCategory(null);
-  }, [editCallbacks, nextAddPosition, onOperatorPreview, setNodes]);
+  }, [editCallbacks, nextAddPosition, onOperatorPreview, operatorSignalStore, setNodes]);
 
   const onFxValue = useCallback((id: string, key: string, value: number) => {
     const current = fxValuesRef.current[id] ?? {};
@@ -1966,10 +1825,18 @@ export function ControlGraph(props: ControlGraphProps) {
       }), ...extra].map(node => ({ ...node, selected: false }));
     });
     setEdges(current => {
-      const nodeIds = new Set(nodes.map(node => node.id));
-      for (const node of baseNodes) nodeIds.add(node.id);
-      // Keep the user's extra wiring (e.g. FX nodes spliced into the frame chain).
-      const kept = current.filter(edge => !initialEdges.some(item => item.id === edge.id) && !isObsoletePipelineEdge(edge));
+      const extraNodes = nodes.filter(node => !baseNodes.some(item => item.id === node.id));
+      const graphNodes = [...baseNodes, ...extraNodes];
+      const nodeIds = new Set(graphNodes.map(node => node.id));
+      const kept: Edge[] = [];
+      for (const edge of current) {
+        if (initialEdges.some(item => item.id === edge.id)) continue;
+        if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) continue;
+        const candidateEdges = edgesWithoutConnectionConflicts(kept, edge);
+        if (!canAddGraphConnection(edge, graphNodes, candidateEdges)) continue;
+        kept.splice(0, kept.length, ...candidateEdges);
+        kept.push(edge);
+      }
       // A kept edge means the user rewired that connection point. Restoring a default
       // edge that shares either endpoint handle would re-add the scene→tonemap bypass
       // alongside the inserted FX and short it out — so skip those. Each chain handle
@@ -1991,6 +1858,10 @@ export function ControlGraph(props: ControlGraphProps) {
   const onSelectionChange = useCallback((params: FlowSelection) => {
     setSelection(current => sameSelection(current, params) ? current : params);
   }, []);
+
+  const isValidConnection = useCallback((connection: GraphConnectionLike) => (
+    canAddGraphConnection(connection, nodes, edgesWithoutConnectionConflicts(edges, connection))
+  ), [edges, nodes]);
 
   const startMiddleZoom = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (event.button !== 1) return;
@@ -2083,7 +1954,7 @@ export function ControlGraph(props: ControlGraphProps) {
         edges={displayedEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
-        isValidConnection={connection => isValidGraphConnection(connection, nodes)}
+        isValidConnection={isValidConnection}
         onConnect={onConnect}
         onReconnect={onReconnect}
         onEdgesChange={onEdgesChange}

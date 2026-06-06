@@ -149,8 +149,8 @@ struct Settings {
     float  matRoughMod = 0.0f;
     float  matMetalMod = 0.0f;
 
-    // Custom palette — used when `preset == Preset::Custom`. 10 OKLCH
-    // triples; only the first `colorCount` are actually consumed.
+    // Custom palette — used when `preset == Preset::Custom`. Only the first
+    // `colorCount` OKLCH triples are consumed.
     Oklch  customOklch[kMaxColors] = {
         { 0.18f, 0.02f, 280.0f },
         { 0.78f, 0.13f,  80.0f },

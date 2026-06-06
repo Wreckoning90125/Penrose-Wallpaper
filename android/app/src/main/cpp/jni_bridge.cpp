@@ -34,7 +34,7 @@ inline Renderer* asRenderer(jlong ptr) { return reinterpret_cast<Renderer*>(ptr)
 //            matIridThickMin, matIridThickMax,
 //            matRoughMod, matMetalMod,
 //            hypScale, hypBoostX, hypBoostY,
-//            custom_0_L, custom_0_C, custom_0_H, ..., custom_15_L, custom_15_C, custom_15_H]
+//            custom_0_L, custom_0_C, custom_0_H, ..., custom_N_L, custom_N_C, custom_N_H]
 constexpr int kIntCount   = 14;
 constexpr int kFloatCount = 16 + 8 + 5 + 5 + 2 + 3 + 3 * kMaxColors;
 
@@ -238,7 +238,7 @@ Java_com_penrose_wallpaper_NativeBridge_setSystemInsets(JNIEnv*, jobject, jlong 
 // Audio analyzer JNI entry points. The analyzer is a process-wide
 // singleton (penrose::globalAudioAnalyzer), so these calls take no
 // Renderer pointer — anything in the app/service can feed PCM or read
-// the latest bands.
+// the latest analyzer features.
 JNIEXPORT void JNICALL
 Java_com_penrose_wallpaper_NativeBridge_pushAudio(JNIEnv* env, jobject,
                                                  jfloatArray samples, jint count,
@@ -262,20 +262,31 @@ Java_com_penrose_wallpaper_NativeBridge_pushAudio(JNIEnv* env, jobject,
 JNIEXPORT void JNICALL
 Java_com_penrose_wallpaper_NativeBridge_readAudio(JNIEnv* env, jobject, jfloatArray out) {
     if (!out) return;
-    constexpr int kSlots = AudioAnalyzer::kBands + 1; // 8 bands + beat
-    if (env->GetArrayLength(out) < kSlots) return;
-    float bands[AudioAnalyzer::kBands];
-    float beat = 0.0f;
-    penrose::globalAudioAnalyzer().snapshot(bands, beat);
-    float values[kSlots];
-    for (int i = 0; i < AudioAnalyzer::kBands; ++i) values[i] = bands[i];
-    values[AudioAnalyzer::kBands] = beat;
-    env->SetFloatArrayRegion(out, 0, kSlots, values);
+    constexpr int kBaseSlots = AudioAnalyzer::kBands + 1; // 8 bands + beat
+    constexpr int kFeatureSlots = kBaseSlots + 6; // RMS, flux, onset, CWT, crest, confidence
+    const int len = env->GetArrayLength(out);
+    if (len < kBaseSlots) return;
+    AudioAnalyzer::FeatureSnapshot snap{};
+    penrose::globalAudioAnalyzer().snapshot(snap);
+    float values[kFeatureSlots] = {};
+    for (int i = 0; i < AudioAnalyzer::kBands; ++i) values[i] = snap.bands[i];
+    values[AudioAnalyzer::kBands] = snap.beat;
+    if (len >= kFeatureSlots) {
+        values[kBaseSlots + 0] = snap.rms;
+        values[kBaseSlots + 1] = snap.spectralFlux;
+        values[kBaseSlots + 2] = snap.onsetStrength;
+        values[kBaseSlots + 3] = snap.cwtTransient;
+        values[kBaseSlots + 4] = snap.crestFactor;
+        values[kBaseSlots + 5] = snap.beatConfidence;
+        env->SetFloatArrayRegion(out, 0, kFeatureSlots, values);
+    } else {
+        env->SetFloatArrayRegion(out, 0, kBaseSlots, values);
+    }
 }
 
 JNIEXPORT void JNICALL
 Java_com_penrose_wallpaper_NativeBridge_clearAudio(JNIEnv*, jobject) {
-    penrose::globalAudioAnalyzer().quiesce();
+    penrose::globalAudioAnalyzer().clear();
 }
 
 } // extern "C"

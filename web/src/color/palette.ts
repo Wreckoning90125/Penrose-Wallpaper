@@ -1,4 +1,4 @@
-export const MAX_COLORS = 16;
+export const MAX_COLORS = 18;
 
 export type Oklch = [number, number, number];
 export type Palette = {
@@ -42,6 +42,11 @@ function lerp(a: Oklch, b: Oklch, t: number): Oklch {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 }
 
+function lerpHue(a: number, b: number, t: number): number {
+  const delta = ((((b - a) % 360) + 540) % 360) - 180;
+  return (a + delta * t + 360) % 360;
+}
+
 function even(a: Oklch, b: Oklch, k: number): Oklch[] {
   if (k <= 1) return pad([a]);
   return pad(Array.from({ length: k }, (_, i) => lerp(a, b, i / (k - 1))));
@@ -49,25 +54,61 @@ function even(a: Oklch, b: Oklch, k: number): Oklch[] {
 
 function pad(colors: Oklch[]): Oklch[] {
   const out = colors.slice(0, MAX_COLORS);
-  while (out.length < MAX_COLORS) out.push([0.65, 0.14, (out.length * 36 + 20) % 360]);
+  const fallback: Oklch = out[out.length - 1] ?? [0.65, 0, 0];
+  while (out.length < MAX_COLORS) out.push([...fallback]);
   return out;
 }
 
-export function buildPalette(presetIndex: number, colorCount: number, customColors: Oklch[] | null = null): Palette {
+function spectra(colorCount: number): Oklch[] {
+  const k = Math.max(1, Math.min(MAX_COLORS, colorCount | 0));
+  return pad(Array.from({ length: k }, (_, i): Oklch => [0.70, 0.16, (i * 360 / Math.max(k, 1) + 30) % 360]));
+}
+
+function mixPaletteWithSpectra(colors: Oklch[], colorCount: number, spectral: number): Oklch[] {
+  const amount = Math.max(0, Math.min(1, spectral));
+  if (amount <= 0) return colors;
+  const spectralColors = spectra(colorCount);
+  return colors.map((color, idx): Oklch => lerp(color, spectralColors[idx] ?? spectralColors[0]!, amount));
+}
+
+export function buildPalette(
+  presetIndex: number,
+  colorCount: number,
+  customColors: Oklch[] | null = null,
+  spectral = 0,
+): Palette {
   const k = Math.max(1, Math.min(MAX_COLORS, colorCount | 0));
   if (presetIndex === CUSTOM_PALETTE_PRESET && customColors) {
+    const colors = mixPaletteWithSpectra(pad(customColors), k, spectral);
     return {
       name: 'Custom',
       bg: customColors[0] ?? PRESETS[CUSTOM_PALETTE_PRESET]!.bg,
-      colors: pad(customColors),
+      colors,
     };
   }
   const preset = PRESETS[Math.max(0, Math.min(MAX_PALETTE_PRESET, presetIndex | 0))] ?? PRESETS[4]!;
+  const colors = mixPaletteWithSpectra(preset.colors(k), k, spectral);
   return {
     name: preset.name,
     bg: preset.bg,
-    colors: preset.colors(k),
+    colors,
   };
+}
+
+export function paletteColorAt(colors: readonly Oklch[], slot: number): Oklch {
+  const max = Math.max(0, colors.length - 1);
+  const x = Math.max(0, Math.min(max, slot));
+  const lo = Math.floor(x);
+  const hi = Math.min(max, lo + 1);
+  const a = colors[lo] ?? colors[0] ?? [0.65, 0, 0];
+  const b = colors[hi] ?? a;
+  const t = x - lo;
+  if (t <= 1e-6 || hi === lo) return [...a];
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    lerpHue(a[2], b[2], t),
+  ];
 }
 
 export function oklchToLinearSrgb([L, C, H]: Oklch): Oklch {

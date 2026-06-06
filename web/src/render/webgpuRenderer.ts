@@ -10,6 +10,7 @@ import {
   EquirectangularReflectionMapping,
   Group,
   HemisphereLight,
+  LinearSRGBColorSpace,
   Mesh,
   MeshBasicNodeMaterial,
   MeshPhysicalNodeMaterial,
@@ -23,15 +24,17 @@ import {
   WebGPURenderer,
 } from 'three/webgpu';
 import type Node from 'three/src/nodes/core/Node.js';
+import NodeBase from 'three/src/nodes/core/Node.js';
 import type UniformNode from 'three/src/nodes/core/UniformNode.js';
 import {
   attribute,
+  atanh,
   clamp,
   cross,
   dFdx,
   dFdy,
+  directionToFaceDirection,
   float,
-  frontFacing,
   max,
   mix,
   normalize,
@@ -49,13 +52,52 @@ import type { FieldSlot, PostChainNode, PostChainSpec, RenderInputs } from '../t
 import { fxBuilder, afterImageDamp, type FxUniforms, type FxContext } from './postFxRegistry';
 import { fxDescriptor, fxStructuralSignature } from './postFxCatalog';
 import { intSetting, lightSettings, materialSettings, type MaterialSettings, type Settings } from '../settings/androidSettings';
-import { oklchToLinearSrgb } from '../color/palette';
+import { oklchToLinearSrgb, paletteColorAt } from '../color/palette';
 import type { Palette } from '../color/palette';
 import type { AudioDriveEditState, AudioModulationValues, ProjectionGesture } from '../types';
 import { clampNumber } from '../util/clamp';
+import {
+  applyModulationTargetRange,
+  editHoldsParam,
+  finiteModulation,
+  modulationTargetDelta,
+} from '../flow/modulationTargetRuntime';
 
 type RendererUniforms = ReturnType<typeof createRendererUniforms>;
 type DragMode = 'boost' | 'zoom' | 'rotate';
+const TAU = Math.PI * 2;
+const RENDERER_AUDIO_SETTING_KEYS: readonly (keyof Settings)[] = [
+  'brightness',
+  'field_displace',
+  'field_relief',
+  'field_color',
+  'field_undulate',
+  'field_freq',
+  'field_undulate_freq',
+  'field_speed',
+  'hyp_boost_x',
+  'hyp_boost_y',
+  'hyp_scale',
+  'proj_blend',
+  'light_ambient',
+  'light_angle',
+  'light_elevation',
+  'light_intensity',
+  'light_warmth',
+  'mat_clearcoat',
+  'mat_emissive',
+  'mat_iridescence',
+  'mat_metal_mod',
+  'mat_metalness',
+  'mat_relief',
+  'mat_rough_mod',
+  'mat_roughness',
+  'mat_sheen',
+  'border_l',
+  'border_c',
+  'border_h',
+  'border_a',
+];
 type DragState = {
   pointerId: number;
   mode: DragMode;
@@ -69,6 +111,11 @@ type DragState = {
 };
 function clampLinearColor(value: number): number {
   return Math.max(0, Math.min(1, value));
+}
+
+function oklchToClampedLinearSrgb(color: [number, number, number]): [number, number, number] {
+  const rgb = oklchToLinearSrgb(color);
+  return [clampLinearColor(rgb[0]), clampLinearColor(rgb[1]), clampLinearColor(rgb[2])];
 }
 
 
@@ -97,7 +144,6 @@ function createRendererUniforms() {
     metalness: uniform(0.35),
     metalMod: uniform(0.2),
     clearcoat: uniform(0.62),
-    anisotropy: uniform(0.28),
     iridescence: uniform(0.44),
     iridThicknessMin: uniform(120),
     iridThicknessMax: uniform(420),
@@ -111,9 +157,10 @@ function createRendererUniforms() {
     colorFieldMix: uniform(1),
     undulateMix: uniform(1),
     fieldPhaseMix: uniform(1),
+    bakedProjScale: uniform(1.525),
+    bakedProjectionMix: uniform(0),
     projBlend: uniform(0),
     projScale: uniform(1.525),
-    shadeFloor: uniform(0.04),
     sheen: uniform(0.12),
     brightness: uniform(1),
     rippleAmp: uniform(0),
@@ -125,16 +172,41 @@ function createRendererUniforms() {
     fieldPhase: uniform(0),
     depthScale: uniform(0.42),
     reliefScale: uniform(0.55),
-    edgeDepthBias: uniform(0.0015),
+    edgeDepthBias: uniform(0.0025),
     boostX: uniform(0),
     boostY: uniform(0),
   };
+}
+
+function writeFloatUniform(target: UniformNode<'float', number> | undefined, value: number): boolean {
+  if (!target || target.value === value) return false;
+  target.value = value;
+  return true;
+}
+
+function writeFeedbackDerivedUniforms(uniforms: FxUniforms, key: string, value: number): boolean {
+  if (key === 'rotate') {
+    const sinChanged = writeFloatUniform(uniforms['rotateSin'], Math.sin(value));
+    const cosChanged = writeFloatUniform(uniforms['rotateCos'], Math.cos(value));
+    return sinChanged || cosChanged;
+  }
+  if (key === 'hue') {
+    const angle = value * TAU;
+    const sinChanged = writeFloatUniform(uniforms['hueSin'], Math.sin(angle));
+    const cosChanged = writeFloatUniform(uniforms['hueCos'], Math.cos(angle));
+    return sinChanged || cosChanged;
+  }
+  return false;
 }
 
 function displayScaleFromSettings(settings: Settings | Partial<Settings>): number {
   if (String(settings.projection) === '1') return 1;
   const value = intSetting(settings, 'hyp_scale', 0, 100);
   return 0.35 + value / 100 * 1.95;
+}
+
+function poincareScaleFromSettings(settings: Settings | Partial<Settings>): number {
+  return 0.05 + intSetting(settings, 'hyp_scale', 0, 100) / 100 * 2.95;
 }
 
 export class WallpaperRenderer {
@@ -170,6 +242,7 @@ export class WallpaperRenderer {
   edgeMaterial: MeshBasicNodeMaterial;
   mesh: Mesh<BufferGeometry, MeshPhysicalNodeMaterial> | null;
   edgeMesh: Mesh<BufferGeometry, MeshBasicNodeMaterial> | null;
+  retiredGeometries: { geometry: BufferGeometry; frames: number }[];
   renderConnected: boolean;
   borderConnected: boolean;
   lightingConnected: boolean;
@@ -224,7 +297,7 @@ export class WallpaperRenderer {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = AgXToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.toneMappingExposure = 1;
     container.appendChild(this.renderer.domElement);
     this.postPipeline = null;
     this.postChainSpec = [];
@@ -241,6 +314,13 @@ export class WallpaperRenderer {
     this.uniforms = createRendererUniforms();
 
     this.material = this.createMaterial();
+    // The border mesh rides the same displaced surface as the fill. Push the fill
+    // slightly back in depth, following Three's face/edge overlay pattern, so relief
+    // does not depth-fight away strips of the border while depth testing still hides
+    // genuinely occluded back-side edges.
+    this.material.polygonOffset = true;
+    this.material.polygonOffsetFactor = 1;
+    this.material.polygonOffsetUnits = 1;
     this.edgeMaterial = new MeshBasicNodeMaterial({
       transparent: true,
       opacity: 0.4,
@@ -250,6 +330,7 @@ export class WallpaperRenderer {
     this.edgeMaterial.positionNode = this.boostedEdgePositionNode();
     this.mesh = null;
     this.edgeMesh = null;
+    this.retiredGeometries = [];
     this.renderConnected = true;
     this.borderConnected = true;
     this.lightingConnected = true;
@@ -405,6 +486,11 @@ export class WallpaperRenderer {
     root.traverse(node => {
       if (keep.has(node) || visited.has(node)) return;
       visited.add(node);
+      const nodeDispose = Reflect.get(node, 'dispose');
+      if (typeof nodeDispose === 'function' && nodeDispose !== NodeBase.prototype.dispose) {
+        Reflect.apply(nodeDispose, node, []);
+        return;
+      }
       let ownsRenderTarget = false;
       for (const key of Object.keys(node)) {
         const value = Reflect.get(node, key);
@@ -418,9 +504,7 @@ export class WallpaperRenderer {
           }
         }
       }
-      // The override on bloom/anamorphic/afterImage frees their materials + caches
-      // too; RTTNode has no override, but its render target is already freed above.
-      if (ownsRenderTarget) node.dispose();
+      if (ownsRenderTarget && typeof nodeDispose === 'function') Reflect.apply(nodeDispose, node, []);
     });
   }
 
@@ -442,10 +526,9 @@ export class WallpaperRenderer {
     if (oldOutput) this.disposePostTree(oldOutput, keep);
     const nextUniforms = new Map<string, FxUniforms>();
     let frame: Node = scenePass;
-    // The output color transform (AgX tone map + sRGB) is owned by the toneMap
-    // node, not the pipeline: it applies only when a live toneMap node is in the
-    // chain. Cut/bypass/skip it and the frame reaches the screen untransformed
-    // (linear, washed-out) — the node is downstream of its inlets, like every FX.
+    // The toneMap node owns AgX only. The RenderPipeline still performs the
+    // output color transform below, so bypassing toneMap removes the curve without
+    // skipping sRGB encoding.
     let hasToneMap = false;
     for (const node of this.postChainSpec) {
       if (node.bypass) continue;
@@ -507,25 +590,34 @@ export class WallpaperRenderer {
         // so the coarse/useful range gets most of the slider and the degenerate
         // ultra-fine bottom is compressed into the first ~11% of travel.
         if (node.kind === 'dotScreen' && key === 'scale') next = value * value * 8;
-        if (target.value !== next) {
-          target.value = next;
-          changed = true;
-        }
+        if (writeFloatUniform(target, next)) changed = true;
+        if (node.kind === 'feedback' && writeFeedbackDerivedUniforms(uniforms, key, next)) changed = true;
       }
     }
     return changed;
   }
 
   boostCoordinateNodes(x: Node<'float'>, y: Node<'float'>) {
-    // Continuous Euclid <-> Poincaré disk projection in the vertex shader
-    // (matches CPU projectHyp: z = normalize(x,y) * tanh(r * scale * 0.5)).
-    // projBlend 0 = Euclidean (px=x, py=y -> byte-identical default), 1 = full
-    // disk; modulates live with no geometry rebuild. Adds no vertex attribute.
-    const r = x.mul(x).add(y.mul(y)).sqrt();
+    // The CPU mesh can already be baked into a Poincaré disk at
+    // bakedProjScale. When hyp_scale changes live, do NOT rebuild geometry:
+    // recover the source radius from that baked disk coordinate and reproject it
+    // to projScale here. If the mesh is Euclidean-baked, bakedProjectionMix=0 and
+    // this is exactly identity.
+    const bakedR = x.mul(x).add(y.mul(y)).sqrt();
+    const safeBakedR = max(bakedR, float(1e-6));
+    const unprojectedR = atanh(clamp(bakedR, 0.0, 0.9999)).mul(2).div(max(this.uniforms.bakedProjScale, float(1e-6)));
+    const rebakedR = tanh(unprojectedR.mul(this.uniforms.projScale).mul(0.5));
+    const correctedX = mix(x, x.div(safeBakedR).mul(rebakedR), this.uniforms.bakedProjectionMix);
+    const correctedY = mix(y, y.div(safeBakedR).mul(rebakedR), this.uniforms.bakedProjectionMix);
+
+    // Continuous Euclid <-> Poincaré disk projection in the vertex shader. This
+    // is the intentional extra projection blend control, applied after the baked
+    // scale correction above.
+    const r = correctedX.mul(correctedX).add(correctedY.mul(correctedY)).sqrt();
     const safeR = max(r, float(1e-6));
     const d = tanh(r.mul(this.uniforms.projScale).mul(0.5));
-    const px = mix(x, x.div(safeR).mul(d), this.uniforms.projBlend);
-    const py = mix(y, y.div(safeR).mul(d), this.uniforms.projBlend);
+    const px = mix(correctedX, correctedX.div(safeR).mul(d), this.uniforms.projBlend);
+    const py = mix(correctedY, correctedY.div(safeR).mul(d), this.uniforms.projBlend);
     // projectionMix is the projection->palette inlet: 1 = the wired hyperbolic
     // boost, 0 = identity (flat). Cutting that wire flattens the projection
     // instead of hiding the mesh. bx=by=0 is exactly identity here.
@@ -573,6 +665,16 @@ export class WallpaperRenderer {
     tileCenter: Node<'vec2'>,
   ): Node<'float'> {
     const boostedCenter = this.boostCoordinateNodes(tileCenter.x, tileCenter.y);
+    return this.surfaceDepthFromBoostedCenter(boostedX, boostedY, tileRing, tileOrient, boostedCenter);
+  }
+
+  surfaceDepthFromBoostedCenter(
+    boostedX: Node<'float'>,
+    boostedY: Node<'float'>,
+    tileRing: Node<'float'>,
+    tileOrient: Node<'vec2'>,
+    boostedCenter: { x: Node<'float'>; y: Node<'float'> },
+  ): Node<'float'> {
     const localX = boostedX.sub(boostedCenter.x);
     const localY = boostedY.sub(boostedCenter.y);
     const directionalDepth = localX.mul(tileOrient.x).add(localY.mul(tileOrient.y))
@@ -583,7 +685,7 @@ export class WallpaperRenderer {
   }
 
   // The surface z-displacement. The scalar material relief
-  // (positionLocal.z * reliefScale) is a routed Surface Material lane: material
+  // (`tileRelief * reliefScale`) is a routed Surface Material lane: material
   // relief can go straight to the Scene Pass or through a Field Source. Three
   // distinct fields ride on top, each on its own §0 wire:
   //  - DISPLACE (per-tile bulge, gated by displaceMix),
@@ -597,12 +699,15 @@ export class WallpaperRenderer {
     tileRing: Node<'float'>,
     tileOrient: Node<'vec2'>,
     tileCenter: Node<'vec2'>,
+    tileRelief: Node<'float'>,
+    boostedCenter?: { x: Node<'float'>; y: Node<'float'> },
   ): Node<'float'> {
-    const reliefZ = positionLocal.z
+    const reliefZ = tileRelief
       .mul(this.uniforms.reliefScale)
       .mul(this.uniforms.materialMix)
       .mul(this.uniforms.materialReliefMix);
-    const displaceField = this.surfaceDepthNode(boostedX, boostedY, tileRing, tileOrient, tileCenter);
+    const center = boostedCenter ?? this.boostCoordinateNodes(tileCenter.x, tileCenter.y);
+    const displaceField = this.surfaceDepthFromBoostedCenter(boostedX, boostedY, tileRing, tileOrient, center);
     const wave = this.rippleWaveNode(boostedX, boostedY, this.uniforms.rippleFreq, this.uniforms.fieldSpeed, this.uniforms.fieldPhase, this.uniforms.fieldPhaseMix);
     const reliefField = reliefZ.mul(wave).mul(this.uniforms.rippleAmp);
     // Undulate is the whole-sheet wave: a 1-D plane wave displacing z (up), so the
@@ -625,61 +730,54 @@ export class WallpaperRenderer {
     return z;
   }
 
-  // The analytic surface normal from the displacement gradient (finite-differenced
-  // surfaceZNode), transformed to view space. Shading smoothness is a property of
-  // the NORMAL, not the geometry: with `normalFlat` (the polygon face normal) any
-  // displacement on low-poly tiles facets, regardless of wave frequency — which is
-  // the real reason a displaced surface "looked like relief". Deriving the normal
-  // from the displacement instead decouples shading from polygon density: a flat,
-  // low-poly sheet shades as a smooth undulation at any frequency/tessellation, no
-  // subdivision. (See docs/render/displacement-normals.md for the war story.)
+  surfaceSlopeNode(
+    boostedX: Node<'float'>,
+    boostedY: Node<'float'>,
+    tileRing: Node<'float'>,
+    tileOrient: Node<'vec2'>,
+    tileCenter: Node<'vec2'>,
+    tileRelief: Node<'float'>,
+    boostedCenter?: { x: Node<'float'>; y: Node<'float'> },
+  ): Node<'vec2'> {
+    const eps = float(0.005);
+    const center = boostedCenter ?? this.boostCoordinateNodes(tileCenter.x, tileCenter.y);
+    const z0 = this.surfaceZNode(boostedX, boostedY, tileRing, tileOrient, tileCenter, tileRelief, center);
+    const zx = this.surfaceZNode(boostedX.add(eps), boostedY, tileRing, tileOrient, tileCenter, tileRelief, center);
+    const zy = this.surfaceZNode(boostedX, boostedY.add(eps), tileRing, tileOrient, tileCenter, tileRelief, center);
+    return vec2(z0.sub(zx).div(eps), z0.sub(zy).div(eps));
+  }
+
+  // Smooth procedural fields use the analytic displacement gradient. Baked relief
+  // is added back from the projected tent face normal so relief=0 stays visually
+  // flat, while real relief still responds to fill subdivision.
   surfaceNormalNode(
     boostedX: Node<'float'>,
     boostedY: Node<'float'>,
     tileRing: Node<'float'>,
     tileOrient: Node<'vec2'>,
     tileCenter: Node<'vec2'>,
-  ): Node<'vec3'> {
-    const eps = float(0.005);
-    const z0 = this.surfaceZNode(boostedX, boostedY, tileRing, tileOrient, tileCenter);
-    const zx = this.surfaceZNode(boostedX.add(eps), boostedY, tileRing, tileOrient, tileCenter);
-    const zy = this.surfaceZNode(boostedX, boostedY.add(eps), tileRing, tileOrient, tileCenter);
-    // Procedural gradient (undulate/displace/relief-wave): analytic, so the moving
-    // fields stay smooth at ANY tessellation — this is the part 0523f57 fixed and we
-    // must NOT regress.
-    const gx = z0.sub(zx).div(eps);
-    const gy = z0.sub(zy).div(eps);
-    // Baked per-tile relief (positionLocal.z * reliefScale) is a per-vertex constant,
-    // so it cancels in the finite difference above and shades flat — the fill-subdiv
-    // regression. Add it back as a geometric FACE normal of the baked tent: this is
-    // what responds to fill subdivision (more facets -> the face normal varies more
-    // finely across the tent), giving back the "proper" relief shading. The xy/z
-    // ratio is invariant to the cross product's winding sign, so DoubleSide is fine.
-    // (Local/object space; exact in Euclidean, an approximation under Poincaré boost.)
+    tileRelief: Node<'float'>,
+  ): Node {
+    const boostedCenter = this.boostCoordinateNodes(tileCenter.x, tileCenter.y);
+    const proceduralSlope = this.surfaceSlopeNode(boostedX, boostedY, tileRing, tileOrient, tileCenter, tileRelief, boostedCenter);
+    // Match the drawn projected XY so Poincare scale/boost and high-aspect tiles
+    // do not shade against a different surface than the one being rendered.
     const bakedPos = vec3(
-      positionLocal.x,
-      positionLocal.y,
-      positionLocal.z
+      boostedX,
+      boostedY,
+      tileRelief
         .mul(this.uniforms.reliefScale)
         .mul(this.uniforms.materialMix)
         .mul(this.uniforms.materialReliefMix),
     );
     const nBaked = normalize(cross(dFdx(bakedPos), dFdy(bakedPos)));
-    // Very high relief can make the baked face nearly vertical in screen
-    // derivatives. Dividing by a near-zero z normal produces extreme/invalid
-    // slopes, which shows up as black physical-material faces. Keep the same
-    // relief geometry but bound the shading normal's slope extraction.
-    const bakedZ = max(nBaked.z, float(0.08));
-    const bgx = clamp(nBaked.x.div(bakedZ), float(-4), float(4));
-    const bgy = clamp(nBaked.y.div(bakedZ), float(-4), float(4));
-    const localNormal = normalize(vec3(gx.add(bgx), gy.add(bgy), float(1)));
-    // DoubleSide two-sided normal. The geometry now has consistent CCW winding (see
-    // emitTriangle flip), so frontFacing reliably tells front from back: the front
-    // keeps the normal, the back flips it to face the viewer (so the back is lit,
-    // not black). Winding-based, so it's stable under tilt — unlike a view-direction
-    // (N·V) flip, which graze-flickers on the undulated surface.
+    const nBakedUp = nBaked.z.lessThan(float(0)).select(nBaked.negate(), nBaked);
+    const bakedZ = max(nBakedUp.z, float(0.08));
+    const bgx = clamp(nBakedUp.x.div(bakedZ), float(-4), float(4));
+    const bgy = clamp(nBakedUp.y.div(bakedZ), float(-4), float(4));
+    const localNormal = normalize(vec3(proceduralSlope.x.add(bgx), proceduralSlope.y.add(bgy), float(1)));
     const nView = transformNormalToView(localNormal);
-    return frontFacing.select(nView, nView.negate());
+    return directionToFaceDirection(nView);
   }
 
   // The boosted (projected) surface coordinates plus the per-tile attributes the
@@ -688,33 +786,45 @@ export class WallpaperRenderer {
     const tileRing = attribute<'float'>('tileRing', 'float');
     const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
     const tileCenter = attribute<'vec2'>('tileCenter', 'vec2');
+    const tileRelief = attribute<'float'>('tileRelief', 'float');
     const boosted = this.boostCoordinateNodes(positionLocal.x, positionLocal.y);
-    return { boosted, tileRing, tileOrient, tileCenter };
+    return { boosted, tileRing, tileOrient, tileCenter, tileRelief };
   }
 
   boostedPositionNode() {
-    const { boosted, tileRing, tileOrient, tileCenter } = this.boostedSurfaceInputs();
-    return vec3(boosted.x, boosted.y, this.surfaceZNode(boosted.x, boosted.y, tileRing, tileOrient, tileCenter));
+    const { boosted, tileRing, tileOrient, tileCenter, tileRelief } = this.boostedSurfaceInputs();
+    return vec3(boosted.x, boosted.y, this.surfaceZNode(boosted.x, boosted.y, tileRing, tileOrient, tileCenter, tileRelief));
   }
 
-  surfaceNormalForMaterial(): Node<'vec3'> {
-    const { boosted, tileRing, tileOrient, tileCenter } = this.boostedSurfaceInputs();
-    return this.surfaceNormalNode(boosted.x, boosted.y, tileRing, tileOrient, tileCenter);
+  surfaceNormalForMaterial(): Node {
+    const { boosted, tileRing, tileOrient, tileCenter, tileRelief } = this.boostedSurfaceInputs();
+    return this.surfaceNormalNode(boosted.x, boosted.y, tileRing, tileOrient, tileCenter, tileRelief);
   }
 
   boostedEdgePositionNode() {
-    const { boosted, tileRing, tileOrient, tileCenter } = this.boostedSurfaceInputs();
-    return vec3(
-      boosted.x,
-      boosted.y,
-      this.surfaceZNode(boosted.x, boosted.y, tileRing, tileOrient, tileCenter).add(this.uniforms.edgeDepthBias),
-    );
+    const { boosted, tileRing, tileOrient, tileCenter, tileRelief } = this.boostedSurfaceInputs();
+    const edgeSide = attribute<'float'>('edgeSide', 'float');
+    const edgeSlope = attribute<'vec2'>('edgeSlope', 'vec2');
+    const boostedCenter = this.boostCoordinateNodes(tileCenter.x, tileCenter.y);
+    const proceduralSlope = this.surfaceSlopeNode(boosted.x, boosted.y, tileRing, tileOrient, tileCenter, tileRelief, boostedCenter);
+    const reliefMix = this.uniforms.reliefScale.mul(this.uniforms.materialMix).mul(this.uniforms.materialReliefMix);
+    const localNormal = normalize(vec3(
+      proceduralSlope.x.add(edgeSlope.x.mul(reliefMix)),
+      proceduralSlope.y.add(edgeSlope.y.mul(reliefMix)),
+      float(1),
+    ));
+    const clearance = clamp(
+      this.uniforms.edgeDepthBias.div(max(localNormal.z, float(0.35))),
+      this.uniforms.edgeDepthBias,
+      this.uniforms.edgeDepthBias.mul(2.5),
+    ).mul(edgeSide);
+    const z = this.surfaceZNode(boosted.x, boosted.y, tileRing, tileOrient, tileCenter, tileRelief, boostedCenter);
+    return vec3(boosted.x, boosted.y, z.add(clearance));
   }
 
   createMaterial(): MeshPhysicalNodeMaterial {
     const tileType = attribute<'float'>('tileType', 'float');
     const tileRing = attribute<'float'>('tileRing', 'float');
-    const tileOrient = attribute<'vec2'>('tileOrient', 'vec2');
     let rippleColor = this.rippleWaveNode(positionLocal.x, positionLocal.y, this.uniforms.rippleFreq, this.uniforms.fieldSpeed, this.uniforms.fieldPhase, this.uniforms.fieldPhaseMix).mul(this.uniforms.rippleColorAmp).mul(this.uniforms.colorFieldMix);
     for (const slot of this.uniforms.fieldSlots) {
       rippleColor = rippleColor.add(this.rippleWaveNode(positionLocal.x, positionLocal.y, slot.freq, slot.speed, slot.phase, slot.phaseMix).mul(slot.color));
@@ -722,7 +832,10 @@ export class WallpaperRenderer {
     const material = new MeshPhysicalNodeMaterial({
       side: DoubleSide,
     });
-    material.vertexColors = true;
+    // colorNode reads vertexColor() explicitly below so graph gating can mix it.
+    // Leaving vertexColors=true makes NodeMaterial multiply the palette a second
+    // time in r184.
+    material.vertexColors = false;
     // colorMix is the palette->material:color inlet: 1 = palette color, 0 = flat
     // white. Cutting that wire drops the color (flat tiles) instead of hiding
     // the mesh — the material is downstream of its color inlet.
@@ -730,9 +843,10 @@ export class WallpaperRenderer {
     // material has zero effect (matMix 0 -> neutral 1.0). The colour ripple field
     // is gated separately by colorFieldMix.
     const materialColor = mix(vec3(1.0, 1.0, 1.0), vertexColor(), this.uniforms.colorMix);
+    const tileSurfaceColor = mix(vec3(1.0, 1.0, 1.0), materialColor, this.uniforms.materialMix)
+      .mul(mix(float(1.0), this.uniforms.brightness, this.uniforms.materialMix).add(rippleColor));
     material.colorNode = clamp(
-      mix(vec3(1.0, 1.0, 1.0), materialColor, this.uniforms.materialMix)
-        .mul(mix(float(1.0), this.uniforms.brightness, this.uniforms.materialMix).add(rippleColor)),
+      tileSurfaceColor,
       0.0,
       1.0,
     );
@@ -744,16 +858,20 @@ export class WallpaperRenderer {
     // that wire renders a plain surface instead of hiding the mesh — the material
     // is downstream of its surface inlet. Default 1 leaves the look untouched.
     const matMix = this.uniforms.materialMix;
-    material.roughnessNode = clamp(
+    const roughnessNode = clamp(
       mix(float(0.5), this.uniforms.roughness.add(tileRing.mul(this.uniforms.roughMod)), matMix),
       0.035,
       1.0,
     );
+    material.roughnessNode = roughnessNode;
     material.metalnessNode = clamp(this.uniforms.metalness.add(tileType.mul(this.uniforms.metalMod)), 0.0, 1.0).mul(matMix);
     material.clearcoatNode = this.uniforms.clearcoat.mul(matMix);
-    material.clearcoatRoughnessNode = clamp(this.uniforms.roughness.mul(0.28), 0.018, 0.32);
+    material.clearcoatRoughnessNode = roughnessNode;
     material.clearcoatNormalNode = surfaceNormal;
-    material.anisotropyNode = vec2(tileOrient.x, tileOrient.y).mul(this.uniforms.anisotropy).mul(matMix);
+    // Do not wire anisotropy until the geometry provides a real tangent frame.
+    // Three's fallback derives TBN from UV derivatives; this atlas no longer has
+    // UVs, so anisotropy can produce view-angle dependent specular discontinuities.
+    material.anisotropyNode = null;
     material.iridescenceNode = clamp(this.uniforms.iridescence.mul(float(0.7).add(tileRing.mul(0.3))), 0.0, 1.0).mul(matMix);
     material.iridescenceThicknessNode = clamp(
       this.uniforms.iridThicknessMin.add(this.uniforms.iridThicknessMax.sub(this.uniforms.iridThicknessMin).mul(tileRing)),
@@ -761,10 +879,10 @@ export class WallpaperRenderer {
       1200.0,
     );
     material.sheenNode = this.uniforms.sheen.mul(matMix);
-    material.sheenRoughnessNode = float(0.44);
-    material.emissiveNode = vertexColor().mul(
-      this.uniforms.emissive.add(this.uniforms.shadeFloor).add(max(rippleColor, 0.0).mul(0.35)),
+    const tileEmissive = vertexColor().mul(
+      this.uniforms.emissive.add(max(rippleColor, 0.0).mul(0.35)),
     );
+    material.emissiveNode = tileEmissive;
     return material;
   }
 
@@ -778,14 +896,8 @@ export class WallpaperRenderer {
     const colorArray = colorAttribute.array;
     const slotArray = slotAttribute.array;
     if (!(colorArray instanceof Float32Array) || !(slotArray instanceof Float32Array)) return;
-    const rgbBySlot = palette.colors.map(color => {
-      const rgb = oklchToLinearSrgb(color);
-      return [clampLinearColor(rgb[0]), clampLinearColor(rgb[1]), clampLinearColor(rgb[2])] as const;
-    });
-    const fallback = rgbBySlot[0] ?? ([1, 1, 1] as const);
     for (let i = 0; i < slotArray.length; i += 1) {
-      const slot = Math.max(0, Math.min(palette.colors.length - 1, Math.round(slotArray[i] ?? 0)));
-      const rgb = rgbBySlot[slot] ?? fallback;
+      const rgb = oklchToClampedLinearSrgb(paletteColorAt(palette.colors, slotArray[i] ?? 0));
       const p = i * 3;
       colorArray[p] = rgb[0];
       colorArray[p + 1] = rgb[1];
@@ -796,14 +908,33 @@ export class WallpaperRenderer {
     this.paletteColorAttribute = colorAttribute;
   }
 
+  setPaletteSlots(paletteSlot: Float32Array, palette: Palette, options: { render?: boolean } = {}): boolean {
+    if (!this.mesh) return false;
+    const slotAttribute = this.mesh.geometry.getAttribute('paletteSlot');
+    if (!(slotAttribute instanceof BufferAttribute)) return false;
+    const slotArray = slotAttribute.array;
+    if (!(slotArray instanceof Float32Array) || slotArray.length !== paletteSlot.length) return false;
+    slotArray.set(paletteSlot);
+    slotAttribute.needsUpdate = true;
+    // Slot indices changed even if palette colours did not; force a color-attribute
+    // re-bake instead of taking applyPaletteColors' same-palette fast path.
+    this.paletteSignature = '';
+    this.applyPaletteColors(palette);
+    if (options.render !== false) this.render();
+    return true;
+  }
+
   setGeometry(geometry: BufferGeometry, edgeGeometry: BufferGeometry | null = null, options: { frame?: boolean; warmup?: boolean } = {}): void {
+    this.uniforms.bakedProjectionMix.value = String(this.settings.projection) === '1' ? 1 : 0;
+    this.uniforms.bakedProjScale.value = poincareScaleFromSettings(this.settings);
     if (this.mesh) {
       this.group.remove(this.mesh);
-      this.mesh.geometry.dispose();
+      this.retireGeometry(this.mesh.geometry);
+      this.mesh = null;
     }
     if (this.edgeMesh) {
       this.group.remove(this.edgeMesh);
-      this.edgeMesh.geometry.dispose();
+      this.retireGeometry(this.edgeMesh.geometry);
       this.edgeMesh = null;
     }
     this.mesh = new Mesh(geometry, this.material);
@@ -823,7 +954,7 @@ export class WallpaperRenderer {
   setEdgeGeometry(edgeGeometry: BufferGeometry | null): void {
     if (this.edgeMesh) {
       this.group.remove(this.edgeMesh);
-      this.edgeMesh.geometry.dispose();
+      this.retireGeometry(this.edgeMesh.geometry);
       this.edgeMesh = null;
     }
     if (edgeGeometry) {
@@ -835,10 +966,43 @@ export class WallpaperRenderer {
     this.render();
   }
 
+  private retireGeometry(geometry: BufferGeometry): void {
+    this.retiredGeometries.push({ geometry, frames: 2 });
+    this.scheduleRenderFrame();
+  }
+
+  private flushRetiredGeometries(force = false): void {
+    if (this.retiredGeometries.length === 0) return;
+    const keep: { geometry: BufferGeometry; frames: number }[] = [];
+    for (const retired of this.retiredGeometries) {
+      if (!force && retired.frames > 0) {
+        keep.push({ geometry: retired.geometry, frames: retired.frames - 1 });
+        continue;
+      }
+      this.disposeGeometry(retired.geometry);
+    }
+    this.retiredGeometries = keep;
+    if (keep.length > 0) this.scheduleRenderFrame();
+  }
+
+  private disposeGeometry(geometry: BufferGeometry): void {
+    try {
+      geometry.dispose();
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      if (!message.includes("reading 'destroy'")) throw caught;
+      // Three r184 WebGPU can attach geometry dispose listeners before every
+      // discovered attribute has a created backend buffer during rapid mesh swaps.
+      // The renderer owns the backend and will release remaining resources on
+      // renderer.dispose(); crashing the app here is worse than retaining this
+      // retired CPU geometry until renderer teardown.
+    }
+  }
+
   applyRenderConnected(): void {
     if (this.mesh) this.mesh.visible = this.renderConnected;
-    // The edge mesh (tile borders) is gated by BOTH the geometry chain and the
-    // Border node's own wire: cut the Border->renderer wire and the borders stop.
+    // Tile borders are their own edge mesh; the Border->renderer wire gates only
+    // that mesh, not the fill surface.
     if (this.edgeMesh) this.edgeMesh.visible = this.renderConnected && this.borderConnected;
   }
 
@@ -934,7 +1098,6 @@ export class WallpaperRenderer {
     this.uniforms.metalness.value = mat.metalness;
     this.uniforms.metalMod.value = mat.metalMod;
     this.uniforms.clearcoat.value = mat.clearcoat;
-    this.uniforms.anisotropy.value = mat.anisotropy;
     this.uniforms.iridescence.value = mat.iridescence;
     this.uniforms.iridThicknessMin.value = intSetting(settings, 'mat_irid_thick_min', 1, 1200);
     this.uniforms.iridThicknessMax.value = Math.max(
@@ -942,10 +1105,9 @@ export class WallpaperRenderer {
       intSetting(settings, 'mat_irid_thick_max', 1, 1200),
     );
     this.uniforms.emissive.value = mat.emissive;
-    this.uniforms.shadeFloor.value = 0.036 + Math.min(0.028, mat.sheen * 0.018 + mat.clearcoat * 0.012);
     this.uniforms.sheen.value = mat.sheen;
     this.uniforms.reliefScale.value = intSetting(settings, 'mat_relief', 0, 200) / 200;
-    this.uniforms.brightness.value = intSetting(settings, 'brightness', 0, 200) / 100;
+    this.uniforms.brightness.value = intSetting(settings, 'brightness', 0, 100) / 100;
     // The field-source emits three independently-driven fields: displacement (a
     // per-tile bulge), relief (the wave modulating baked relief) and colour. Each
     // is its own driver; zero on all three leaves the surface flat (modulo relief).
@@ -958,18 +1120,17 @@ export class WallpaperRenderer {
     this.uniforms.rippleFreq.value = intSetting(settings, 'field_freq', 0, 100) / 10;
     this.uniforms.undulateFreq.value = intSetting(settings, 'field_undulate_freq', 0, 100) / 10;
     this.uniforms.fieldSpeed.value = intSetting(settings, 'field_speed', 0, 200) / 50;
-    this.scene.environmentIntensity = 0.8 + mat.clearcoat * 0.9 + mat.metalness * 0.5;
-    const border = oklchToLinearSrgb([
+    const border = oklchToClampedLinearSrgb([
       intSetting(settings, 'border_l', 0, 100) / 100,
       intSetting(settings, 'border_c', 0, 37) / 100,
       intSetting(settings, 'border_h', 0, 359),
     ]);
-    this.edgeMaterial.color.setRGB(border[0], border[1], border[2]);
+    this.edgeMaterial.color.setRGB(border[0], border[1], border[2], LinearSRGBColorSpace);
     this.edgeMaterial.opacity = intSetting(settings, 'border_a', 0, 100) / 100;
     this.applyPaletteColors(palette);
     this.applyLights(settings);
     this.uniforms.projBlend.value = intSetting(settings, 'proj_blend', 0, 100) / 100;
-    this.uniforms.projScale.value = 0.05 + intSetting(settings, 'hyp_scale', 0, 100) / 100 * 2.95;
+    this.uniforms.projScale.value = poincareScaleFromSettings(settings);
     this.projectionScale = displayScaleFromSettings(settings);
     this.applyGroupScale();
     this.setProjectionBoost(
@@ -979,8 +1140,10 @@ export class WallpaperRenderer {
       false,
     );
 
-    const bg = oklchToLinearSrgb(palette.bg);
-    this.renderer.setClearColor(new Color(bg[0], bg[1], bg[2]), 1);
+    const bg = oklchToClampedLinearSrgb(palette.bg);
+    const bgColor = new Color().setRGB(bg[0], bg[1], bg[2], LinearSRGBColorSpace);
+    this.renderer.setClearColor(bgColor, 1);
+    this.scene.background = bgColor;
     this.postBg = [bg[0], bg[1], bg[2]];
     this.postBgUniform.value.set(bg[0], bg[1], bg[2]);
     this.render();
@@ -1010,10 +1173,9 @@ export class WallpaperRenderer {
     editState: AudioDriveEditState,
     modulations: AudioModulationValues = {},
   ): void {
-    const hasLiveModulation = Object.entries(modulations).some(([key, value]) => (
-      typeof value === 'number'
-      && Number.isFinite(value)
-      && !(editState.dragMode === 'hold' && editState.heldParams[key] === true)
+    const hasLiveModulation = RENDERER_AUDIO_SETTING_KEYS.some(key => (
+      finiteModulation(modulations[key]) !== null
+      && !editHoldsParam(editState.dragMode, editState.heldParams, key)
     ));
     if (!hasLiveModulation && !this.audioDriveActive) {
       this.audioEditMode = editState.dragMode;
@@ -1022,27 +1184,24 @@ export class WallpaperRenderer {
     const hadProjectionModulation = this.audioProjectionActive;
     this.audioDriveActive = hasLiveModulation;
     this.audioEditMode = editState.dragMode;
-    const held = (key: string) => editState.dragMode === 'hold' && editState.heldParams[key] === true;
     const hasModulation = (key: string): boolean => {
-      const value = modulations[key];
-      return typeof value === 'number' && Number.isFinite(value) && !held(key);
+      return finiteModulation(modulations[key]) !== null
+        && !editHoldsParam(editState.dragMode, editState.heldParams, key);
     };
     const modulatedValue = (key: keyof Settings, min: number, max: number): number => {
       const baseline = intSetting(this.settings, key, min, max);
-      const value = modulations[key];
-      return typeof value === 'number' && Number.isFinite(value) && !held(key)
-        ? clampNumber(baseline + value * (max - min), min, max)
-        : baseline;
+      return editHoldsParam(editState.dragMode, editState.heldParams, key)
+        ? baseline
+        : applyModulationTargetRange(baseline, modulations[key], min, max);
     };
     const modulatedDelta = (key: keyof Settings, min: number, max: number): number | null => {
-      const value = modulations[key];
-      return typeof value === 'number' && Number.isFinite(value) && !held(key)
-        ? value * (max - min)
-        : null;
+      return editHoldsParam(editState.dragMode, editState.heldParams, key)
+        ? null
+        : modulationTargetDelta(modulations[key], min, max);
     };
     const audioSettings: Partial<Settings> = {
       ...this.settings,
-      brightness: modulatedValue('brightness', 40, 180),
+      brightness: modulatedValue('brightness', 0, 100),
       field_displace: modulatedValue('field_displace', 0, 100),
       hyp_boost_x: modulatedValue('hyp_boost_x', 0, 100),
       hyp_boost_y: modulatedValue('hyp_boost_y', 0, 100),
@@ -1053,16 +1212,15 @@ export class WallpaperRenderer {
       light_elevation: modulatedValue('light_elevation', 0, 90),
       light_intensity: modulatedValue('light_intensity', 0, 200),
       light_warmth: modulatedValue('light_warmth', 0, 100),
-      mat_anisotropy: modulatedValue('mat_anisotropy', 0, 100),
       mat_clearcoat: modulatedValue('mat_clearcoat', 0, 100),
-      mat_emissive: modulatedValue('mat_emissive', 0, 200),
+      mat_emissive: modulatedValue('mat_emissive', 0, 100),
       mat_iridescence: modulatedValue('mat_iridescence', 0, 100),
       mat_metal_mod: modulatedValue('mat_metal_mod', 0, 100),
       mat_metalness: modulatedValue('mat_metalness', 0, 100),
       mat_relief: modulatedValue('mat_relief', 0, 200),
       mat_rough_mod: modulatedValue('mat_rough_mod', 0, 100),
       mat_roughness: modulatedValue('mat_roughness', 0, 100),
-      mat_sheen: modulatedValue('mat_sheen', 0, 200),
+      mat_sheen: modulatedValue('mat_sheen', 0, 100),
       field_relief: modulatedValue('field_relief', 0, 100),
       field_color: modulatedValue('field_color', 0, 100),
       field_speed: modulatedValue('field_speed', 0, 200),
@@ -1072,11 +1230,10 @@ export class WallpaperRenderer {
     this.uniforms.roughMod.value = mat.roughMod;
     this.uniforms.metalMod.value = mat.metalMod;
     this.uniforms.clearcoat.value = mat.clearcoat;
-    this.uniforms.anisotropy.value = mat.anisotropy;
     this.uniforms.sheen.value = mat.sheen;
     this.uniforms.reliefScale.value = modulatedValue('mat_relief', 0, 200) / 200;
-    this.uniforms.brightness.value = modulatedValue('brightness', 40, 180) / 100;
-    this.uniforms.emissive.value = Math.min(2, mat.emissive);
+    this.uniforms.brightness.value = modulatedValue('brightness', 0, 100) / 100;
+    this.uniforms.emissive.value = mat.emissive;
     this.uniforms.iridescence.value = Math.min(1, mat.iridescence);
     this.uniforms.metalness.value = Math.min(1, mat.metalness);
     this.uniforms.rippleAmp.value = modulatedValue('field_relief', 0, 100) / 100 * 0.075;
@@ -1087,18 +1244,13 @@ export class WallpaperRenderer {
     this.uniforms.fieldSpeed.value = modulatedValue('field_speed', 0, 200) / 50;
     const depthScale = modulatedValue('field_displace', 0, 100) / 100;
     this.uniforms.depthScale.value = Math.min(1.5, depthScale);
-    // Border colour/opacity are runtime (edgeMaterial), so audio can drive them.
-    if (hasModulation('border_l') || hasModulation('border_c') || hasModulation('border_h')) {
-      const borderRgb = oklchToLinearSrgb([
-        modulatedValue('border_l', 0, 100) / 100,
-        modulatedValue('border_c', 0, 37) / 100,
-        modulatedValue('border_h', 0, 359),
-      ]);
-      this.edgeMaterial.color.setRGB(borderRgb[0], borderRgb[1], borderRgb[2]);
-    }
-    if (hasModulation('border_a')) {
-      this.edgeMaterial.opacity = modulatedValue('border_a', 0, 100) / 100;
-    }
+    const borderRgb = oklchToClampedLinearSrgb([
+      modulatedValue('border_l', 0, 100) / 100,
+      modulatedValue('border_c', 0, 37) / 100,
+      modulatedValue('border_h', 0, 359),
+    ]);
+    this.edgeMaterial.color.setRGB(borderRgb[0], borderRgb[1], borderRgb[2], LinearSRGBColorSpace);
+    this.edgeMaterial.opacity = modulatedValue('border_a', 0, 100) / 100;
     if (
       hasModulation('light_ambient')
       || hasModulation('light_angle')
@@ -1118,7 +1270,7 @@ export class WallpaperRenderer {
     if (hasProjectionModulation || hadProjectionModulation) {
       this.projectionScale = displayScaleFromSettings(audioSettings);
       this.uniforms.projBlend.value = intSetting(audioSettings, 'proj_blend', 0, 100) / 100;
-      this.uniforms.projScale.value = 0.05 + intSetting(audioSettings, 'hyp_scale', 0, 100) / 100 * 2.95;
+      this.uniforms.projScale.value = poincareScaleFromSettings(audioSettings);
       this.applyGroupScale();
       if (this.drag?.mode === 'boost') {
         this.setProjectionBoost(
@@ -1159,6 +1311,7 @@ export class WallpaperRenderer {
     this.renderRequested = false;
     void now;
     if (shouldRender) this.renderNow();
+    this.flushRetiredGeometries();
   }
 
   applyLights(settings: Settings | Partial<Settings>): void {
@@ -1169,18 +1322,19 @@ export class WallpaperRenderer {
       Math.sin(light.angle) * xy,
       Math.sin(light.elevation) + 0.22,
     );
-    // Lighting is a side input: when lighting→renderer is cut the lights go
-    // dark and the surface is left to the environment map alone. Cut the wire,
-    // the lighting stops — the graph is downstream of nothing here, this is.
+    // Lighting is a side input: when lighting->renderer is cut, all direct and
+    // environment lighting from this node goes dark.
     const lit = this.lightingConnected ? 1 : 0;
-    this.keyLight.intensity = (1.25 + light.intensity * 2.25) * lit;
-    this.ambientLight.intensity = (0.08 + light.ambient * 0.75) * lit;
-    this.hemiLight.intensity = (0.24 + light.ambient * 0.7) * lit;
-    this.fillLight.intensity = (0.18 + (1 - light.warmth) * 0.7) * lit;
+    this.scene.environmentIntensity = (0.18 + light.ambient * 0.52) * lit;
+    this.keyLight.intensity = light.intensity * lit;
+    this.ambientLight.intensity = light.ambient * 0.3 * lit;
+    this.hemiLight.intensity = light.ambient * 0.42 * lit;
+    this.fillLight.intensity = light.intensity * (1 - light.warmth) * 0.22 * lit;
     this.keyLight.color.setRGB(
-      0.86 + light.warmth * 0.28,
-      0.9 + light.warmth * 0.1,
-      1.06 - light.warmth * 0.28,
+      0.84 + light.warmth * 0.16,
+      0.9 + light.warmth * 0.06,
+      1.0 - light.warmth * 0.16,
+      LinearSRGBColorSpace,
     );
   }
 
@@ -1317,6 +1471,17 @@ export class WallpaperRenderer {
     this.scheduleRenderFrame();
   }
 
+  flushPendingRender(): void {
+    if (!this.initialized || this.deviceLost || !this.renderRequested) return;
+    if (this.renderFrame) {
+      cancelAnimationFrame(this.renderFrame);
+      this.renderFrame = 0;
+    }
+    this.renderRequested = false;
+    this.renderNow();
+    this.flushRetiredGeometries();
+  }
+
   requestWarmupFrames(frames: number): void {
     this.warmupFramesRemaining = Math.max(this.warmupFramesRemaining, frames);
     if (this.warmupFrame) return;
@@ -1336,8 +1501,7 @@ export class WallpaperRenderer {
     if (this.renderFrame) cancelAnimationFrame(this.renderFrame);
     if (this.warmupFrame) cancelAnimationFrame(this.warmupFrame);
     this.resizeObserver.disconnect();
-    this.mesh?.geometry.dispose();
-    this.edgeMesh?.geometry.dispose();
+    this.flushRetiredGeometries(true);
     this.postPipeline?.dispose();
     if (this.postOutputNode) {
       // Empty keep-set: free every RT-owning node in the output tree, including any
@@ -1345,6 +1509,8 @@ export class WallpaperRenderer {
       this.disposePostTree(this.postOutputNode, new Set<object>());
     }
     this.scenePassNode?.dispose();
+    if (this.mesh) this.disposeGeometry(this.mesh.geometry);
+    if (this.edgeMesh) this.disposeGeometry(this.edgeMesh.geometry);
     this.renderer.domElement.remove();
     this.renderer.dispose();
   }

@@ -13,6 +13,7 @@
 #include "color/color.h"  // kMaxColors lives there
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 namespace penrose {
@@ -52,6 +53,13 @@ struct FillVertex {
     float    bx, by, bz;
     float    mtype, mox, moy, mring;
 };
+static_assert(sizeof(FillVertex) == 56, "FillVertex layout drift");
+static_assert(offsetof(FillVertex, x) == 0, "FillVertex position offset drift");
+static_assert(offsetof(FillVertex, colorIdx) == 8, "FillVertex color index offset drift");
+static_assert(offsetof(FillVertex, cx) == 12, "FillVertex center offset drift");
+static_assert(offsetof(FillVertex, bgx) == 20, "FillVertex bulge offset drift");
+static_assert(offsetof(FillVertex, bx) == 28, "FillVertex bary offset drift");
+static_assert(offsetof(FillVertex, mtype) == 40, "FillVertex material offset drift");
 
 // Vertex-shader-expanded border mesh. Each unique edge emits a stroked
 // quad; each convex endpoint sector can emit a small joint fan from the
@@ -81,6 +89,10 @@ struct BorderVertex {
     float miterScale;   // halfWidth multiplier to the offset-line intersection
     float _pad0, _pad1, _pad2;  // stride → 32 bytes for vec4-multiple alignment
 };
+static_assert(sizeof(BorderVertex) == 32, "BorderVertex layout drift");
+static_assert(offsetof(BorderVertex, x) == 0, "BorderVertex position offset drift");
+static_assert(offsetof(BorderVertex, mx) == 8, "BorderVertex miter offset drift");
+static_assert(offsetof(BorderVertex, miterScale) == 16, "BorderVertex scale offset drift");
 
 // Vertex push constants.
 //
@@ -158,6 +170,12 @@ struct PaletteUbo {
     float    fillColor[4];    // fillColor.rgb, --
     float    ambient[4];      // ambientColor.rgb, ambientAmount
 };
+static_assert(sizeof(PaletteUbo) == 608, "PaletteUbo std140 row layout drift");
+static_assert(offsetof(PaletteUbo, palette) == 0, "PaletteUbo palette offset drift");
+static_assert(offsetof(PaletteUbo, borderColor) == 288, "PaletteUbo borderColor offset drift");
+static_assert(offsetof(PaletteUbo, anim) == 336, "PaletteUbo anim offset drift");
+static_assert(offsetof(PaletteUbo, matNormal) == 432, "PaletteUbo material offset drift");
+static_assert(offsetof(PaletteUbo, ambient) == 592, "PaletteUbo ambient offset drift");
 
 // Pack a MaterialParams into the 11 trailing PaletteUbo rows. `d` points at
 // PaletteUbo::matNormal[0]; the rows are contiguous, so 44 floats are

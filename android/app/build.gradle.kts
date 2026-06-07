@@ -99,7 +99,7 @@ android {
 
     sourceSets {
         getByName("main") {
-            assets.srcDir(layout.projectDirectory.dir("../../atlas").asFile)
+            assets.srcDirs(layout.projectDirectory.dir("../../atlas").asFile)
         }
     }
 

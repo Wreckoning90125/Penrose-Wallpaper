@@ -20,7 +20,7 @@ import com.penrose.wallpaper.Settings
  */
 internal data class MaterialPreset(
     val name: String,
-    @DrawableRes val thumbnailRes: Int,
+    @field:DrawableRes val thumbnailRes: Int,
     val values: Map<String, Int>,
 )
 

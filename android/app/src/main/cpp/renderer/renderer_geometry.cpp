@@ -679,11 +679,10 @@ void emitTileBorderRing(
         const Point2 v = corners[i];
         const Point2 cIn = innerEnd[ip];
         const Point2 cOut = innerStart[i];
-        if (reflex[i]) {
-            pushBakedBorderTri(borders, indices, v, cIn, cOut, settings);
-        } else if (trim > 1e-9f) {
+        if (!reflex[i] && trim > 1e-9f) {
             continue;
-        } else if (cut > 0.0f && joinStyle == 1) {
+        }
+        if (!reflex[i] && cut > 0.0f && joinStyle == 1) {
             const Point2 m = apex[i];
             constexpr int kRoundSegments = 4;
             Point2 prev = cIn;
@@ -697,7 +696,7 @@ void emitTileBorderRing(
                 pushBakedBorderTri(borders, indices, v, prev, p, settings);
                 prev = p;
             }
-        } else if (cut > 0.0f) {
+        } else if (reflex[i] || cut > 0.0f) {
             pushBakedBorderTri(borders, indices, v, cIn, cOut, settings);
         }
     }

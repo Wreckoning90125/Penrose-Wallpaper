@@ -61,38 +61,18 @@ static_assert(offsetof(FillVertex, bgx) == 20, "FillVertex bulge offset drift");
 static_assert(offsetof(FillVertex, bx) == 28, "FillVertex bary offset drift");
 static_assert(offsetof(FillVertex, mtype) == 40, "FillVertex material offset drift");
 
-// Vertex-shader-expanded border mesh. Each unique edge emits a stroked
-// quad; each convex endpoint sector can emit a small joint fan from the
-// shared graph vertex through the neighbouring edge offsets. The shader
-// extrudes each vertex by halfWidth × miterScale along the per-corner
-// mitered direction, so adjacent edges meeting at a non-90° vertex join
-// flush instead of stopping as independent perpendicular butt ends. The
-// mitered direction is already signed for this vertex's world side, so
-// no per-vertex side flag is needed. In disk mode the shader projects
-// (mx, my) through the same
-// projTangentRadial+boostTangent Jacobian as a tangent vector would
-// see — conformality preserves the local join angle, so the joint
-// closes in disk space at the same miterScale.
-//
-// Stride padded to 32 bytes (8 floats = 2 vec4). The five live
-// fields only need 20 bytes, but several mobile Vulkan drivers
-// (older Adreno especially) silently misfetch vertex attributes
-// when the binding stride isn't a multiple of 16 — perpendicular
-// butt-end output regardless of what the source CPU data carries.
-// The Vulkan spec doesn't require vec4-multiple stride, but in
-// practice every reliable layout I've seen does it. Cost is 12 extra
-// bytes per border vertex, still comfortably below a megabyte for the
-// current generation caps.
+// Baked border-ring mesh. Location 0 stores the geometry-space border position:
+// Euclidean source coordinates in Euclidean mode, projected disk coordinates in
+// Poincare mode. Location 1 stores the source/model coordinate corresponding to
+// that vertex; the border shader samples the ripple field there so wave
+// displacement stays in the same coordinate system as fill.vert.
 struct BorderVertex {
     float x, y;
-    float mx, my;       // mitered corner direction (already signed for the world side)
-    float miterScale;   // halfWidth multiplier to the offset-line intersection
-    float _pad0, _pad1, _pad2;  // stride → 32 bytes for vec4-multiple alignment
+    float sx, sy;
 };
-static_assert(sizeof(BorderVertex) == 32, "BorderVertex layout drift");
+static_assert(sizeof(BorderVertex) == 16, "BorderVertex layout drift");
 static_assert(offsetof(BorderVertex, x) == 0, "BorderVertex position offset drift");
-static_assert(offsetof(BorderVertex, mx) == 8, "BorderVertex miter offset drift");
-static_assert(offsetof(BorderVertex, miterScale) == 16, "BorderVertex scale offset drift");
+static_assert(offsetof(BorderVertex, sx) == 8, "BorderVertex source offset drift");
 
 // Vertex push constants.
 //
@@ -153,7 +133,7 @@ struct PaletteUbo {
     float    bgColor[4];
     uint32_t flags[4];
     float    anim[4];         // x=time, y=rippleAmount, z=family, w=pageOffset
-    float    borderGeom[4];   // x=borderHalfWidth (world-space)
+    float    borderGeom[4];   // reserved; border width is baked into BorderVertex positions
     float    effects[4];      // x=brightness, y=depth, z=rippleSpeed, w=rippleKind
     float    audioBands[2][4];
     float    audioBeat[4];

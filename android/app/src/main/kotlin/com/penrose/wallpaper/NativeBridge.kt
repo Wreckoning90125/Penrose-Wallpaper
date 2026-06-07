@@ -18,7 +18,7 @@ internal object NativeBridge {
      * the handler appends a textual backtrace there AND to logcat under
      * the tag `PenroseCrash`. Grab logs with
      *   adb logcat -s PenroseCrash:*
-     * or pull the on-disk copy from
+     * or pull the crash log file from
      *   /data/data/com.penrose.wallpaper/files/crash.log
      * (run-as required on user builds).
      */
@@ -36,9 +36,15 @@ internal object NativeBridge {
      * Push the current Settings to the renderer. Encoded as two flat arrays:
      *
      *   ints   = [family, seedIdx, generation, preset, colorCount, colorMode,
-     *             borderOn, bgMode, rippleMode, panMode, rippleKind,
+     *             borderOn, borderJoin, bgMode, rippleMode, panMode, rippleKind,
      *             projection, hypBorderSubdiv, hypFillSubdiv]
-     *   floats = [border/material/background/motion/projection controls,
+     *   floats = [borderWidth, borderFill, borderPoint, borderGap,
+     *             borderL, borderC, borderH, borderAlpha,
+     *             bgL, bgC, bgH, rippleAmount,
+     *             zoom, rotation, panX, panY,
+     *             brightness, depthAmount, rippleSpeed,
+     *             material sliders, light sliders, material colour sliders,
+     *             matRoughMod, matMetalMod, hypScale, hypBoostX, hypBoostY,
      *             followed by custom OKLCH palette triples]
      *
      * Both must match the layout the JNI bridge expects (jni_bridge.cpp).
@@ -76,12 +82,15 @@ internal object NativeBridge {
      */
     external fun setPageOffset(nativePtr: Long, xOffset: Float)
 
+    /** Configure analyzer kernels from Media3's format callback. */
+    external fun configureAudio(sampleRate: Int)
+
     /**
      * Forward PCM samples to the process-wide audio analyzer. Called
      * from the AudioPlaybackService's Media3 AudioProcessor tap.
-     * Lock-free SPSC ring; safe to call from the audio thread.
+     * Writes the analyzer's SPSC ring and returns immediately.
      */
-    external fun pushAudio(samples: FloatArray, count: Int, sampleRate: Int)
+    external fun pushAudio(samples: FloatArray, count: Int)
 
     /**
      * Read the latest analyzer features from the global analyzer. `out`
@@ -98,7 +107,7 @@ internal object NativeBridge {
     /** Toggle the ImGui-based node graph editor overlay on/off. */
     external fun graphSetVisible(nativePtr: Long, visible: Boolean)
     external fun graphIsVisible(nativePtr: Long): Boolean
-    /** Serialize the current node graph to JSON (for filesDir persistence). */
+    /** Serialize the current node graph to JSON for profile persistence. */
     external fun graphSave(nativePtr: Long): String
     external fun graphLoad(nativePtr: Long, json: String): Boolean
     external fun graphReset(nativePtr: Long)

@@ -33,12 +33,10 @@ Renderer::~Renderer() {
     onSurfaceDestroyed();
 
     if (device_ != VK_NULL_HANDLE) {
-        if (fillVertBuf_)        vkDestroyBuffer(device_, fillVertBuf_, nullptr);
-        if (fillVertMem_)        vkFreeMemory(device_, fillVertMem_, nullptr);
-        if (borderVertBuf_)      vkDestroyBuffer(device_, borderVertBuf_, nullptr);
-        if (borderVertMem_)      vkFreeMemory(device_, borderVertMem_, nullptr);
-        if (borderIdxBuf_)       vkDestroyBuffer(device_, borderIdxBuf_, nullptr);
-        if (borderIdxMem_)       vkFreeMemory(device_, borderIdxMem_, nullptr);
+        destroyRetiredBuffersNow();
+        destroyBufferNow(fillVertBuf_, fillVertMem_);
+        destroyBufferNow(borderVertBuf_, borderVertMem_);
+        destroyBufferNow(borderIdxBuf_, borderIdxMem_);
         destroyDescriptorObjects();
         destroyPipelines();
         if (commandPool_)        vkDestroyCommandPool(device_, commandPool_, nullptr);
@@ -68,38 +66,36 @@ bool Renderer::onSurfaceCreated(ANativeWindow* window) {
     // hard-crashes. Skip if there's literally nothing to clean up so
     // first-init still hits the fast path.
     if (surface_ != VK_NULL_HANDLE || swapchain_ != VK_NULL_HANDLE || window_ != nullptr) {
-        if (device_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device_);
-        destroyPerFrameResources();
-        destroySwapchain();
-        if (surface_ != VK_NULL_HANDLE) {
-            vkDestroySurfaceKHR(instance_, surface_, nullptr);
-            surface_ = VK_NULL_HANDLE;
-        }
-        if (window_) {
-            ANativeWindow_release(window_);
-            window_ = nullptr;
-        }
-        swapchainReady_ = false;
+        destroySurfaceResources();
     }
 
     ANativeWindow_acquire(window);
     window_ = window;
-    if (!createSurface(window)) return false;
+    const auto fail = [this]() {
+        destroySurfaceResources();
+        return false;
+    };
+    const auto failDeviceInit = [this]() {
+        destroySurfaceResources();
+        destroyDeviceResources();
+        return false;
+    };
+    if (!createSurface(window)) return fail();
 
     if (!deviceReady_) {
-        if (!initDeviceForSurface()) return false;
-        if (!createDescriptorObjects()) return false;
-        if (!initPipeline()) return false;
+        if (!initDeviceForSurface()) return failDeviceInit();
+        if (!createDescriptorObjects()) return failDeviceInit();
+        if (!initPipeline()) return failDeviceInit();
         deviceReady_ = true;
     }
 
     int w = ANativeWindow_getWidth(window);
     int h = ANativeWindow_getHeight(window);
-    if (!createSwapchain(w, h)) return false;
-    if (!buildPipelines()) return false;
-    if (!buildGeometry()) return false;
+    if (!createSwapchain(w, h)) return fail();
+    if (!buildPipelines()) return fail();
+    if (!buildGeometry()) return fail();
     updatePaletteUbo();
-    if (!createPerFrameResources()) return false;
+    if (!createPerFrameResources()) return fail();
     swapchainReady_ = true;
     settingsDirty_ = false;
     return true;
@@ -121,6 +117,7 @@ bool Renderer::rebuildSwapchain() {
     const int w = (swapchainExtent_.width  > 0) ? (int)swapchainExtent_.width  : 1;
     const int h = (swapchainExtent_.height > 0) ? (int)swapchainExtent_.height : 1;
     vkDeviceWaitIdle(device_);
+    destroyRetiredBuffersNow();
     swapchainReady_ = false;
     destroyPerFrameResources();
     destroySwapchain();
@@ -143,7 +140,7 @@ void Renderer::syncSwapchainToSurface() {
             != VK_SUCCESS) return;
     const VkExtent2D ce = caps.currentExtent;
     // 0 — the surface is not presentable right now (window minimised /
-    // mid-teardown); UINT32_MAX — the surface defers sizing to the
+    // mid-teardown); UINT32_MAX — the surface leaves sizing to the
     // swapchain. Either way there is no surface size to match against.
     if (ce.width == 0 || ce.height == 0 || ce.width == UINT32_MAX) return;
     if (ce.width != swapchainExtent_.width || ce.height != swapchainExtent_.height) {
@@ -153,6 +150,7 @@ void Renderer::syncSwapchainToSurface() {
 
 void Renderer::onSurfaceDestroyed() {
     if (device_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device_);
+    if (device_ != VK_NULL_HANDLE) destroyRetiredBuffersNow();
     if (imGuiReady_) {
         imGuiHost_.shutdown();
         imGuiReady_ = false;
@@ -168,6 +166,71 @@ void Renderer::onSurfaceDestroyed() {
         window_ = nullptr;
     }
     swapchainReady_ = false;
+}
+
+void Renderer::destroySurfaceResources() {
+    if (device_ != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(device_);
+        destroyRetiredBuffersNow();
+        if (imGuiReady_) {
+            imGuiHost_.shutdown();
+            imGuiReady_ = false;
+        }
+        destroyPerFrameResources();
+        destroySwapchain();
+    }
+    if (surface_ != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(instance_, surface_, nullptr);
+        surface_ = VK_NULL_HANDLE;
+    }
+    if (window_) {
+        ANativeWindow_release(window_);
+        window_ = nullptr;
+    }
+    swapchainReady_ = false;
+}
+
+void Renderer::destroyDeviceResources() {
+    if (device_ == VK_NULL_HANDLE) {
+        physicalDevice_ = VK_NULL_HANDLE;
+        graphicsQueueFamily_ = UINT32_MAX;
+        queue_ = VK_NULL_HANDLE;
+        deviceReady_ = false;
+        return;
+    }
+    if (imGuiReady_) {
+        graphUi_.shutdown();
+        imGuiHost_.shutdown();
+        imGuiReady_ = false;
+    }
+    destroyRetiredBuffersNow();
+    destroyBufferNow(fillVertBuf_, fillVertMem_);
+    destroyBufferNow(borderVertBuf_, borderVertMem_);
+    destroyBufferNow(borderIdxBuf_, borderIdxMem_);
+    destroyDescriptorObjects();
+    destroyPipelines();
+    if (commandPool_) {
+        vkDestroyCommandPool(device_, commandPool_, nullptr);
+        commandPool_ = VK_NULL_HANDLE;
+    }
+    vkDestroyDevice(device_, nullptr);
+    device_ = VK_NULL_HANDLE;
+    physicalDevice_ = VK_NULL_HANDLE;
+    graphicsQueueFamily_ = UINT32_MAX;
+    queue_ = VK_NULL_HANDLE;
+    deviceReady_ = false;
+}
+
+void Renderer::handleDeviceLost(const char* operation) {
+    LOGE("%s -> VK_ERROR_DEVICE_LOST", operation);
+    destroySurfaceResources();
+    destroyDeviceResources();
+}
+
+void Renderer::handleFatalPresentFailure(const char* operation, VkResult result) {
+    LOGE("%s -> %d", operation, static_cast<int>(result));
+    destroySurfaceResources();
+    destroyDeviceResources();
 }
 
 // =============================================================================
@@ -197,8 +260,10 @@ void Renderer::initImGuiIfNeeded() {
 }
 
 void Renderer::onSettingsChanged(const Settings& s) {
-    const bool needGeom = geometryChanged(settings_, s) || classificationChanged(settings_, s)
-                       || s.borderOn != settings_.borderOn;
+    const bool needFillGeometry = tileGeometryChanged(settings_, s)
+        || classificationChanged(settings_, s)
+        || s.panMode != settings_.panMode;
+    const bool needBorderGeometry = borderGeometryChanged(settings_, s);
     const bool genChanged = (s.generation != settings_.generation);
     const bool panModeChanged = (s.panMode != settings_.panMode);
     settings_ = s;
@@ -213,8 +278,20 @@ void Renderer::onSettingsChanged(const Settings& s) {
         panAccumPx_ = 0.0f;
     }
     if (deviceReady_ && swapchainReady_) {
-        vkDeviceWaitIdle(device_);
-        if (needGeom || genChanged || panModeChanged) buildGeometry();
+        if (needFillGeometry) {
+            vkDeviceWaitIdle(device_);
+            destroyRetiredBuffersNow();
+        }
+        bool rebuilt = true;
+        if (needFillGeometry) {
+            rebuilt = buildGeometry();
+        } else if (needBorderGeometry) {
+            rebuilt = buildBorderGeometry();
+        }
+        if (!rebuilt) {
+            settingsDirty_ = true;
+            return;
+        }
         updatePaletteUbo();
     } else {
         settingsDirty_ = true;
@@ -226,8 +303,9 @@ void Renderer::onSettingsChanged(const Settings& s) {
 // =============================================================================
 
 void Renderer::touchPinch(float scale, float rotDelta) {
+    constexpr float kTwoPi = 6.28318530717958647692f;
     view_.zoom = std::clamp(view_.zoom * scale, 0.25f, 8.0f);
-    view_.rotation += rotDelta;
+    view_.rotation = std::remainder(view_.rotation + rotDelta, kTwoPi);
 }
 
 void Renderer::touchMove(float dx, float dy) {
@@ -243,9 +321,15 @@ void Renderer::touchMove(float dx, float dy) {
 }
 
 void Renderer::resetView() {
+    const bool resetGeneration = effectiveGeneration_ != settings_.generation;
     view_ = LiveView{};
     effectiveGeneration_ = settings_.generation;
     panAccumPx_ = 0.0f;
+    if (resetGeneration && deviceReady_ && swapchainReady_) {
+        vkDeviceWaitIdle(device_);
+        if (!buildGeometry()) return;
+        updatePaletteUbo();
+    }
 }
 
 void Renderer::readView(float* zoom, float* rotation, float* panX, float* panY) const {
@@ -289,7 +373,7 @@ void Renderer::considerGrowth() {
         effectiveGeneration_ += 1;
         if (deviceReady_ && swapchainReady_) {
             vkDeviceWaitIdle(device_);
-            buildGeometry();
+            if (!buildGeometry()) return;
             updatePaletteUbo();
         }
     }
@@ -313,7 +397,8 @@ void Renderer::drawFrame() {
 
     if (settingsDirty_) {
         vkDeviceWaitIdle(device_);
-        buildGeometry();
+        destroyRetiredBuffersNow();
+        if (!buildGeometry()) return;
         updatePaletteUbo();
         settingsDirty_ = false;
     }
@@ -378,7 +463,6 @@ void Renderer::drawFrame() {
         gres.lightAmbient   = settings_.lightAmbient;
         gres.hypBoostX      = settings_.hypBoostX;
         gres.hypBoostY      = settings_.hypBoostY;
-        gres.hypScale       = settings_.hypScale;
         graph_.evaluate(gctx, gres);
         fxRippleAmount_ = gres.rippleAmount;
         fxRippleSpeed_  = gres.rippleSpeed;
@@ -399,7 +483,7 @@ void Renderer::drawFrame() {
         fxLightAmbient_   = gres.lightAmbient;
         fxHypBoostX_      = gres.hypBoostX;
         fxHypBoostY_      = gres.hypBoostY;
-        fxHypScale_       = gres.hypScale;
+        fxHypScale_       = settings_.hypScale;
     }
 
     // Lazily bring ImGui up only when the editor is actually wanted.
@@ -428,6 +512,7 @@ void Renderer::drawFrame() {
 
     FrameSync& f = frames_[currentFrame_];
     vkWaitForFences(device_, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
+    collectRetiredBuffers();
 
     // Per-frame UBO patch for the live block — anim, effects, audio bands,
     // and beat/transient features. Palette / border / bg slots stay where
@@ -491,36 +576,169 @@ void Renderer::drawFrame() {
             fxMat);
     }
 
+    VkResult result = vkResetCommandBuffer(f.cmd, 0);
+    if (result != VK_SUCCESS) {
+        LOGE("vkResetCommandBuffer -> %d", static_cast<int>(result));
+        return;
+    }
+
+    VkCommandBufferBeginInfo cbi{};
+    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    cbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    result = vkBeginCommandBuffer(f.cmd, &cbi);
+    if (result != VK_SUCCESS) {
+        LOGE("vkBeginCommandBuffer -> %d", static_cast<int>(result));
+        return;
+    }
+
     uint32_t imageIndex = 0;
     bool rebuildAfterPresent = false;
     const VkResult acq = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
                                                f.imageAvailable, VK_NULL_HANDLE,
                                                &imageIndex);
+    if (acq == VK_ERROR_DEVICE_LOST) {
+        handleDeviceLost("vkAcquireNextImageKHR");
+        return;
+    }
+    if (acq == VK_ERROR_SURFACE_LOST_KHR) {
+        LOGE("vkAcquireNextImageKHR surface lost");
+        vkResetCommandBuffer(f.cmd, 0);
+        destroySurfaceResources();
+        return;
+    }
     if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
-        // No image acquired — the swapchain is unusable. Rebuild now
-        // (nothing is pending on it) so the next frame draws clean.
+        vkResetCommandBuffer(f.cmd, 0);
         rebuildSwapchain();
         return;
     }
     if (acq == VK_SUBOPTIMAL_KHR) {
         // An image WAS acquired and is drawable; the swapchain just no
         // longer ideally fits the surface. Draw and present this frame
-        // normally so the acquire semaphore is consumed, THEN rebuild —
-        // tearing the swapchain down here would strand that pending
-        // semaphore signal. The syncSwapchainToSurface check at the top
-        // of the frame normally catches a rotation before this.
+        // normally so the acquire semaphore is consumed, THEN rebuild.
         rebuildAfterPresent = true;
     } else if (acq != VK_SUCCESS) {
-        LOGE("vkAcquireNextImageKHR -> %d", (int)acq);
+        LOGE("vkAcquireNextImageKHR -> %d", static_cast<int>(acq));
+        vkResetCommandBuffer(f.cmd, 0);
         return;
     }
-    vkResetFences(device_, 1, &f.inFlight);
-    vkResetCommandBuffer(f.cmd, 0);
 
-    VkCommandBufferBeginInfo cbi{};
-    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    cbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(f.cmd, &cbi);
+    const auto releaseAcquiredImage = [&]() {
+        VkCommandBuffer releaseCmd = VK_NULL_HANDLE;
+        const auto failRelease = [&](const char* operation, VkResult rr) {
+            LOGE("%s -> %d", operation, static_cast<int>(rr));
+            if (releaseCmd != VK_NULL_HANDLE) {
+                vkFreeCommandBuffers(device_, commandPool_, 1, &releaseCmd);
+            }
+            if (rr == VK_ERROR_DEVICE_LOST) {
+                handleDeviceLost(operation);
+            } else {
+                handleFatalPresentFailure(operation, rr);
+            }
+        };
+
+        VkCommandBufferAllocateInfo cbai{};
+        cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cbai.commandPool = commandPool_;
+        cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cbai.commandBufferCount = 1;
+        VkResult rr = vkAllocateCommandBuffers(device_, &cbai, &releaseCmd);
+        if (rr != VK_SUCCESS) {
+            failRelease("vkAllocateCommandBuffers(release acquired image)", rr);
+            return;
+        }
+        const auto freeReleaseCmd = [&]() {
+            vkFreeCommandBuffers(device_, commandPool_, 1, &releaseCmd);
+        };
+
+        VkCommandBufferBeginInfo releaseBegin{};
+        releaseBegin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        releaseBegin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        rr = vkBeginCommandBuffer(releaseCmd, &releaseBegin);
+        if (rr != VK_SUCCESS) {
+            failRelease("vkBeginCommandBuffer(release acquired image)", rr);
+            return;
+        }
+
+        VkImageMemoryBarrier2 releaseBarrier{};
+        releaseBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        releaseBarrier.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        releaseBarrier.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+        releaseBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        releaseBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        releaseBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        releaseBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        releaseBarrier.image = swapchainImages_[imageIndex];
+        releaseBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+        VkDependencyInfo releaseDep{};
+        releaseDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        releaseDep.imageMemoryBarrierCount = 1;
+        releaseDep.pImageMemoryBarriers = &releaseBarrier;
+        vkCmdPipelineBarrier2(releaseCmd, &releaseDep);
+
+        rr = vkEndCommandBuffer(releaseCmd);
+        if (rr != VK_SUCCESS) {
+            failRelease("vkEndCommandBuffer(release acquired image)", rr);
+            return;
+        }
+
+        VkSemaphoreSubmitInfo waitInfo{};
+        waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        waitInfo.semaphore = f.imageAvailable;
+        waitInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+        VkSemaphoreSubmitInfo signalInfo{};
+        signalInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        signalInfo.semaphore = f.renderFinished;
+        signalInfo.stageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+
+        VkCommandBufferSubmitInfo cbInfo{};
+        cbInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+        cbInfo.commandBuffer = releaseCmd;
+
+        VkSubmitInfo2 submit{};
+        submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+        submit.waitSemaphoreInfoCount = 1;
+        submit.pWaitSemaphoreInfos = &waitInfo;
+        submit.signalSemaphoreInfoCount = 1;
+        submit.pSignalSemaphoreInfos = &signalInfo;
+        submit.commandBufferInfoCount = 1;
+        submit.pCommandBufferInfos = &cbInfo;
+
+        rr = vkResetFences(device_, 1, &f.inFlight);
+        if (rr != VK_SUCCESS) {
+            failRelease("vkResetFences(release acquired image)", rr);
+            return;
+        }
+        rr = vkQueueSubmit2(queue_, 1, &submit, f.inFlight);
+        if (rr != VK_SUCCESS) {
+            failRelease("vkQueueSubmit2(release acquired image)", rr);
+            return;
+        }
+
+        VkPresentInfoKHR present{};
+        present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        present.waitSemaphoreCount = 1;
+        present.pWaitSemaphores = &f.renderFinished;
+        present.swapchainCount = 1;
+        present.pSwapchains = &swapchain_;
+        present.pImageIndices = &imageIndex;
+        const VkResult pr = vkQueuePresentKHR(queue_, &present);
+        vkWaitForFences(device_, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
+        freeReleaseCmd();
+        currentFrame_ = (currentFrame_ + 1) % kFramesInFlight;
+        if (pr == VK_ERROR_SURFACE_LOST_KHR) {
+            LOGE("vkQueuePresentKHR(release acquired image) surface lost");
+            destroySurfaceResources();
+        } else if (pr == VK_ERROR_DEVICE_LOST) {
+            handleDeviceLost("vkQueuePresentKHR(release acquired image)");
+        } else if (rebuildAfterPresent ||
+            pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
+            rebuildSwapchain();
+        } else if (pr != VK_SUCCESS) {
+            handleFatalPresentFailure("vkQueuePresentKHR(release acquired image)", pr);
+        }
+    };
 
     // Swapchain image: UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL. The load-op
     // clears, so previous contents don't matter.
@@ -707,7 +925,12 @@ void Renderer::drawFrame() {
     dep.pImageMemoryBarriers = &toPresent;
     vkCmdPipelineBarrier2(f.cmd, &dep);
 
-    vkEndCommandBuffer(f.cmd);
+    result = vkEndCommandBuffer(f.cmd);
+    if (result != VK_SUCCESS) {
+        LOGE("vkEndCommandBuffer -> %d", static_cast<int>(result));
+        releaseAcquiredImage();
+        return;
+    }
 
     VkSemaphoreSubmitInfo waitInfo{};
     waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
@@ -731,7 +954,18 @@ void Renderer::drawFrame() {
     submit.pSignalSemaphoreInfos = &signalInfo;
     submit.commandBufferInfoCount = 1;
     submit.pCommandBufferInfos = &cbInfo;
-    vkQueueSubmit2(queue_, 1, &submit, f.inFlight);
+    result = vkResetFences(device_, 1, &f.inFlight);
+    if (result != VK_SUCCESS) {
+        LOGE("vkResetFences -> %d", static_cast<int>(result));
+        releaseAcquiredImage();
+        return;
+    }
+    result = vkQueueSubmit2(queue_, 1, &submit, f.inFlight);
+    if (result != VK_SUCCESS) {
+        LOGE("vkQueueSubmit2 -> %d", static_cast<int>(result));
+        releaseAcquiredImage();
+        return;
+    }
 
     VkPresentInfoKHR present{};
     present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -742,15 +976,20 @@ void Renderer::drawFrame() {
     present.pImageIndices = &imageIndex;
     VkResult pr = vkQueuePresentKHR(queue_, &present);
     currentFrame_ = (currentFrame_ + 1) % kFramesInFlight;
-    if (rebuildAfterPresent ||
+    if (pr == VK_ERROR_SURFACE_LOST_KHR) {
+        LOGE("vkQueuePresentKHR surface lost");
+        destroySurfaceResources();
+    } else if (pr == VK_ERROR_DEVICE_LOST) {
+        handleDeviceLost("vkQueuePresentKHR");
+    } else if (rebuildAfterPresent ||
         pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
-        // Either the acquire reported the chain suboptimal (deferred to
+        // Either the acquire reported the chain suboptimal (handled
         // here so the frame's semaphore was consumed first), or the
         // surface changed between acquire and present. Rebuild for the
         // next frame.
         rebuildSwapchain();
     } else if (pr != VK_SUCCESS) {
-        LOGE("vkQueuePresentKHR -> %d", (int)pr);
+        handleFatalPresentFailure("vkQueuePresentKHR", pr);
     }
 }
 

@@ -1304,6 +1304,166 @@
       ]
     },
     {
+      "id": "taylor_socolar",
+      "label": "Taylor-Socolar half-hex hierarchy",
+      "sources": [
+        "docs/tilings/socolar-taylor.md",
+        "docs/tilings/catalogue.md"
+      ],
+      "defaults": {
+        "family": "17",
+        "seed": "0",
+        "generation": 3,
+        "preset": "9",
+        "color_mode": "0",
+        "color_count": 14,
+        "border_on": true,
+        "border_width": 56,
+        "border_a": 38,
+        "field_relief": 26,
+        "field_color": 28,
+        "field_displace": 0,
+        "mat_roughness": 34,
+        "mat_metalness": 42,
+        "mat_iridescence": 62,
+        "mat_anisotropy": 36,
+        "mat_clearcoat": 64,
+        "mat_relief": 110,
+        "projection": "0",
+        "hyp_border_subdiv": 1,
+        "hyp_fill_subdiv": 1
+      },
+      "items": [
+        {
+          "id": "ts-triad-type-hierarchy",
+          "name": "Taylor-Socolar generating triad",
+          "settings": {
+            "seed": "0",
+            "preset": "9",
+            "color_mode": "0",
+            "generation": 3
+          }
+        },
+        {
+          "id": "ts-orient-lanes",
+          "name": "Taylor-Socolar orientation lanes",
+          "settings": {
+            "seed": "0",
+            "preset": "7",
+            "color_mode": "1",
+            "color_count": 6,
+            "generation": 3
+          }
+        },
+        {
+          "id": "ts-ring-diffraction",
+          "name": "Taylor-Socolar ring diffraction",
+          "settings": {
+            "seed": "0",
+            "preset": "10",
+            "color_mode": "2",
+            "color_count": 12,
+            "generation": 3
+          }
+        },
+        {
+          "id": "ts-triad-paper-proof",
+          "name": "Taylor-Socolar paper proof",
+          "settings": {
+            "seed": "0",
+            "preset": "3",
+            "color_mode": "0",
+            "bg_l": 95,
+            "bg_c": 1,
+            "bg_h": 80,
+            "mat_metalness": 0,
+            "mat_roughness": 86,
+            "generation": 3
+          }
+        },
+        {
+          "id": "ts-metal-grid",
+          "name": "Taylor-Socolar metal grid",
+          "settings": {
+            "seed": "0",
+            "preset": "1",
+            "color_mode": "1",
+            "color_count": 6,
+            "mat_metalness": 88,
+            "mat_anisotropy": 78,
+            "mat_iridescence": 20,
+            "generation": 3
+          }
+        },
+        {
+          "id": "ts-relief-hull",
+          "name": "Taylor-Socolar relief hull",
+          "settings": {
+            "seed": "0",
+            "preset": "8",
+            "color_mode": "2",
+            "field_relief": 48,
+            "field_color": 42,
+            "mat_relief": 136,
+            "generation": 3
+          }
+        },
+        {
+          "id": "ts-a-limit-periodic",
+          "name": "Taylor-Socolar limit-periodic bands",
+          "settings": {
+            "seed": "1",
+            "preset": "6",
+            "color_mode": "0",
+            "color_count": 14,
+            "generation": 4
+          }
+        },
+        {
+          "id": "ts-a-deep-type",
+          "name": "Taylor-Socolar A-hex type lattice",
+          "settings": {
+            "seed": "1",
+            "preset": "9",
+            "color_mode": "0",
+            "color_count": 16,
+            "generation": 4,
+            "border_width": 48
+          }
+        },
+        {
+          "id": "ts-hyperbolic-check",
+          "name": "Taylor-Socolar disk projection check",
+          "settings": {
+            "seed": "0",
+            "preset": "7",
+            "color_mode": "1",
+            "color_count": 6,
+            "generation": 3,
+            "projection": "1",
+            "hyp_scale": 58,
+            "hyp_border_subdiv": 8,
+            "hyp_fill_subdiv": 2
+          }
+        },
+        {
+          "id": "ts-border-join",
+          "name": "Taylor-Socolar border join check",
+          "settings": {
+            "seed": "0",
+            "preset": "5",
+            "color_mode": "2",
+            "generation": 3,
+            "border_width": 70,
+            "border_join": "1",
+            "border_point": 18,
+            "border_fill": 72,
+            "border_gap": 16
+          }
+        }
+      ]
+    },
+    {
       "id": "einstein",
       "label": "Hat and Spectre metatile targets",
       "sources": [

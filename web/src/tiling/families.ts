@@ -231,13 +231,22 @@ const FAMILY_OPTIONS_BY_ID: Record<string, FamilyOption> = {
     maxGeneration: 8,
     seeds: [{ value: '0', label: 'Standard' }],
   },
+  '17': {
+    value: '17',
+    label: 'Socolar-Taylor half-hexes',
+    maxGeneration: 7,
+    seeds: [
+      { value: '0', label: 'Generating triad' },
+      { value: '1', label: 'A hex supertile' },
+    ],
+  },
 };
 
 const FAMILY_DISPLAY_ORDER = [
   '9', '1', '0',       // Penrose systems: P1 / P2 / P3.
   '8', '10', '13', '14', // Triangle / Robinson-graph substitutions.
   '6', '5', '3', '7',  // Rotational/quasicrystal families.
-  '4', '2', '16',      // Other compact tiling families.
+  '4', '2', '16', '17', // Other compact tiling families.
   '15',                // Spiral constructions.
   '11', '12',          // Monotiles/metatiles.
 ] as const;

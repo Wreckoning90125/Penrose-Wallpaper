@@ -1,28 +1,26 @@
 // =============================================================================
 // Substitution / tiling verifier
 // =============================================================================
-// Rigorous, reproducible regression check for the renderer's tiling families.
-// It links the production tiling core (tiling/penrose.cpp) and certifies, for
-// every family, the two properties that *define* a correct tiling — with no
-// reference to any figure, screenshot, or rendered image:
+// Reproducible regression check for the renderer's tiling families. It links
+// the production tiling core (tiling/penrose.cpp) and checks generated patches
+// without consulting any figure, screenshot, or rendered image:
 //
 //   1. Area conservation (substitution families). A substitution replaces a
 //      tile by smaller tiles that must exactly repartition it, so the total
-//      area is invariant under deflation. Checked exactly across every
-//      generation 0..maxGen.
+//      area is invariant under deflation. Checked across every generation
+//      0..maxGen for families whose generator preserves a seed region.
 //
-//   2. Gap- and overlap-free closure. Monte-Carlo: sample points and count how
-//      many tiles contain each. For a substitution family every point of the
-//      seed region must be covered exactly as many times at the deepest
-//      generation as at generation 0 (overlap => covered twice; gap => covered
-//      zero times). For the cut-and-project families, no point may be covered
-//      twice (overlap-free; gaps are structurally impossible for a multigrid
-//      dual). Plus a degeneracy screen (no zero-area or sub-triangle tiles).
+//   2. Coverage regression. Monte-Carlo: sample points and count how many tiles
+//      contain each. Seed-region families compare deepest-generation coverage
+//      to generation 0. Patch families that do not preserve one fixed seed
+//      region run an overlap screen over the generated patch.
 //
-// Area conservation + overlap-free + seed-region containment is a complete
-// proof that the tiles partition the region: this is the same closure
-// argument used to derive the Danzer substitution, applied as an automated
-// gate. Build and run (from the repository root):
+//   3. Finite chamber topology. Every patch is converted to a Delaney-style
+//      finite D-set over chambers. The gate checks involutions, op0/op2
+//      commutation, overfull edges, face-orbit count, and interior vertex angle
+//      sums, and reports canonical local vertex-star classes.
+//
+// Build and run (from the repository root):
 //
 //   g++ -std=c++20 -O2 -I android/app/src/main/cpp
 //       tools/verify_tilings.cpp android/app/src/main/cpp/tiling/penrose.cpp
@@ -32,6 +30,7 @@
 // =============================================================================
 
 #include "tiling/penrose.h"
+#include "tiling_dsymbols.h"
 
 #include <algorithm>
 #include <array>
@@ -222,30 +221,32 @@ struct FamilyCase {
     Family fam;
     const char* name;
     int nseeds;
-    bool substitution;   // seed + deflation (area is conserved per generation)
+    bool areaConserved;
+    bool compareSeedCoverage;
 };
 
 } // namespace
 
 int main() {
     const FamilyCase cases[] = {
-        { Family::P3,            "P3",            4, true  },
-        { Family::P2,            "P2",            2, true  },
-        { Family::Chair,         "Chair",         3, true  },
-        { Family::Pinwheel,      "Pinwheel",      3, true  },
-        { Family::Tuebingen,     "Tuebingen",     2, true  },
-        { Family::Equithirds,    "Equithirds",    2, true  },
-        { Family::CromwellKRT,   "CromwellKRT",   4, false },
-        { Family::GailiunasSpiral, "GailiunasSpiral", 52, false },
-        { Family::Cairo,         "Cairo",          1, false },
-        { Family::Danzer,        "Danzer",        2, true  },
-        { Family::Dodecagonal,   "Dodecagonal",   3, false },
-        { Family::AmmannBeenker, "AmmannBeenker", 3, false },
-        { Family::Heptagonal,    "Heptagonal",    3, false },
-        { Family::Binary,        "Binary",        2, false },
-        { Family::P1,            "P1",            1, false },
-        { Family::Hat,           "Hat",           4, false },
-        { Family::Spectre,       "Spectre",       9, false },
+        { Family::P3,            "P3",            4, true,  true  },
+        { Family::P2,            "P2",            2, true,  true  },
+        { Family::Chair,         "Chair",         3, true,  true  },
+        { Family::Pinwheel,      "Pinwheel",      3, true,  true  },
+        { Family::Tuebingen,     "Tuebingen",     2, true,  true  },
+        { Family::Equithirds,    "Equithirds",    2, true,  true  },
+        { Family::CromwellKRT,   "CromwellKRT",   4, false, false },
+        { Family::GailiunasSpiral, "GailiunasSpiral", 52, false, false },
+        { Family::Cairo,         "Cairo",          1, false, false },
+        { Family::SocolarTaylor, "SocolarTaylor",  2, true,  true  },
+        { Family::Danzer,        "Danzer",        2, true,  true  },
+        { Family::Dodecagonal,   "Dodecagonal",   3, false, false },
+        { Family::AmmannBeenker, "AmmannBeenker", 3, false, false },
+        { Family::Heptagonal,    "Heptagonal",    3, false, false },
+        { Family::Binary,        "Binary",        2, false, false },
+        { Family::P1,            "P1",            1, false, false },
+        { Family::Hat,           "Hat",           4, false, false },
+        { Family::Spectre,       "Spectre",       9, false, false },
     };
 
     constexpr int kSamples = 20000;
@@ -266,7 +267,7 @@ int main() {
             for (const Tile& t : g0) a0 += tileArea(t);
 
             // ---- 1. area conservation across generations -------------------
-            if (fc.substitution) {
+            if (fc.areaConserved) {
                 for (int g = 1; g <= maxGen; ++g) {
                     const std::vector<Tile> tg = generate(fc.fam, seed, g);
                     double a = 0.0;
@@ -322,7 +323,7 @@ int main() {
 
             const Grid gridN(gN, 256);
             int covered = 0, mismatches = 0, overlaps = 0;
-            if (fc.substitution) {
+            if (fc.compareSeedCoverage) {
                 const Grid grid0(g0, 128);
                 for (int i = 0; i < kSamples; ++i) {
                     const double px = grid0.minx + unit() * grid0.span;
@@ -361,16 +362,30 @@ int main() {
                 ok = false;
             }
 
+            const analysis::FiniteDelaneyPatch dset = analysis::extractFiniteDelaneyPatch(gN);
+            const analysis::DelaneyPatchSummary& ds = dset.summary;
+            if (!ds.valid() || ds.faceOrbits != static_cast<int>(gN.size())) {
+                std::printf("  FAIL %s seed %d: invalid finite chamber graph "
+                            "(faces=%d tiles=%zu overfull=%d involutions=%d "
+                            "commutators=%d vertexAngles=%d)\n",
+                            fc.name, seed, ds.faceOrbits, gN.size(),
+                            ds.overfullEdges, ds.badInvolutions,
+                            ds.badCommutators, ds.badInteriorVertexAngles);
+                ok = false;
+            }
+
             std::printf("  %-7s %-13s seed %d: %6zu tiles @gen%-2d  "
-                        "area=%.6f  covered %5d/%d\n",
+                        "area=%.6f  covered %5d/%d  dset F/E/V/C=%d/%d/%d/%d\n",
                         ok ? "PASS" : "FAIL", fc.name, seed,
-                        gN.size(), maxGen, a0, covered, kSamples);
+                        gN.size(), maxGen, a0, covered, kSamples,
+                        ds.faceOrbits, ds.edgeOrbits,
+                        ds.interiorVertexOrbits, ds.vertexConfigurations);
             if (!ok) ++failures;
         }
     }
 
     std::printf("\n%s — %d family/seed case(s) failed\n",
-                failures ? "VERIFICATION FAILED" : "ALL TILINGS VERIFIED",
+                failures ? "TILING CHECKS FAILED" : "ALL TILING CHECKS PASSED",
                 failures);
     return failures ? 1 : 0;
 }

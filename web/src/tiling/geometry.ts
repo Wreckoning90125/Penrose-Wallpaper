@@ -142,14 +142,15 @@ const FAMILY_SPECS_BY_ID: FamilySpec[] = [
   /* 14 CromwellKRT     */ { typeBuckets: 3, orientBuckets: 10, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: false, ringChebyshev: false },
   /* 15 GailiunasSpiral */ { typeBuckets: 18, orientBuckets: 18, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: false, ringChebyshev: false },
   /* 16 Cairo           */ { typeBuckets: 8, orientBuckets: 8, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: false, ringChebyshev: true },
+  /* 17 SocolarTaylor   */ { typeBuckets: 28, orientBuckets: 6, orientFromType: false, angA: 0, angB: 1, orientHalfTurn: false, ringChebyshev: false },
 ];
 const MAX_FAMILY_ID = FAMILY_SPECS_BY_ID.length - 1;
 const FAMILY_MAX_SEED_BY_ID = new Map<number, number>([
   [0, 3], [1, 1], [2, 2], [3, 2], [4, 2], [5, 2], [6, 2], [7, 1],
-  [8, 1], [9, 0], [10, 1], [11, 3], [12, 8], [13, 1], [14, 3], [15, 51], [16, 0],
+  [8, 1], [9, 0], [10, 1], [11, 3], [12, 8], [13, 1], [14, 3], [15, 51], [16, 0], [17, 1],
 ]);
 const FAMILY_MAX_GENERATION_BY_ID = new Map<number, number>([
-  [2, 7], [4, 6], [9, 7], [10, 7], [11, 5], [12, 5], [13, 10], [14, 5], [15, 8], [16, 8],
+  [2, 7], [4, 6], [9, 7], [10, 7], [11, 5], [12, 5], [13, 10], [14, 5], [15, 8], [16, 8], [17, 7],
 ]);
 // Subdivision detail is useful on sparse patches and pathological on dense
 // live-generated patches. These caps keep allocations bounded without changing
@@ -157,6 +158,7 @@ const FAMILY_MAX_GENERATION_BY_ID = new Map<number, number>([
 // tessellation where the extra vertices would be visually redundant.
 const MAX_FILL_VERTEX_COUNT = 3_200_000;
 const MAX_BORDER_VERTEX_COUNT = 2_400_000;
+const MIN_BORDER_SURFACE_SUBDIVISION = 3;
 const MAX_TILE_VERTEX_COUNT = 32;
 const AREA_EPS = 1e-14;
 const SEGMENT_EPS = 1e-12;
@@ -922,12 +924,18 @@ export function buildEdgeGeometryForPatch(patch: Patch, settings: Settings): Buf
   if (!borderOn || width <= 1e-7) return null;
 
   const tileVertexCount = patchVertexCount(patch.tiles);
+  const requestedFillSub = intSetting(settings, 'hyp_fill_subdiv', 1, 8);
   const fillSub = clampQuadraticSubdivision(
-    intSetting(settings, 'hyp_fill_subdiv', 1, 8),
+    requestedFillSub,
     tileVertexCount,
     MAX_FILL_VERTEX_COUNT,
   );
-  const surfaceSub = fillSub <= 1 ? 2 : 1;
+  const borderSurfaceFillSub = clampQuadraticSubdivision(
+    Math.max(requestedFillSub, MIN_BORDER_SURFACE_SUBDIVISION),
+    tileVertexCount,
+    MAX_FILL_VERTEX_COUNT,
+  );
+  const surfaceSub = Math.max(1, Math.ceil(borderSurfaceFillSub / fillSub));
   const projector = createProjector(settings);
   const snap = createVertexSnapper(projector.enabled ? 1e-5 : 1e-7);
   const sub = clampLinearSubdivision(
@@ -1031,8 +1039,8 @@ export function buildEdgeGeometryForPatch(patch: Patch, settings: Settings): Buf
   };
   const layout = cachedBorderLayout(
     patch,
-    borderLayoutCacheKey(settings, fillSub, sub, relief),
-    () => borderLayout(patch, projector, snap, sub, fillSub, relief),
+    borderLayoutCacheKey(settings, fillSub, borderSurfaceFillSub, sub, relief),
+    () => borderLayout(patch, projector, snap, sub, borderSurfaceFillSub, relief),
   );
   for (const border of layout) {
     buildTileRing(
@@ -1061,11 +1069,12 @@ export function buildEdgeGeometryForPatch(patch: Patch, settings: Settings): Buf
   return geometry;
 }
 
-function borderLayoutCacheKey(settings: Settings, fillSub: number, borderSub: number, relief: number): string {
+function borderLayoutCacheKey(settings: Settings, fillSub: number, surfaceFillSub: number, borderSub: number, relief: number): string {
   return [
     intSetting(settings, 'projection', 0, 1),
     numberSetting(settings, 'hyp_scale', 0, 100),
     fillSub,
+    surfaceFillSub,
     borderSub,
     relief,
   ].join(':');

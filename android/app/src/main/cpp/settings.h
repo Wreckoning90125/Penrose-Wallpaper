@@ -9,9 +9,9 @@ namespace penrose {
 
 // =============================================================================
 // Settings — single source of truth for everything the renderer asks the
-// Kotlin layer about. Touch-driven view state (pan/zoom/rotate) is NOT here;
-// it lives directly on the renderer because it changes too often to round-trip
-// through JNI.
+// Kotlin layer about. View baselines are persisted here and mirrored into the
+// renderer's LiveView on settings apply; high-frequency gesture deltas still
+// update LiveView directly and are persisted only at touch end.
 // =============================================================================
 
 enum class BackgroundMode : int {
@@ -48,6 +48,10 @@ struct Settings {
 
     bool   borderOn     = true;
     float  borderWidth  = 0.8f;
+    int    borderJoin   = 0;   // 0=miter, 1=round, 2=bevel
+    float  borderFill   = 0.0f;
+    float  borderPoint  = 0.0f;
+    float  borderGap    = 0.0f;
     Oklch  borderColor  { 0.95f, 0.0f, 0.0f };
     float  borderAlpha  = 0.35f;
 
@@ -165,17 +169,31 @@ struct Settings {
     };
 };
 
-// Returns true if any setting that affects geometry (tile generation) changed.
-// Used by the renderer to decide whether to rebuild vertex buffers or just
-// re-record draw commands. Both subdivision counts and the projection mode
-// gate the tessellation paths in renderer_geometry.cpp — toggling any of
-// them has to rebuild to actually apply (or strip) the polyline split.
-inline bool geometryChanged(const Settings& a, const Settings& b) {
+// Returns true if any setting that affects the fill mesh changed.
+// Border-ring controls are intentionally excluded: Android keeps fill and
+// border buffers separate, so changing width/join/fill/point/gap can rebuild
+// only border geometry.
+inline bool tileGeometryChanged(const Settings& a, const Settings& b) {
     return a.family != b.family
         || a.seedIdx != b.seedIdx
         || a.generation != b.generation
-        || a.hypBorderSubdiv != b.hypBorderSubdiv
         || a.hypFillSubdiv   != b.hypFillSubdiv
+        || a.projection != b.projection;
+}
+
+// Returns true if any setting that affects the tile-local border ring changed.
+inline bool borderGeometryChanged(const Settings& a, const Settings& b) {
+    return a.family != b.family
+        || a.seedIdx != b.seedIdx
+        || a.generation != b.generation
+        || a.borderOn != b.borderOn
+        || a.borderWidth != b.borderWidth
+        || a.borderJoin != b.borderJoin
+        || a.borderFill != b.borderFill
+        || a.borderPoint != b.borderPoint
+        || a.borderGap != b.borderGap
+        || a.hypScale != b.hypScale
+        || a.hypBorderSubdiv != b.hypBorderSubdiv
         || a.projection != b.projection;
 }
 

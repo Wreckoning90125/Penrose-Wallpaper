@@ -2,7 +2,6 @@ package com.penrose.wallpaper
 
 import android.app.WallpaperManager
 import android.content.Context
-import android.content.SharedPreferences
 import android.service.wallpaper.WallpaperService
 import android.util.Log
 import android.view.Choreographer
@@ -10,6 +9,13 @@ import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.WindowManager
 import com.penrose.wallpaper.audio.AudioPlaybackService
+import com.penrose.wallpaper.preset.SettingsSnapshotStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.atan2
 import kotlin.math.hypot
 
@@ -23,7 +29,7 @@ import kotlin.math.hypot
  *     ([RendererSession]) — a single-thread coroutine dispatcher
  *     that privately owns the renderer's `nativePtr`. Main-thread
  *     code never reads the pointer; it only describes intent.
- *   - SharedPreferences listener fires on the main thread; we
+ *   - SettingsStore listeners fire on the main thread; we
  *     submit the applySettings call to the dispatcher.
  */
 class PenroseWallpaperService : WallpaperService() {
@@ -32,15 +38,22 @@ class PenroseWallpaperService : WallpaperService() {
 
     private inner class PenroseEngine
         : Engine(),
-          SharedPreferences.OnSharedPreferenceChangeListener,
           Choreographer.FrameCallback {
 
         private val session = RendererSession("PenroseRender")
+        private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
         private var visible = false
 
-        private val prefs: SharedPreferences =
-            getSharedPreferences(Settings.PREFS_NAME, Context.MODE_PRIVATE)
+        private lateinit var settingsStore: SettingsStore
+        private lateinit var workingSettingsStore: SettingsStore
+        private var settingsReady = false
+        private val wallpaperSettingsListener = SettingsStore.Listener { key ->
+            onWallpaperSettingChanged(key)
+        }
+        private val workingSettingsListener = SettingsStore.Listener { key ->
+            if (key == Settings.KEY_AUDIO_ACTIVE) updateChoreographer()
+        }
 
         private var rippleAmount = 0f
         private var rippleMode = 0
@@ -55,7 +68,7 @@ class PenroseWallpaperService : WallpaperService() {
         private var pinchDist = 0f
         private var pinchAngle = 0f
         // Pinch / pan gestures update the renderer immediately; on touch
-        // release we read the live view back and persist it to prefs so the
+        // release we read the live view back and persist it to settings so the
         // next session opens at the same zoom / rotation.
         private var gestureTouched = false
         // True from ACTION_DOWN through ACTION_UP/CANCEL. Arms the
@@ -70,7 +83,6 @@ class PenroseWallpaperService : WallpaperService() {
             super.onCreate(surfaceHolder)
             setOffsetNotificationsEnabled(true)
             setTouchEventsEnabled(true)
-            prefs.registerOnSharedPreferenceChangeListener(this)
 
             val (screenW, screenH) = currentScreenSize()
             try {
@@ -81,11 +93,24 @@ class PenroseWallpaperService : WallpaperService() {
             }
 
             session.start(assets, resources.displayMetrics.density, TAG)
-            // Push initial settings immediately so the very first
-            // surfaceCreated draw lands on populated state. Reading
-            // prefs + arming Choreographer happens on main; the JNI
-            // applySettings is submitted to the render dispatcher.
-            pushSettingsFromPrefs()
+            engineScope.launch {
+                val wallpaperStore = withContext(Dispatchers.IO) {
+                    SettingsStore.openWallpaper(this@PenroseWallpaperService)
+                }
+                val workingStore = withContext(Dispatchers.IO) {
+                    SettingsStore.openWorking(this@PenroseWallpaperService)
+                }
+                settingsStore = wallpaperStore
+                workingSettingsStore = workingStore
+                settingsReady = true
+                settingsStore.registerListener(wallpaperSettingsListener)
+                workingSettingsStore.registerListener(workingSettingsListener)
+                pushSettingsFromStore()
+                session.submit { ptr ->
+                    loadGraphFromStore(ptr)
+                    NativeBridge.drawFrame(ptr)
+                }
+            }
         }
 
         private fun currentScreenSize(): Pair<Int, Int> {
@@ -103,19 +128,17 @@ class PenroseWallpaperService : WallpaperService() {
                 // a preset has written. Wallpaper service never edits
                 // the graph itself, so this is read-only — no
                 // corresponding save path on destroy.
-                loadGraphFromDisk(ptr)
+                if (settingsReady) loadGraphFromStore(ptr)
             }
         }
 
         /**
-         * Render-thread only. Reads filesDir/modulation_graph.json into
-         * the active Renderer's Graph via the JNI bridge.
+         * Render-thread only. Reads the graph captured by Apply as Wallpaper
+         * into the active Renderer's Graph via the JNI bridge.
          */
-        private fun loadGraphFromDisk(ptr: Long) {
-            val f = java.io.File(filesDir, "modulation_graph.json")
-            if (!f.exists()) return
+        private fun loadGraphFromStore(ptr: Long) {
             try {
-                val json = f.readText()
+                val json = SettingsSnapshotStore.storedGraphJson(settingsStore)
                 NativeBridge.graphLoad(ptr, json)
             } catch (e: Exception) {
                 Log.w(TAG, "graph load failed", e)
@@ -150,7 +173,7 @@ class PenroseWallpaperService : WallpaperService() {
         override fun onVisibilityChanged(isVisible: Boolean) {
             super.onVisibilityChanged(isVisible)
             visible = isVisible
-            if (isVisible) {
+            if (isVisible && settingsReady) {
                 session.submit { ptr -> NativeBridge.drawFrame(ptr) }
             }
             updateChoreographer()
@@ -234,7 +257,7 @@ class PenroseWallpaperService : WallpaperService() {
                     updateChoreographer()
                     if (gestureTouched) {
                         gestureTouched = false
-                        commitViewToPrefs()
+                        commitViewToSettings()
                     }
                 }
             }
@@ -242,34 +265,41 @@ class PenroseWallpaperService : WallpaperService() {
 
         /**
          * Read the renderer's live view back and persist it. The
-         * SharedPreferences listener will fire and re-push settings on the
+         * SettingsStore listener will fire and re-push settings on the
          * render thread; the values are already in `view_` so the round-trip
          * is a no-op visually.
          */
-        private fun commitViewToPrefs() {
-            session.submit { ptr ->
+        private fun commitViewToSettings() {
+            if (!settingsReady) return
+            val out = session.query { ptr ->
                 val out = FloatArray(4)
                 NativeBridge.readView(ptr, out)
-                Settings.saveView(prefs, out[0], out[1], out[2], out[3])
-            }
+                out
+            } ?: return
+            Settings.saveViewAsync(settingsStore, out[0], out[1], out[2], out[3])
         }
 
         override fun onDestroy() {
             disarmChoreographer()
-            prefs.unregisterOnSharedPreferenceChangeListener(this)
+            if (settingsReady) {
+                settingsStore.unregisterListener(wallpaperSettingsListener)
+                workingSettingsStore.unregisterListener(workingSettingsListener)
+            }
+            engineScope.cancel()
             session.shutdown()
             super.onDestroy()
         }
 
-        override fun onSharedPreferenceChanged(sp: SharedPreferences?, key: String?) {
+        private fun onWallpaperSettingChanged(key: String?) {
+            if (!settingsReady) return
             // Preset-apply bumps the `_graph_revision` long; sliders /
             // dropdowns don't. Only reload the JSON on the revision
             // bump — otherwise every slider drag (60 Hz) would do a
             // full graph teardown + rebuild on the render thread.
             val isGraphChange = key == Settings.KEY_GRAPH_REVISION
-            pushSettingsFromPrefs()
+            pushSettingsFromStore()
             if (isGraphChange) {
-                session.submit { ptr -> loadGraphFromDisk(ptr) }
+                session.submit { ptr -> loadGraphFromStore(ptr) }
             }
             if (visible) {
                 session.submit { ptr -> NativeBridge.drawFrame(ptr) }
@@ -277,14 +307,15 @@ class PenroseWallpaperService : WallpaperService() {
         }
 
         /**
-         * Main thread: read prefs, mirror ripple state to fields used by
+         * Main thread: read settings, mirror ripple state to fields used by
          * [updateChoreographer], submit the JNI applySettings call to
          * the render dispatcher, and update Choreographer arming. Split
          * across threads on purpose — Choreographer requires a Looper,
          * the dispatcher thread has none.
          */
-        private fun pushSettingsFromPrefs() {
-            val s = Settings.load(prefs)
+        private fun pushSettingsFromStore() {
+            if (!settingsReady) return
+            val s = settingsStore.settings()
             rippleAmount = s.rippleAmount
             rippleMode = s.rippleMode
             val (ints, floats) = s.toNative()
@@ -308,8 +339,8 @@ class PenroseWallpaperService : WallpaperService() {
             // frame and shows no audio reactivity. currentUri is the
             // audio service's in-memory truth (it clears when the
             // service or process dies, so it can't get stuck), and the
-            // service's KEY_AUDIO_ACTIVE pref write is what wakes
-            // onSharedPreferenceChanged -> updateChoreographer when
+            // service's KEY_AUDIO_ACTIVE DataStore write is what wakes
+            // workingSettingsListener -> updateChoreographer when
             // playback starts or stops.
             val audioActive = AudioPlaybackService.currentUri != null
             val wantLoop = visible && (gestureActive || rippleWantsLoop || audioActive)

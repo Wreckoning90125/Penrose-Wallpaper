@@ -33,7 +33,7 @@ npm run quality:local
 ```
 
 That gate composes the web, native, and Android gates: no owned plain JavaScript
-files, TypeScript policy, typecheck, atlas validation, border-join proof, tiling
+files, TypeScript policy, typecheck, atlas validation, border-join verification, tiling
 verification, shader validation, clang-tidy, the WebGPU build, and the
 graph/render contract.
 

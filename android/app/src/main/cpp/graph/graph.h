@@ -41,7 +41,7 @@ enum class NodeKind : uint16_t {
     OutDepthAmount,
     // Material + lighting + hyperbolic-projection targets — must stay
     // contiguous with the four above; the target block runs
-    // OutRippleAmount .. OutHypScale.
+    // OutRippleAmount .. OutHypBoostY.
     OutMatRoughness,
     OutMatMetalness,
     OutMatSheen,
@@ -55,11 +55,12 @@ enum class NodeKind : uint16_t {
     OutLightIntensity,
     OutLightWarmth,
     OutLightAmbient,
-    // Hyperbolic-projection targets — drive the τ_b boost coordinates
-    // and the world-radius scale of the Poincaré-disk mode. Inert when
-    // Settings::projection is Euclidean.
+    // Hyperbolic-projection targets — drive the τ_b boost coordinates.
+    // World-radius scale is a static geometry control on Android because
+    // border rings are baked in projected disk space.
     OutHypBoostX,
     OutHypBoostY,
+    // Preserved for saved-graph kind stability; no longer an active Target.
     OutHypScale,
 
     // Appended after the target block so existing saved-graph node indices
@@ -80,7 +81,9 @@ enum class NodeKind : uint16_t {
 struct NodeDescriptor {
     NodeKind    kind;
     const char* label;
-    const char* category;  // "Source" | "Operator" | "Target"
+    // Palette category. Graph UI exposes Source / Operator / Target;
+    // Projection is reserved for preserved-but-inactive saved node kinds.
+    const char* category;
 };
 
 const NodeDescriptor& descriptor(NodeKind kind);
@@ -123,7 +126,6 @@ struct EvalResult {
     float lightAmbient   = 0.22f;
     float hypBoostX      = 0.0f;
     float hypBoostY      = 0.0f;
-    float hypScale       = 1.5f;
 };
 
 // FlowNode is the common base for every modulation node in the editor.

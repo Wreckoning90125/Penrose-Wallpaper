@@ -132,7 +132,9 @@ private:
 
     int sampleRate_ = 48000;
 
-    alignas(64) float ring_[kRingSamples] = {};
+    static_assert(std::atomic<uint32_t>::is_always_lock_free,
+                  "Audio sample ring requires lock-free uint32 atomics");
+    alignas(64) std::atomic<uint32_t> ring_[kRingSamples] = {};
     std::atomic<uint32_t> writeIdx_{0};
 
     // Scratch + static tables for the FFT.

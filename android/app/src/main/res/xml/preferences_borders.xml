@@ -15,8 +15,33 @@
         <SeekBarPreference
             android:key="border_width"
             android:title="Width"
-            android:summary="0..6, hundredths"
+            android:summary="Tile-local inset width"
             android:min="0" android:max="600" android:defaultValue="80"
+            app:showSeekBarValue="true" />
+        <ListPreference
+            android:key="border_join"
+            android:title="Join"
+            android:summary="%s"
+            android:entries="@array/border_join_entries"
+            android:entryValues="@array/border_join_values"
+            android:defaultValue="0" />
+        <SeekBarPreference
+            android:key="border_fill"
+            android:title="Fill"
+            android:summary="Pull convex corner insets toward the tile center"
+            android:min="0" android:max="100" android:defaultValue="0"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="border_point"
+            android:title="Point"
+            android:summary="Trim sharp convex border tips"
+            android:min="0" android:max="100" android:defaultValue="0"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="border_gap"
+            android:title="Close gap"
+            android:summary="Taper inner border edges into shared vertices"
+            android:min="0" android:max="100" android:defaultValue="0"
             app:showSeekBarValue="true" />
         <SeekBarPreference
             android:key="border_a"

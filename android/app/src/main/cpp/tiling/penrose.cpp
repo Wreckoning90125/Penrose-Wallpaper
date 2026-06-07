@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <unordered_set>
 #include <unordered_map>
@@ -2242,6 +2243,261 @@ std::vector<Tile> generateCairo(int /*seedIdx*/, int generations) {
     return out;
 }
 
+struct SocolarTaylorState {
+    uint8_t letter;
+    bool barred;
+    bool right;
+    int orient;
+    Xf place;
+};
+
+struct SocolarTaylorChildSymbol {
+    uint8_t letter;
+    bool barred;
+    bool right;
+};
+
+constexpr uint8_t stA = 0;
+constexpr uint8_t stB = 1;
+constexpr uint8_t stC = 2;
+constexpr uint8_t stD = 3;
+constexpr uint8_t stE = 4;
+constexpr uint8_t stF = 5;
+constexpr uint8_t stG = 6;
+constexpr bool stPlain = false;
+constexpr bool stBar = true;
+constexpr bool stLeft = false;
+constexpr bool stRight = true;
+
+inline SocolarTaylorChildSymbol stSym(uint8_t letter, bool barred, bool right) {
+    return {letter, barred, right};
+}
+
+using SocolarTaylorRule = std::array<SocolarTaylorChildSymbol, 4>;
+
+SocolarTaylorRule socolarTaylorRule(const SocolarTaylorState& state) {
+    switch (state.letter) {
+        case stA:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stG, stBar, stLeft), stSym(stD, stBar, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stG, stPlain, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stA, stPlain, stRight), stSym(stD, stPlain, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stA, stBar, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stA, stBar, stLeft), stSym(stD, stBar, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stA, stPlain, stRight) }};
+            }
+            return {{ stSym(stG, stPlain, stRight), stSym(stD, stPlain, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stG, stBar, stLeft) }};
+        case stB:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stB, stPlain, stLeft), stSym(stF, stBar, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stG, stPlain, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stG, stBar, stRight), stSym(stF, stPlain, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stA, stBar, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stG, stPlain, stLeft), stSym(stF, stBar, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stA, stPlain, stRight) }};
+            }
+            return {{ stSym(stB, stBar, stRight), stSym(stF, stPlain, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stG, stBar, stLeft) }};
+        case stC:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stF, stPlain, stLeft), stSym(stE, stPlain, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stF, stBar, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stD, stBar, stRight), stSym(stE, stBar, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stD, stPlain, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stD, stPlain, stLeft), stSym(stE, stPlain, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stD, stBar, stRight) }};
+            }
+            return {{ stSym(stF, stBar, stRight), stSym(stE, stBar, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stF, stPlain, stLeft) }};
+        case stD:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stB, stBar, stLeft), stSym(stD, stBar, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stB, stPlain, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stA, stBar, stRight), stSym(stE, stPlain, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stA, stPlain, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stA, stPlain, stLeft), stSym(stE, stBar, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stA, stBar, stRight) }};
+            }
+            return {{ stSym(stB, stPlain, stRight), stSym(stD, stPlain, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stB, stBar, stLeft) }};
+        case stE:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stB, stPlain, stLeft), stSym(stE, stBar, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stB, stBar, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stG, stBar, stRight), stSym(stE, stPlain, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stG, stPlain, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stG, stPlain, stLeft), stSym(stE, stBar, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stG, stBar, stRight) }};
+            }
+            return {{ stSym(stB, stBar, stRight), stSym(stE, stPlain, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stB, stPlain, stLeft) }};
+        case stF:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stB, stPlain, stLeft), stSym(stF, stBar, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stB, stPlain, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stG, stBar, stRight), stSym(stE, stPlain, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stA, stPlain, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stG, stPlain, stLeft), stSym(stE, stBar, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stA, stBar, stRight) }};
+            }
+            return {{ stSym(stB, stBar, stRight), stSym(stF, stPlain, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stB, stBar, stLeft) }};
+        case stG:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stB, stBar, stLeft), stSym(stD, stBar, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stG, stPlain, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stA, stBar, stRight), stSym(stF, stPlain, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stA, stBar, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stA, stPlain, stLeft), stSym(stF, stBar, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stA, stPlain, stRight) }};
+            }
+            return {{ stSym(stB, stPlain, stRight), stSym(stD, stPlain, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stG, stBar, stLeft) }};
+        default:
+            std::abort();
+    }
+}
+
+int stMod6(int value) {
+    const int r = value % 6;
+    return r < 0 ? r + 6 : r;
+}
+
+uint8_t stTileType(uint8_t letter, bool barred, bool right) {
+    return static_cast<uint8_t>(letter * 4u + (barred ? 2u : 0u) + (right ? 1u : 0u));
+}
+
+Tile stPolygonTile(const std::vector<Pt>& poly, Xf T, uint8_t type) {
+    Tile tile = polygonTile(poly, T, type);
+    if (tileSignedArea(tile) < 0.0) {
+        for (int lo = 0, hi = static_cast<int>(tile.vcount) - 1; lo < hi; ++lo, --hi) {
+            std::swap(tile.x[lo], tile.x[hi]);
+            std::swap(tile.y[lo], tile.y[hi]);
+        }
+    }
+    return tile;
+}
+
+const std::vector<Pt>& socolarTaylorHalfHex(bool right) {
+    static const std::vector<Pt> left = {
+        {0.0, 0.0},
+        {-kHalfSqrt3, -0.5},
+        {-kHalfSqrt3, -1.5},
+        {0.0, -2.0},
+    };
+    static const std::vector<Pt> rightShape = {
+        {0.0, 0.0},
+        {0.0, -2.0},
+        {kHalfSqrt3, -1.5},
+        {kHalfSqrt3, -0.5},
+    };
+    return right ? rightShape : left;
+}
+
+Tile socolarTaylorTile(const SocolarTaylorState& state) {
+    const Xf T = mul(state.place, trot((static_cast<double>(state.orient) * kPi) / 3.0));
+    return stPolygonTile(
+        socolarTaylorHalfHex(state.right),
+        T,
+        stTileType(state.letter, state.barred, state.right)
+    );
+}
+
+std::vector<SocolarTaylorState> subdivideSocolarTaylor(const std::vector<SocolarTaylorState>& states) {
+    static const Xf invQ = inv({-1.0, -2.0 * kHalfSqrt3, 0.0, -2.0 * kHalfSqrt3, 1.0, 0.0});
+    static const Pt offsetsLeft[4] = {
+        {0.0, 0.0},
+        {2.0 * kHalfSqrt3, 1.0},
+        {kHalfSqrt3, -0.5},
+        {4.0 * kHalfSqrt3, -2.0},
+    };
+    static const Pt offsetsRight[4] = {
+        {0.0, 0.0},
+        {0.0, -2.0},
+        {kHalfSqrt3, -0.5},
+        {4.0 * kHalfSqrt3, -2.0},
+    };
+    constexpr int orientLeft[4] = {2, 1, 1, 3};
+    constexpr int orientRight[4] = {0, 1, 1, 5};
+
+    std::vector<SocolarTaylorState> next;
+    next.reserve(states.size() * 4u);
+    for (const SocolarTaylorState& state : states) {
+        const SocolarTaylorRule rule = socolarTaylorRule(state);
+        const Pt* offsets = state.right ? offsetsRight : offsetsLeft;
+        const int* orientBase = state.right ? orientRight : orientLeft;
+        const Xf orientFrame = trot((-static_cast<double>(state.orient) * kPi) / 3.0);
+        for (size_t i = 0; i < rule.size(); ++i) {
+            const SocolarTaylorChildSymbol& child = rule[i];
+            const Pt offset = transPt(orientFrame, offsets[i]);
+            next.push_back({
+                child.letter,
+                child.barred,
+                child.right,
+                stMod6(orientBase[i] - state.orient),
+                mul(state.place, mul(invQ, ttrans(offset.x, offset.y))),
+            });
+        }
+    }
+    return next;
+}
+
+std::vector<Tile> generateSocolarTaylor(int seedIdx, int generations) {
+    const SeedSocolarTaylor seed = seedIdx == 1
+        ? SeedSocolarTaylor::AHex
+        : SeedSocolarTaylor::GeneratingTriad;
+    std::vector<SocolarTaylorState> states;
+    states.reserve(seed == SeedSocolarTaylor::GeneratingTriad ? 6u : 2u);
+    auto pushHex = [&states](uint8_t letter, bool barred, int orient) {
+        states.push_back({letter, barred, stLeft, orient, kIdent});
+        states.push_back({letter, barred, stRight, orient, kIdent});
+    };
+    if (seed == SeedSocolarTaylor::GeneratingTriad) {
+        // Akiyama-Lee Fig. 1: B, barred G, and A hexes meeting at the origin.
+        pushHex(stB, stPlain, 4);
+        pushHex(stG, stBar, 2);
+        pushHex(stA, stPlain, 0);
+    } else {
+        pushHex(stA, stPlain, 0);
+    }
+    for (int g = 0; g < generations; ++g) states = subdivideSocolarTaylor(states);
+
+    std::vector<Tile> out;
+    out.reserve(states.size());
+    for (const SocolarTaylorState& state : states) out.push_back(socolarTaylorTile(state));
+    normalizeTiles(out);
+    return out;
+}
+
 // =============================================================================
 // Per-family descriptor table
 // =============================================================================
@@ -2292,6 +2548,8 @@ const FamilyInfo kFamilyInfo[kFamilyCount] = {
                           {18, 18, false, 0, 1, false, false } },
     /* Cairo         */ { 8, 1.0f,                 4, 0, true,  true,  0,
                           { 8,  8, false, 0, 1, false, true  } },
+    /* SocolarTaylor */ { 7, 0.5f,                 6, 0, true,  false, 0,
+                          {28,  6, false, 0, 1, false, false } },
 };
 
 // =============================================================================
@@ -2365,6 +2623,10 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
             return generateGailiunasSpiral(seedIdx, cap);
         case Family::Cairo:
             return generateCairo(seedIdx, cap);
+        case Family::SocolarTaylor: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            return generateSocolarTaylor(s, cap);
+        }
     }
     return {};
 }

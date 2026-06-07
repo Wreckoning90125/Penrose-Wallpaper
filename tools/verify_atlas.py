@@ -34,6 +34,7 @@ FAMILY_MAX_SEED = {
     14: 3,
     15: 51,
     16: 0,
+    17: 6,
 }
 
 FAMILY_MAX_GEN = {
@@ -47,6 +48,7 @@ FAMILY_MAX_GEN = {
     14: 5,
     15: 8,
     16: 8,
+    17: 7,
 }
 
 PREF_SCHEMA = {
@@ -61,6 +63,9 @@ PREF_SCHEMA = {
     "border_on": bool,
     "border_join": str,
     "border_width": int,
+    "border_fill": int,
+    "border_point": int,
+    "border_gap": int,
     "border_l": int,
     "border_c": int,
     "border_h": int,
@@ -228,8 +233,8 @@ def exported_tile_count(item_id: str, family: int, seed: int, generation: int) -
 def main() -> None:
     atlas = json.loads(ATLAS.read_text(encoding="utf-8"))
     categories = atlas.get("categories", [])
-    if len(categories) != 9:
-        raise SystemExit(f"expected 9 categories, found {len(categories)}")
+    if len(categories) != 10:
+        raise SystemExit(f"expected 10 categories, found {len(categories)}")
 
     ids: set[str] = set()
     total_items = 0

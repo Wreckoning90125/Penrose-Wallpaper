@@ -43,6 +43,11 @@ namespace penrose {
 //   Cairo        — periodic Cairo pentagonal tiling from the Wolfram
 //                  Demonstrations polycairo construction. type = one of the
 //                  eight pentagon roles in the 4x4 translation cell.
+//   SocolarTaylor — Akiyama-Lee half-hexagonal substitution for the
+//                  Taylor-Socolar tiling. Exposed seeds are the paper's
+//                  generating triad and a single A full-hex supertile; type =
+//                  letter/bar/side role and orientation is classified
+//                  geometrically.
 // We pack every shape into the same struct so the renderer can iterate
 // uniformly. `vcount` ranges 3..26.
 // =============================================================================
@@ -69,12 +74,13 @@ enum class Family : int {
     AmmannBeenker = 5, Heptagonal = 6, Binary = 7, Tuebingen = 8,
     P1 = 9, Danzer = 10, Hat = 11, Spectre = 12, Equithirds = 13,
     CromwellKRT = 14, GailiunasSpiral = 15, Cairo = 16,
+    SocolarTaylor = 17,
 };
 
 // Number of Family enumerators. The JNI layer validates the incoming family
 // index against this; keep it in step with the enum above and with the
 // kFamilyInfo[] table in penrose.cpp.
-constexpr int kFamilyCount = 17;
+constexpr int kFamilyCount = 18;
 
 // Per-family edge classification used by the border seam-hiding rule.
 //   For Penrose: Leg = the two equal-length sides, Base = the third.
@@ -108,6 +114,7 @@ enum class SeedSpectre : int {
 enum class SeedEquithirds : int { Equilateral = 0, Wide = 1 };
 enum class SeedCromwellKRT : int { Kite = 0, Rhombus = 1, Trapezium = 2, Star = 3 };
 enum class SeedCairo : int { Standard = 0 };
+enum class SeedSocolarTaylor : int { GeneratingTriad = 0, AHex = 1 };
 
 std::vector<Tile> seedP3(SeedP3 seed);
 std::vector<Tile> seedP2(SeedP2 seed);
@@ -121,6 +128,7 @@ std::vector<Tile> generateSpectre(int seedIdx, int generations);
 std::vector<Tile> generateCromwellKRT(int seedIdx, int generations);
 std::vector<Tile> generateGailiunasSpiral(int seedIdx, int generations);
 std::vector<Tile> generateCairo(int seedIdx, int generations);
+std::vector<Tile> generateSocolarTaylor(int seedIdx, int generations);
 
 // =============================================================================
 // Substitutions

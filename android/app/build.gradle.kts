@@ -172,6 +172,7 @@ kotlin {
 dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.preference.ktx)
     implementation(libs.kotlinx.coroutines.android)

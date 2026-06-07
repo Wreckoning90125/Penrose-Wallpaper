@@ -19,6 +19,22 @@
             android:key="action_load_preset"
             android:title="@string/preset_load_title"
             android:summary="@string/preset_load_summary" />
+        <Preference
+            android:key="action_save_user_preset"
+            android:title="@string/preset_save_user_title"
+            android:summary="@string/preset_save_user_summary" />
+        <Preference
+            android:key="action_load_user_preset"
+            android:title="@string/preset_load_user_title"
+            android:summary="@string/preset_load_user_summary" />
+        <Preference
+            android:key="action_delete_user_preset"
+            android:title="@string/preset_delete_user_title"
+            android:summary="@string/preset_delete_user_summary" />
+        <Preference
+            android:key="action_reset_view"
+            android:title="@string/reset_view_title"
+            android:summary="@string/reset_view_summary" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Adjust">

@@ -50,6 +50,19 @@ constexpr SwapchainPref kSwapchainPrefs[] = {
     { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_DISPLAY_P3_NONLINEAR_EXT, true,  false },
 };
 
+VkCompositeAlphaFlagBitsKHR chooseCompositeAlpha(VkCompositeAlphaFlagsKHR supported) {
+    constexpr VkCompositeAlphaFlagBitsKHR prefs[] = {
+        VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+        VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+        VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+    };
+    for (VkCompositeAlphaFlagBitsKHR pref : prefs) {
+        if ((supported & pref) != 0) return pref;
+    }
+    return VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+}
+
 } // namespace
 
 // -----------------------------------------------------------------------------
@@ -461,11 +474,9 @@ bool Renderer::buildPipelines() {
     VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &fillGpi, nullptr, &fillPipeline_));
 
     // ---- Border pipeline --------------------------------------------------
-    // Triangle-list quads, not line list — mobile GPUs ship wideLines=FALSE
-    // with lineWidthRange=[1,1], so the old line topology couldn't render
-    // anything thicker than 1 px regardless of the slider. The border
-    // vertex shader expands each unique edge into a quad of `borderGeom.x`
-    // half-width.
+    // Triangle-list mesh, not line list — mobile GPUs commonly expose
+    // wideLines=FALSE with lineWidthRange=[1,1]. Border width and joins are
+    // baked by renderer_geometry.cpp into tile-local ring triangles.
     VkPipelineShaderStageCreateInfo borderStages[2]{};
     borderStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     borderStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
@@ -480,26 +491,19 @@ bool Renderer::buildPipelines() {
     borderBinding.binding = 0;
     borderBinding.stride = sizeof(BorderVertex);
     borderBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    // Three attributes: pos / miter-direction / miter-scale.
-    // The miter-direction is already signed for this vertex's world
-    // side and is what the shader extrudes along directly (Euclidean)
-    // or pushes through the Jacobian (disk).
-    VkVertexInputAttributeDescription borderAttrs[3]{};
+    VkVertexInputAttributeDescription borderAttrs[2]{};
     borderAttrs[0].location = 0; borderAttrs[0].binding = 0;
     borderAttrs[0].format   = VK_FORMAT_R32G32_SFLOAT;
     borderAttrs[0].offset   = offsetof(BorderVertex, x);
     borderAttrs[1].location = 1; borderAttrs[1].binding = 0;
     borderAttrs[1].format   = VK_FORMAT_R32G32_SFLOAT;
-    borderAttrs[1].offset   = offsetof(BorderVertex, mx);
-    borderAttrs[2].location = 2; borderAttrs[2].binding = 0;
-    borderAttrs[2].format   = VK_FORMAT_R32_SFLOAT;
-    borderAttrs[2].offset   = offsetof(BorderVertex, miterScale);
+    borderAttrs[1].offset   = offsetof(BorderVertex, sx);
 
     VkPipelineVertexInputStateCreateInfo borderVi{};
     borderVi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     borderVi.vertexBindingDescriptionCount = 1;
     borderVi.pVertexBindingDescriptions = &borderBinding;
-    borderVi.vertexAttributeDescriptionCount = 3;
+    borderVi.vertexAttributeDescriptionCount = 2;
     borderVi.pVertexAttributeDescriptions = borderAttrs;
 
     VkGraphicsPipelineCreateInfo borderGpi = fillGpi;
@@ -571,7 +575,7 @@ bool Renderer::createSwapchain(int width, int height) {
     sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     sci.preTransform = (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
         ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : caps.currentTransform;
-    sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    sci.compositeAlpha = chooseCompositeAlpha(caps.supportedCompositeAlpha);
     sci.presentMode = VK_PRESENT_MODE_FIFO_KHR;
     sci.clipped = VK_TRUE;
     VK_CHECK(vkCreateSwapchainKHR(device_, &sci, nullptr, &swapchain_));
@@ -662,27 +666,114 @@ uint32_t Renderer::findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags props
 bool Renderer::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                             VkMemoryPropertyFlags props,
                             VkBuffer& buffer, VkDeviceMemory& memory) {
+    buffer = VK_NULL_HANDLE;
+    memory = VK_NULL_HANDLE;
+
     VkBufferCreateInfo bci{};
     bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bci.size = size;
     bci.usage = usage;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    VK_CHECK(vkCreateBuffer(device_, &bci, nullptr, &buffer));
+    VkResult result = vkCreateBuffer(device_, &bci, nullptr, &buffer);
+    if (result != VK_SUCCESS) {
+        LOGE("vkCreateBuffer -> %d", static_cast<int>(result));
+        buffer = VK_NULL_HANDLE;
+        return false;
+    }
 
     VkMemoryRequirements req{};
     vkGetBufferMemoryRequirements(device_, buffer, &req);
     uint32_t typeIdx = findMemoryType(req.memoryTypeBits, props);
     if (typeIdx == UINT32_MAX) {
         LOGE("no memory type for props=0x%x typeBits=0x%x", props, req.memoryTypeBits);
+        vkDestroyBuffer(device_, buffer, nullptr);
+        buffer = VK_NULL_HANDLE;
         return false;
     }
     VkMemoryAllocateInfo mai{};
     mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     mai.allocationSize = req.size;
     mai.memoryTypeIndex = typeIdx;
-    VK_CHECK(vkAllocateMemory(device_, &mai, nullptr, &memory));
-    VK_CHECK(vkBindBufferMemory(device_, buffer, memory, 0));
+    result = vkAllocateMemory(device_, &mai, nullptr, &memory);
+    if (result != VK_SUCCESS) {
+        LOGE("vkAllocateMemory -> %d", static_cast<int>(result));
+        vkDestroyBuffer(device_, buffer, nullptr);
+        buffer = VK_NULL_HANDLE;
+        memory = VK_NULL_HANDLE;
+        return false;
+    }
+    result = vkBindBufferMemory(device_, buffer, memory, 0);
+    if (result != VK_SUCCESS) {
+        LOGE("vkBindBufferMemory -> %d", static_cast<int>(result));
+        vkFreeMemory(device_, memory, nullptr);
+        vkDestroyBuffer(device_, buffer, nullptr);
+        buffer = VK_NULL_HANDLE;
+        memory = VK_NULL_HANDLE;
+        return false;
+    }
     return true;
+}
+
+void Renderer::destroyBufferNow(VkBuffer& buffer, VkDeviceMemory& memory) {
+    if (buffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device_, buffer, nullptr);
+        buffer = VK_NULL_HANDLE;
+    }
+    if (memory != VK_NULL_HANDLE) {
+        vkFreeMemory(device_, memory, nullptr);
+        memory = VK_NULL_HANDLE;
+    }
+}
+
+void Renderer::retireBuffer(VkBuffer& buffer, VkDeviceMemory& memory) {
+    if (buffer == VK_NULL_HANDLE && memory == VK_NULL_HANDLE) return;
+    if (frames_.empty()) {
+        destroyBufferNow(buffer, memory);
+        return;
+    }
+    RetiredBuffer retired{};
+    retired.buffer = buffer;
+    retired.memory = memory;
+    for (size_t i = 0; i < frames_.size() && i < retired.fences.size(); ++i) {
+        retired.fences[i] = frames_[i].inFlight;
+    }
+    retiredBuffers_.push_back(retired);
+    buffer = VK_NULL_HANDLE;
+    memory = VK_NULL_HANDLE;
+}
+
+void Renderer::collectRetiredBuffers() {
+    if (retiredBuffers_.empty()) return;
+    auto it = retiredBuffers_.begin();
+    while (it != retiredBuffers_.end()) {
+        bool ready = true;
+        for (VkFence fence : it->fences) {
+            if (fence == VK_NULL_HANDLE) continue;
+            const VkResult status = vkGetFenceStatus(device_, fence);
+            if (status == VK_NOT_READY) {
+                ready = false;
+                break;
+            }
+            if (status != VK_SUCCESS) {
+                LOGE("vkGetFenceStatus(retired buffer) -> %d", static_cast<int>(status));
+                ready = false;
+                break;
+            }
+        }
+        if (!ready) {
+            ++it;
+            continue;
+        }
+        destroyBufferNow(it->buffer, it->memory);
+        it = retiredBuffers_.erase(it);
+    }
+}
+
+void Renderer::destroyRetiredBuffersNow() {
+    for (RetiredBuffer& retired : retiredBuffers_) {
+        destroyBufferNow(retired.buffer, retired.memory);
+    }
+    retiredBuffers_.clear();
 }
 
 } // namespace penrose

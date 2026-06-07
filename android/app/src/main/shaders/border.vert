@@ -2,8 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2  inPos;
-layout(location = 1) in vec2  inMiter;       // signed corner extrusion direction (world)
-layout(location = 2) in float inMiterScale;  // halfWidth multiplier at this corner
+layout(location = 1) in vec2  inSourcePos;
 
 layout(push_constant) uniform PC {
     vec4 view0;
@@ -16,11 +15,12 @@ layout(push_constant) uniform PC {
 
 const float TWO_PI = 6.2831853072;
 
-// Same field as fill.vert::waveGradient, sampled here so the border quads
-// track the displaced fill geometry exactly. Both shaders sample at the edge
-// endpoint (not the inset/outset corner) so the border ribbon stays pinned to
-// the fill it outlines. `sym` is the family's rotational fold count (anim.z);
-// sym < 1 is the isotropic radial case (no preferred axis, e.g. pinwheel).
+// Same field as fill.vert::waveGradient. Border vertices carry the source-space
+// point that corresponds to the emitted geometry vertex, inverse-projected from
+// disk space in Poincare mode, so static inset width and animated displacement
+// stay in compatible coordinate systems. `sym` is the family's rotational fold
+// count (anim.z); sym < 1 is the isotropic radial case (no preferred axis, e.g.
+// pinwheel).
 vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float symF) {
     int sym = int(symF + 0.5);
     if (sym < 1) {
@@ -38,7 +38,7 @@ vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float symF) {
 }
 
 void main() {
-    vec2 base = inPos;
+    vec2 source = inSourcePos;
     float amp = ubo.anim.y;
     int kind = int(ubo.effects.w + 0.5);
     if (amp > 0.0 && kind != 0) {
@@ -46,51 +46,17 @@ void main() {
         float omegaT    = ubo.anim.x * 0.4 * speed;
         float pagePhase = (ubo.anim.w - 0.5) * TWO_PI;
         float waveSym   = ubo.anim.z;
-        base += waveGradient(base, omegaT, pagePhase, waveSym) * amp * 0.006;
+        source += waveGradient(source, omegaT, pagePhase, waveSym) * amp * 0.006;
     }
-
-    float scaledHalf = ubo.borderGeom.x * inMiterScale;
 
     vec2 finalPos;
     if (pc.hyp.w > 0.5) {
-        // Disk-space border extrusion. Per-corner mitered direction in
-        // world space → push through the same projection Jacobian as
-        // the edge tangent: radial-derivative (projTangentRadial) then
-        // τ_b conformal rotation (boostTangent — −2·arg(1+b̄z)). The
-        // projection is conformal, so the world-space join direction is
-        // preserved exactly under the map, i.e. the disk-space miter
-        // direction = normalise(J(P) · inMiter). The disk-space
-        // width target is `halfWidth × hypScale/2` near the origin
-        // (where the radial Jacobian f'(0) = s/2) which keeps borders
-        // visibly constant-thickness even where the Jacobian falls to
-        // ~sech²(r·s/2) ≪ 1 near the boundary. miterScale carries the
-        // offset-line-intersection length compensation so the joint
-        // closes flush in disk space too — angle-preserving projection means the
-        // same compensation works in both spaces.
-        vec2 zRadial = (length(base) > 1e-6) ? base / length(base) * tanh(length(base) * pc.hyp.z * 0.5) : vec2(0.0);
-        vec2 z       = projectHyp(base, pc.hyp.xy, pc.hyp.z);
-        vec2 mDiskR  = projTangentRadial(base, inMiter, pc.hyp.z);
-        vec2 mDisk   = boostTangent(zRadial, pc.hyp.xy, mDiskR);
-        float mLen   = length(mDisk);
-        vec2 mDir;
-        if (mLen > 1e-9) {
-            mDir = mDisk / mLen;
-        } else {
-            // Degenerate projection at the disk origin with a radial
-            // miter — fall back to the unprojected world miter; it's
-            // already on the correct world side. Visually identical
-            // since at the origin the Jacobian is the identity scaled
-            // by s/2 and orientation is preserved.
-            mDir = inMiter;
-        }
-        finalPos = z + mDir * (scaledHalf * pc.hyp.z * 0.5);
+        // Border-ring geometry is baked after the static radial projection so
+        // width and joins are measured in disk space. The source coordinate
+        // carries the same pre-projection wave field as fill.vert.
+        finalPos = projectHyp(source, pc.hyp.xy, pc.hyp.z);
     } else {
-        // Euclidean: extrude along the per-corner mitered direction.
-        // (mx, my) is already signed for this vertex's world side, so
-        // we just add it scaled by halfWidth · miterScale. miterScale is
-        // the endpoint-to-offset-line-intersection distance in half-width
-        // units, clamped so a near-acute joint can't fire a spike.
-        finalPos = base + inMiter * scaledHalf;
+        finalPos = source;
     }
 
     float x = pc.view0.x * finalPos.x + pc.view0.y * finalPos.y + pc.view0.z;

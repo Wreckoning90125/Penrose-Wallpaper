@@ -21,9 +21,10 @@ inline Renderer* asRenderer(jlong ptr) { return reinterpret_cast<Renderer*>(ptr)
 // Decode a Settings struct from the flat int/float arrays the Kotlin side
 // passes us. Layout (ints / floats):
 //   ints:   [family, seedIdx, generation, preset, colorCount, colorMode,
-//            borderOn, bgMode, rippleMode, panMode, rippleKind,
+//            borderOn, borderJoin, bgMode, rippleMode, panMode, rippleKind,
 //            projection, hypBorderSubdiv, hypFillSubdiv]
-//   floats: [borderWidth, borderL, borderC, borderH, borderAlpha,
+//   floats: [borderWidth, borderFill, borderPoint, borderGap,
+//            borderL, borderC, borderH, borderAlpha,
 //            bgL, bgC, bgH, rippleAmount,
 //            zoom, rotation, panX, panY,
 //            brightness, depthAmount, rippleSpeed,
@@ -35,8 +36,8 @@ inline Renderer* asRenderer(jlong ptr) { return reinterpret_cast<Renderer*>(ptr)
 //            matRoughMod, matMetalMod,
 //            hypScale, hypBoostX, hypBoostY,
 //            custom_0_L, custom_0_C, custom_0_H, ..., custom_N_L, custom_N_C, custom_N_H]
-constexpr int kIntCount   = 14;
-constexpr int kFloatCount = 16 + 8 + 5 + 5 + 2 + 3 + 3 * kMaxColors;
+constexpr int kIntCount   = 15;
+constexpr int kFloatCount = 19 + 8 + 5 + 5 + 2 + 3 + 3 * kMaxColors;
 
 Settings decodeSettings(const jint* ints, const jfloat* floats) {
     Settings s{};
@@ -50,57 +51,62 @@ Settings decodeSettings(const jint* ints, const jfloat* floats) {
     int mode = ints[5]; if (mode < 0 || mode > 2) mode = 0;
     s.colorMode = static_cast<ColorMode>(mode);
     s.borderOn = (ints[6] != 0);
-    int bg = ints[7]; if (bg < 0 || bg > 1) bg = 0;
+    int join = ints[7]; if (join < 0 || join > 2) join = 0;
+    s.borderJoin = join;
+    int bg = ints[8]; if (bg < 0 || bg > 1) bg = 0;
     s.bgMode = static_cast<BackgroundMode>(bg);
-    int rm = ints[8]; if (rm < 0 || rm > 2) rm = 0;
+    int rm = ints[9]; if (rm < 0 || rm > 2) rm = 0;
     s.rippleMode = rm;
-    int pm = ints[9]; if (pm < 0 || pm > 1) pm = 0;
+    int pm = ints[10]; if (pm < 0 || pm > 1) pm = 0;
     s.panMode = pm;
-    int rk = ints[10]; if (rk < 0 || rk > 2) rk = 0;
+    int rk = ints[11]; if (rk < 0 || rk > 2) rk = 0;
     s.rippleKind = rk;
-    int pj = ints[11]; if (pj < 0 || pj > 1) pj = 0;
+    int pj = ints[12]; if (pj < 0 || pj > 1) pj = 0;
     s.projection = static_cast<Projection>(pj);
-    int bsub = ints[12]; if (bsub < 1) bsub = 1; if (bsub > 32) bsub = 32;
+    int bsub = ints[13]; if (bsub < 1) bsub = 1; if (bsub > 32) bsub = 32;
     s.hypBorderSubdiv = bsub;
-    int fsub = ints[13]; if (fsub < 1) fsub = 1; if (fsub > 8)  fsub = 8;
+    int fsub = ints[14]; if (fsub < 1) fsub = 1; if (fsub > 8)  fsub = 8;
     s.hypFillSubdiv = fsub;
 
     s.borderWidth = floats[0];
-    s.borderColor = { floats[1], floats[2], floats[3] };
-    s.borderAlpha = floats[4];
-    s.bgColor = { floats[5], floats[6], floats[7] };
-    s.rippleAmount = floats[8];
-    s.zoom = floats[9];
-    s.rotation = floats[10];
-    s.panX = floats[11];
-    s.panY = floats[12];
-    s.brightness = floats[13];
-    s.depthAmount = floats[14];
-    s.rippleSpeed = floats[15];
-    s.matRoughness   = floats[16];
-    s.matMetalness   = floats[17];
-    s.matSheen       = floats[18];
-    s.matClearcoat   = floats[19];
-    s.matAnisotropy  = floats[20];
-    s.matIridescence = floats[21];
-    s.matEmissive    = floats[22];
-    s.matRelief      = floats[23];
-    s.lightAngle     = floats[24];
-    s.lightElevation = floats[25];
-    s.lightIntensity = floats[26];
-    s.lightWarmth    = floats[27];
-    s.lightAmbient   = floats[28];
-    s.matSheenColorR  = floats[29];
-    s.matSheenColorG  = floats[30];
-    s.matSheenColorB  = floats[31];
-    s.matIridThickMin = floats[32];
-    s.matIridThickMax = floats[33];
-    s.matRoughMod     = floats[34];
-    s.matMetalMod     = floats[35];
-    s.hypScale        = floats[36];
-    s.hypBoostX       = floats[37];
-    s.hypBoostY       = floats[38];
-    int base = 39;
+    s.borderFill = floats[1];
+    s.borderPoint = floats[2];
+    s.borderGap = floats[3];
+    s.borderColor = { floats[4], floats[5], floats[6] };
+    s.borderAlpha = floats[7];
+    s.bgColor = { floats[8], floats[9], floats[10] };
+    s.rippleAmount = floats[11];
+    s.zoom = floats[12];
+    s.rotation = floats[13];
+    s.panX = floats[14];
+    s.panY = floats[15];
+    s.brightness = floats[16];
+    s.depthAmount = floats[17];
+    s.rippleSpeed = floats[18];
+    s.matRoughness   = floats[19];
+    s.matMetalness   = floats[20];
+    s.matSheen       = floats[21];
+    s.matClearcoat   = floats[22];
+    s.matAnisotropy  = floats[23];
+    s.matIridescence = floats[24];
+    s.matEmissive    = floats[25];
+    s.matRelief      = floats[26];
+    s.lightAngle     = floats[27];
+    s.lightElevation = floats[28];
+    s.lightIntensity = floats[29];
+    s.lightWarmth    = floats[30];
+    s.lightAmbient   = floats[31];
+    s.matSheenColorR  = floats[32];
+    s.matSheenColorG  = floats[33];
+    s.matSheenColorB  = floats[34];
+    s.matIridThickMin = floats[35];
+    s.matIridThickMax = floats[36];
+    s.matRoughMod     = floats[37];
+    s.matMetalMod     = floats[38];
+    s.hypScale        = floats[39];
+    s.hypBoostX       = floats[40];
+    s.hypBoostY       = floats[41];
+    int base = 42;
     for (int i = 0; i < kMaxColors; ++i) {
         s.customOklch[i] = { floats[base + 3 * i + 0],
                              floats[base + 3 * i + 1],
@@ -240,21 +246,18 @@ Java_com_penrose_wallpaper_NativeBridge_setSystemInsets(JNIEnv*, jobject, jlong 
 // Renderer pointer — anything in the app/service can feed PCM or read
 // the latest analyzer features.
 JNIEXPORT void JNICALL
+Java_com_penrose_wallpaper_NativeBridge_configureAudio(JNIEnv*, jobject, jint sampleRate) {
+    penrose::globalAudioAnalyzer().configure(static_cast<int>(sampleRate));
+}
+
+JNIEXPORT void JNICALL
 Java_com_penrose_wallpaper_NativeBridge_pushAudio(JNIEnv* env, jobject,
-                                                 jfloatArray samples, jint count,
-                                                 jint sampleRate) {
+                                                 jfloatArray samples, jint count) {
     if (!samples || count <= 0) return;
     const jint len = env->GetArrayLength(samples);
     const int n = std::min(static_cast<int>(count), static_cast<int>(len));
-    // Reconfigure on rate change. Each producer (the audio thread) maps
-    // to a single AudioProcessor instance, so the static-local lastRate
-    // tracking is sufficient — no cross-thread races to worry about.
-    static int lastRate = 0;
-    if (sampleRate > 0 && sampleRate != lastRate) {
-        penrose::globalAudioAnalyzer().configure(sampleRate);
-        lastRate = sampleRate;
-    }
     jfloat* p = env->GetFloatArrayElements(samples, nullptr);
+    if (!p) return;
     penrose::globalAudioAnalyzer().pushPcm(p, n);
     env->ReleaseFloatArrayElements(samples, p, JNI_ABORT);
 }

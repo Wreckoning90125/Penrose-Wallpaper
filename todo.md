@@ -31,25 +31,17 @@ across files.
 
 ## Tilings
 
-- **Hat / Spectre einstein.** 2023
-  (Smith–Myers–Kaplan–Goodman-Strauss); documented metatile
-  substitution (H, T, P, F clusters), volume-hierarchic →
-  closure-verifiable exactly as Danzer was. Spectre is strictly chiral
-  (needs no reflections). Drops in as one `FamilySpec` row + one
-  geometry function. Detail: `docs/tilings/ROADMAP.md` *Obvious next
-  step* + `docs/tilings/catalogue.md`.
+- **Square-triangle / Shield / Socolar 12-fold.** Not the shipped
+  `Dodecagonal` de Bruijn rhomb-square family, but closely related:
+  the square-triangle display layer can reuse that machinery, while
+  Shield/Socolar need their own substitution or decoration mapping.
+  Detail: `docs/tilings/dodecagonal.md`.
 
-- **Square-triangle / Shield / Socolar 12-fold.** Largely a display
-  split of the existing dodecagonal rhombs (square+triangle); Shield
-  and Socolar are MLD with what we have. Detail:
-  `docs/tilings/dodecagonal.md`.
-
-- **Socolar–Taylor monotile.** Hierarchical; the tile is **not
-  connected**, so the `Tile` model would need a disconnected-tile
-  representation. Detail: `docs/tilings/ROADMAP.md`.
-
-- **Harriss 7-fold rhomb substitution.** Blocked on the rhomb-packing
-  closure solver below. Detail: `docs/tilings/heptagonal.md`.
+- **Harriss 7-fold rhomb substitution.** Separate from the shipped
+  `Heptagonal` multigrid rhombs and `Danzer` triangles. Implementing
+  it needs either a rhomb-packing closure solver or an explicit,
+  verifiable coordinate reconstruction of the published substitution
+  rule. Detail: `docs/tilings/heptagonal.md`.
 
 - **Endless home-screen pan.** Rework `Generative` from "grow the
   patch under view" to "translate the view across an unbounded
@@ -70,10 +62,6 @@ across files.
 
 ## Docs
 
-- **Bibliography refactor.** Convert each per-doc `### References`
-  block into short pointers into `docs/tilings/bibliography.md` (which
-  already holds the full citations). Mechanical pass over ~12 files.
-
 - **Per-family superspace / cut-and-project record.** For the de
   Bruijn families: document the higher-dimensional lattice + acceptance
   window. Detail: `docs/tilings/hyperbolic-and-tooling.md`.
@@ -81,13 +69,10 @@ across files.
 ## Tooling
 
 - **Rhomb-packing closure solver** (edge-match + interior-vertex
-  angle = 2π). Unblocks the Harriss 7-fold family and figure-free
-  derivation of rhomb substitutions. Detail: `docs/tilings/ROADMAP.md`.
+  angle = 2π). Gives a figure-free route to the Harriss 7-fold rhomb
+  substitution and other rhomb substitution reconstructions. Detail:
+  `docs/tilings/ROADMAP.md`.
 
 - **`verify_tilings.cpp`: substitution-matrix primitivity + Perron
   eigenvalue.** A tighter algebraic certificate alongside the area /
   coverage check. Detail: `docs/tilings/ROADMAP.md`.
-
-- **Delaney–Dress symbol classifier** for vertex configurations.
-  Rigorous, figure-free classification of every family's vertex stars.
-  Detail: `docs/tilings/ROADMAP.md`.

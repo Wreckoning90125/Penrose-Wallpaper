@@ -1,9 +1,9 @@
 package com.penrose.wallpaper
 
 import android.content.Context
-import android.content.SharedPreferences
 import android.os.Bundle
 import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.Choreographer
 import android.view.MotionEvent
@@ -12,10 +12,17 @@ import android.view.SurfaceView
 import android.view.WindowManager
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.edit
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import java.io.File
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import com.penrose.wallpaper.preset.SettingsSnapshotStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.hypot
 
 /**
  * Full-bleed live preview, optionally with the ImGui node-graph editor
@@ -28,37 +35,49 @@ import java.io.File
  * no main-thread NativeBridge calls.
  */
 class FullScreenActivity : AppCompatActivity(),
-                           SharedPreferences.OnSharedPreferenceChangeListener,
+                           SettingsStore.Listener,
                            Choreographer.FrameCallback {
 
     // Registered as a lifecycle observer; ON_DESTROY auto-fires
-    // session.shutdown(). The graph-save submitBlocking still needs
-    // an explicit call from onDestroy below because it has to happen-
-    // before shutdown drains the executor.
+    // session.shutdown(). The graph-save path still reads from the
+    // renderer before shutdown drains the executor.
     private val session = RendererSession("PenroseFull")
         .also { lifecycle.addObserver(it) }
 
-    private val prefs: SharedPreferences by lazy {
-        getSharedPreferences(Settings.PREFS_NAME, Context.MODE_PRIVATE)
-    }
+    private lateinit var settingsStore: SettingsStore
+    private var settingsListenerRegistered = false
 
     private val choreographer: Choreographer by lazy { Choreographer.getInstance() }
     private var frameCallbackPosted = false
     private var startFrameNanos = 0L
 
     private var showGraphOnStart: Boolean = false
+    private var touchRouteGraph = false
+    private var graphEditorStopHandled = false
 
-    // True once surfaceCreated has queued loadGraphFromDisk. onStop only
+    // True once surfaceCreated has loaded the graph snapshot. onStop only
     // persists the graph when this is set — otherwise an activity that
     // is stopped before the surface ever came up would save the empty
     // default graph straight over the user's saved one. Main-thread only.
-    private var graphLoadedFromDisk: Boolean = false
+    private var graphLoadedFromStore: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
         showGraphOnStart = intent?.getBooleanExtra(EXTRA_SHOW_GRAPH, false) ?: false
 
+        lifecycleScope.launch {
+            settingsStore = withContext(Dispatchers.IO) {
+                SettingsStore.openWorking(this@FullScreenActivity)
+            }
+            initializePreview()
+            if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                registerSettingsListener()
+            }
+        }
+    }
+
+    private fun initializePreview() {
         // Bootstrap the native renderer. Fire-and-forget: the dispatcher's
         // FIFO order guarantees subsequent session.submit blocks see a
         // valid pointer.
@@ -116,10 +135,9 @@ class FullScreenActivity : AppCompatActivity(),
                 session.submit { ptr ->
                     NativeBridge.surfaceCreated(ptr, surface)
                     pushSettingsNow(ptr)
-                    loadGraphFromDisk(ptr)
+                    graphLoadedFromStore = loadGraphFromStore(ptr)
                     if (showGraphOnStart) NativeBridge.graphSetVisible(ptr, true)
                 }
-                graphLoadedFromDisk = true
                 // Choreographer.postFrameCallback must be called from a
                 // thread with a Looper. SurfaceHolder.Callback fires on
                 // main; do the arming here, not inside session.submit
@@ -143,8 +161,23 @@ class FullScreenActivity : AppCompatActivity(),
                 }
             }
         })
+    }
 
-        prefs.registerOnSharedPreferenceChangeListener(this)
+    override fun onStart() {
+        super.onStart()
+        registerSettingsListener()
+    }
+
+    private fun registerSettingsListener() {
+        if (!::settingsStore.isInitialized || settingsListenerRegistered) return
+        settingsStore.registerListener(this)
+        settingsListenerRegistered = true
+    }
+
+    private fun unregisterSettingsListener() {
+        if (!::settingsStore.isInitialized || !settingsListenerRegistered) return
+        settingsStore.unregisterListener(this)
+        settingsListenerRegistered = false
     }
 
     // Multi-touch state: ImGui drives a single mouse cursor, so we track ONE
@@ -157,6 +190,11 @@ class FullScreenActivity : AppCompatActivity(),
     private var longPressArmed: Boolean = false
     private var longPressDownX: Float = 0f
     private var longPressDownY: Float = 0f
+    private var viewP0Id = -1; private var viewP0x = 0f; private var viewP0y = 0f
+    private var viewP1Id = -1; private var viewP1x = 0f; private var viewP1y = 0f
+    private var viewPinchDist = 0f
+    private var viewPinchAngle = 0f
+    private var viewGestureTouched = false
     private val longPressRunnable = Runnable {
         // 500ms of no significant movement → synthetic right-click at the
         // touch-down point. The C++ ring translates this into ImGui's
@@ -174,26 +212,118 @@ class FullScreenActivity : AppCompatActivity(),
     private val touchSlopPx: Float by lazy {
         android.view.ViewConfiguration.get(this).scaledTouchSlop.toFloat()
     }
-    private val uiHandler = Handler(android.os.Looper.getMainLooper())
+    private val uiHandler = Handler(Looper.getMainLooper())
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        forwardTouchToSession(event)
-        // The full-screen view dismisses on a single-finger tap-up so the
-        // user can return to the settings activity; once the node editor
-        // is visible, dismissing this way is replaced by an in-overlay
-        // close button to avoid confusing tap collisions. The visibility
-        // gate is a synchronous render-thread query.
-        if (event.actionMasked == MotionEvent.ACTION_UP &&
-            event.pointerCount == 1) {
-            val graphVisible = session.query { ptr ->
-                NativeBridge.graphIsVisible(ptr)
-            } ?: false
-            if (!graphVisible) {
-                finish()
-                return true
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            touchRouteGraph = session.query { ptr -> NativeBridge.graphIsVisible(ptr) } ?: false
+        }
+        if (touchRouteGraph) {
+            forwardTouchToSession(event)
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                touchRouteGraph = false
+            }
+            return super.onTouchEvent(event) || true
+        }
+        handlePreviewTransformEvent(event)
+        return true
+    }
+
+    private fun handlePreviewTransformEvent(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                viewP0Id = event.getPointerId(0)
+                viewP0x = event.x
+                viewP0y = event.y
+                viewP1Id = -1
+                viewGestureTouched = false
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if (viewP1Id == -1) {
+                    val ix = event.actionIndex
+                    viewP1Id = event.getPointerId(ix)
+                    viewP1x = event.getX(ix)
+                    viewP1y = event.getY(ix)
+                    viewPinchDist = hypot(viewP1x - viewP0x, viewP1y - viewP0y).coerceAtLeast(1f)
+                    viewPinchAngle = atan2(viewP1y - viewP0y, viewP1x - viewP0x)
+                }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val i0 = event.findPointerIndex(viewP0Id)
+                val i1 = if (viewP1Id == -1) -1 else event.findPointerIndex(viewP1Id)
+                if (i1 >= 0 && i0 >= 0) {
+                    val nx0 = event.getX(i0)
+                    val ny0 = event.getY(i0)
+                    val nx1 = event.getX(i1)
+                    val ny1 = event.getY(i1)
+                    val newDist = hypot(nx1 - nx0, ny1 - ny0).coerceAtLeast(1f)
+                    val newAngle = atan2(ny1 - ny0, nx1 - nx0)
+                    val scale = newDist / viewPinchDist
+                    val rotDelta = newAngle - viewPinchAngle
+                    if (
+                        viewGestureTouched
+                        || abs(newDist - viewPinchDist) >= touchSlopPx
+                        || abs(rotDelta) * viewPinchDist >= touchSlopPx
+                    ) {
+                        session.submit { ptr -> NativeBridge.touchPinch(ptr, scale, rotDelta) }
+                        viewPinchDist = newDist
+                        viewPinchAngle = newAngle
+                        viewP0x = nx0; viewP0y = ny0
+                        viewP1x = nx1; viewP1y = ny1
+                        viewGestureTouched = true
+                    }
+                } else if (i0 >= 0) {
+                    val nx = event.getX(i0)
+                    val ny = event.getY(i0)
+                    val dx = nx - viewP0x
+                    val dy = ny - viewP0y
+                    if (viewGestureTouched || dx * dx + dy * dy >= touchSlopPx * touchSlopPx) {
+                        session.submit { ptr -> NativeBridge.touchMove(ptr, dx, dy) }
+                        viewP0x = nx
+                        viewP0y = ny
+                        viewGestureTouched = true
+                    }
+                }
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                val id = event.getPointerId(event.actionIndex)
+                if (id == viewP1Id) {
+                    viewP1Id = -1
+                } else if (id == viewP0Id) {
+                    viewP0Id = viewP1Id
+                    viewP0x = viewP1x
+                    viewP0y = viewP1y
+                    viewP1Id = -1
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                viewP0Id = -1
+                viewP1Id = -1
+                if (viewGestureTouched) {
+                    viewGestureTouched = false
+                    commitPreviewViewToSettings()
+                } else {
+                    finish()
+                }
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                viewP0Id = -1
+                viewP1Id = -1
+                if (viewGestureTouched) {
+                    viewGestureTouched = false
+                    commitPreviewViewToSettings()
+                }
             }
         }
-        return super.onTouchEvent(event) || true
+    }
+
+    private fun commitPreviewViewToSettings() {
+        val out = session.query { ptr ->
+            val out = FloatArray(4)
+            NativeBridge.readView(ptr, out)
+            out
+        } ?: return
+        persistView(out)
     }
 
     private fun forwardTouchToSession(event: MotionEvent) {
@@ -276,44 +406,55 @@ class FullScreenActivity : AppCompatActivity(),
         if (dx * dx + dy * dy > touchSlopPx * touchSlopPx) cancelLongPress()
     }
 
-    override fun onSharedPreferenceChanged(sp: SharedPreferences?, key: String?) {
+    override fun onSettingChanged(key: String?) {
         session.submit { ptr ->
             pushSettingsNow(ptr)
+            if (key == Settings.KEY_GRAPH_REVISION) loadGraphFromStore(ptr)
             NativeBridge.drawFrame(ptr)
         }
     }
 
     override fun onStop() {
-        // Persist the modulation graph here, while the renderer is fully
-        // alive and healthy — NOT during onDestroy's teardown. Only the
-        // node editor (showGraphOnStart) can have changed the graph; the
-        // plain preview never edits it, so it has nothing to save. Also
-        // skipped if the surface never came up, which would write the
-        // empty default graph over the user's real one. Render-thread
-        // only: graphSave walks the node map handler_.update() mutates.
-        if (graphLoadedFromDisk && showGraphOnStart) {
-            session.submitBlocking { ptr ->
-                saveGraphToDiskOnRenderThread(ptr)
+        val closeGraphEditor = showGraphOnStart && !isChangingConfigurations() && !isFinishing()
+        val graphSave = if (graphLoadedFromStore && showGraphOnStart) {
+            val json = readGraphFromRenderer()
+            if (json == null) {
+                null
+            } else {
+                try {
+                    SettingsSnapshotStore.saveWorkingGraphAsync(settingsStore, json)
+                } catch (e: Exception) {
+                    Log.w(TAG, "graph save failed", e)
+                    null
+                }
             }
-            // Announce the new graph: bump the revision so the running
-            // wallpaper engine reloads the file it was just handed.
-            // Without this, edits made in the editor never reached the
-            // live wallpaper — only a preset load bumped the revision.
-            prefs.edit {
-                putLong(Settings.KEY_GRAPH_REVISION, System.currentTimeMillis())
-            }
+        } else {
+            null
         }
+        unregisterSettingsListener()
         super.onStop()
         // The node editor does not survive backgrounding: resuming a
         // half-torn-down ImGui + Vulkan editor surface was unreliable
         // (blank canvas, or a crash back to the menu). Finish it
-        // instead — the graph was just saved above, so reopening from
-        // the menu restores it into a clean, freshly-built editor.
+        // after the graph transaction completes, so reopening from the
+        // menu restores it into a clean, freshly-built editor.
         // Consistent and intentional: leaving the editor closes it. A
         // configuration change (rotation) is exempt — that is an
         // activity recreate, not the user leaving.
-        if (showGraphOnStart && !isChangingConfigurations() && !isFinishing()) {
-            finish()
+        if (closeGraphEditor && !graphEditorStopHandled) {
+            graphEditorStopHandled = true
+            if (graphSave == null) {
+                finish()
+                return
+            }
+            lifecycleScope.launch {
+                try {
+                    graphSave.await()
+                } catch (e: Exception) {
+                    Log.w(TAG, "graph save failed", e)
+                }
+                if (!isFinishing()) finish()
+            }
         }
     }
 
@@ -326,40 +467,36 @@ class FullScreenActivity : AppCompatActivity(),
         cancelLongPress()
         uiHandler.removeCallbacksAndMessages(null)
         disarmChoreographer()
-        prefs.unregisterOnSharedPreferenceChangeListener(this)
         super.onDestroy()
     }
 
     /**
-     * Graph state lives in `filesDir/modulation_graph.json` — written
-     * on destroy, read on create. Unlike the audio URI (which belongs
-     * to the running service), the user's hand-built modulation graph
-     * is meaningful work that should survive across launches. Render-
-     * thread only.
+     * Graph state lives in the working settings store.
+     * Unlike the audio URI (which belongs to the running service), the
+     * user's hand-built modulation graph is meaningful work that should
+     * survive across launches. Render-thread only.
      */
-    private fun loadGraphFromDisk(ptr: Long) {
-        val f = File(filesDir, "modulation_graph.json")
-        if (!f.exists()) return
+    private fun loadGraphFromStore(ptr: Long): Boolean {
         try {
-            val json = f.readText()
-            NativeBridge.graphLoad(ptr, json)
+            val json = SettingsSnapshotStore.storedGraphJson(settingsStore)
+            return NativeBridge.graphLoad(ptr, json)
         } catch (e: Exception) {
             Log.w(TAG, "graph load failed", e)
         }
+        return false
     }
 
-    /**
-     * Render-thread only. Reads the graph state out of the C++
-     * Renderer (handler_.getNodes() iteration) and writes it to
-     * filesDir/modulation_graph.json.
-     */
-    private fun saveGraphToDiskOnRenderThread(ptr: Long) {
+    private fun readGraphFromRenderer(): String? =
         try {
-            val json = NativeBridge.graphSave(ptr)
-            File(filesDir, "modulation_graph.json").writeText(json)
+            session.query { ptr -> NativeBridge.graphSave(ptr) }
         } catch (e: Exception) {
             Log.w(TAG, "graph save failed", e)
+            null
         }
+
+    private fun persistView(out: FloatArray) {
+        if (!::settingsStore.isInitialized) return
+        Settings.saveViewAsync(settingsStore, out[0], out[1], out[2], out[3])
     }
 
     private fun currentScreenSize(): Pair<Int, Int> {
@@ -370,7 +507,7 @@ class FullScreenActivity : AppCompatActivity(),
 
     /** Render-thread only. */
     private fun pushSettingsNow(ptr: Long) {
-        val s = Settings.load(prefs)
+        val s = settingsStore.settings()
         val (ints, floats) = s.toNative()
         NativeBridge.applySettings(ptr, ints, floats)
     }

@@ -1,7 +1,6 @@
 package com.penrose.wallpaper
 
 import android.content.Context
-import android.content.SharedPreferences
 import android.os.Bundle
 import android.util.Log
 import android.view.Choreographer
@@ -9,10 +8,19 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
-import java.io.File
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import com.penrose.wallpaper.preset.SettingsSnapshotStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.hypot
 
 /**
  * In-app preview host. A live-rendering [SurfaceView] fills the activity
@@ -29,7 +37,7 @@ import java.io.File
  * destroy, save and tear down").
  */
 class SettingsActivity : AppCompatActivity(),
-                         SharedPreferences.OnSharedPreferenceChangeListener,
+                         SettingsStore.Listener,
                          Choreographer.FrameCallback {
 
     // Registered as a lifecycle observer in onCreate; ON_DESTROY auto-
@@ -37,19 +45,17 @@ class SettingsActivity : AppCompatActivity(),
     private val session = RendererSession("PenrosePreview")
         .also { lifecycle.addObserver(it) }
 
-    private val prefs: SharedPreferences by lazy {
-        getSharedPreferences(Settings.PREFS_NAME, Context.MODE_PRIVATE)
-    }
+    private lateinit var settingsStore: SettingsStore
+    private var settingsListenerRegistered = false
+    private var pendingInitialSheet = false
 
     private val choreographer: Choreographer by lazy { Choreographer.getInstance() }
     private var frameCallbackPosted = false
     private var startFrameNanos = 0L
 
     // Single-tap-up detector used while the sheet is dismissed: tapping
-    // the preview brings the sheet back. Drag / multi-touch / pinch are
-    // not gestures we have a use for in the preview area today, so the
-    // detector only intercepts single-finger taps and forwards
-    // everything else through dispatchTouchEvent unchanged.
+    // the preview brings the sheet back. Drag / pinch gestures are handled
+    // below and persisted at touch-end like the wallpaper Engine path.
     private val previewTapDetector by lazy {
         GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapUp(e: MotionEvent): Boolean {
@@ -59,10 +65,34 @@ class SettingsActivity : AppCompatActivity(),
         })
     }
 
+    private var p0Id = -1; private var p0x = 0f; private var p0y = 0f
+    private var p1Id = -1; private var p1x = 0f; private var p1y = 0f
+    private var pinchDist = 0f
+    private var pinchAngle = 0f
+    private var previewGestureTouched = false
+    private var loadedWorkingGraphJson: String? = null
+    private val touchSlopPx: Float by lazy {
+        ViewConfiguration.get(this).scaledTouchSlop.toFloat()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
+        pendingInitialSheet = savedInstanceState == null
 
+        lifecycleScope.launch {
+            settingsStore = withContext(Dispatchers.IO) {
+                SettingsStore.openWorking(this@SettingsActivity)
+            }
+            initializePreview()
+            if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                registerSettingsListener()
+                maybeShowInitialSheet()
+            }
+        }
+    }
+
+    private fun initializePreview() {
         // Bootstrap the native renderer. Fire-and-forget: the dispatcher's
         // FIFO order guarantees any subsequent session.submit blocks
         // (surfaceCreated, settings, choreographer) see a valid pointer.
@@ -75,7 +105,7 @@ class SettingsActivity : AppCompatActivity(),
                 session.submit { ptr ->
                     NativeBridge.surfaceCreated(ptr, surface)
                     pushSettingsNow(ptr)
-                    loadGraphFromDisk(ptr)
+                    loadGraphFromStore(ptr)
                 }
                 // Choreographer methods require a Looper on the calling
                 // thread; the render dispatcher is a bare Thread with no
@@ -109,13 +139,6 @@ class SettingsActivity : AppCompatActivity(),
             }
         })
 
-        prefs.registerOnSharedPreferenceChangeListener(this)
-
-        if (savedInstanceState == null) {
-            SettingsBottomSheetDialogFragment()
-                .show(supportFragmentManager, TAG_SHEET)
-        }
-
         // Back from preview-only state finishes the activity. When the
         // sheet is showing, its own back-key listener handles back —
         // this callback's isEnabled gates only the preview-only case.
@@ -130,10 +153,49 @@ class SettingsActivity : AppCompatActivity(),
         })
     }
 
+    override fun onStart() {
+        super.onStart()
+        registerSettingsListener()
+        maybeShowInitialSheet()
+    }
+
+    override fun onStop() {
+        unregisterSettingsListener()
+        super.onStop()
+    }
+
+    private fun registerSettingsListener() {
+        if (!::settingsStore.isInitialized || settingsListenerRegistered) return
+        settingsStore.registerListener(this)
+        settingsListenerRegistered = true
+    }
+
+    private fun unregisterSettingsListener() {
+        if (!::settingsStore.isInitialized || !settingsListenerRegistered) return
+        settingsStore.unregisterListener(this)
+        settingsListenerRegistered = false
+    }
+
     private fun showSettingsSheetIfHidden() {
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
+        if (supportFragmentManager.isStateSaved) return
         if (supportFragmentManager.findFragmentByTag(TAG_SHEET) != null) return
         SettingsBottomSheetDialogFragment()
             .show(supportFragmentManager, TAG_SHEET)
+    }
+
+    private fun maybeShowInitialSheet() {
+        if (!pendingInitialSheet) return
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
+        if (supportFragmentManager.isStateSaved) return
+        pendingInitialSheet = false
+        showSettingsSheetIfHidden()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (!::settingsStore.isInitialized) return
+        syncWorkingGraphFromStore()
     }
 
     private fun currentScreenSize(): Pair<Int, Int> {
@@ -142,48 +204,87 @@ class SettingsActivity : AppCompatActivity(),
         return bounds.width() to bounds.height()
     }
 
-    override fun onSharedPreferenceChanged(sp: SharedPreferences?, key: String?) {
+    override fun onSettingChanged(key: String?) {
         session.submit { ptr ->
             pushSettingsNow(ptr)
+            if (key == Settings.KEY_GRAPH_REVISION) loadGraphFromStore(ptr)
             NativeBridge.drawFrame(ptr)
         }
     }
 
     /** Render-thread only. */
     private fun pushSettingsNow(ptr: Long) {
-        val s = Settings.load(prefs)
+        val s = settingsStore.settings()
         val (ints, floats) = s.toNative()
         NativeBridge.applySettings(ptr, ints, floats)
     }
 
     /**
-     * Read filesDir/modulation_graph.json (written by PresetStore or by
-     * FullScreenActivity's save path) into the active Renderer. Render-
-     * thread only.
+     * Read the working graph snapshot into the active Renderer.
+     * Render-thread only.
      */
-    private fun loadGraphFromDisk(ptr: Long) {
-        val f = File(filesDir, "modulation_graph.json")
-        if (!f.exists()) return
+    private fun loadGraphFromStore(ptr: Long) {
         try {
-            val json = f.readText()
-            NativeBridge.graphLoad(ptr, json)
+            val json = SettingsSnapshotStore.storedGraphJson(settingsStore)
+            if (json == loadedWorkingGraphJson) return
+            if (NativeBridge.graphLoad(ptr, json)) {
+                loadedWorkingGraphJson = json
+            } else {
+                Log.w(TAG, "graph load failed")
+            }
         } catch (e: Exception) {
             Log.w(TAG, "graph load failed", e)
         }
     }
 
+    private fun syncWorkingGraphFromStore() {
+        session.submit { ptr ->
+            loadGraphFromStore(ptr)
+            NativeBridge.drawFrame(ptr)
+        }
+    }
+
     /**
-     * Public hook called by the preset-loader after it has written
-     * the preset's graph JSON to disk. The caller always passes a
+     * Public hook called by the preset-loader before it commits the
+     * preset's graph JSON to the settings store. The caller always passes a
      * concrete JSON string ({"nodes":[],"links":[]} for presets that
      * have no graph block) so this method only needs the graphLoad
      * path.
      */
-    fun applyPresetGraph(json: String) {
-        session.submit { ptr ->
-            NativeBridge.graphLoad(ptr, json)
+    fun applyPresetGraph(json: String): Boolean =
+        session.query { ptr ->
+            val loaded = NativeBridge.graphLoad(ptr, json)
+            if (loaded) loadedWorkingGraphJson = json
             NativeBridge.drawFrame(ptr)
-        }
+            loaded
+        } ?: false
+
+    fun currentGraphJson(): String? =
+        session.query { ptr -> NativeBridge.graphSave(ptr) }
+
+    fun commitPreviewViewToSettings() {
+        val out = session.query { ptr ->
+            val out = FloatArray(4)
+            NativeBridge.readView(ptr, out)
+            out
+        } ?: return
+        persistView(out)
+    }
+
+    fun resetPreviewView() {
+        val out = session.query { ptr ->
+            NativeBridge.resetView(ptr)
+            val out = FloatArray(4)
+            NativeBridge.readView(ptr, out)
+            NativeBridge.drawFrame(ptr)
+            out
+        } ?: return
+        persistView(out)
+    }
+
+    private fun persistView(out: FloatArray) {
+        if (!::settingsStore.isInitialized) return
+        Settings.saveViewAsync(settingsStore, out[0], out[1], out[2], out[3])
     }
 
     override fun onDestroy() {
@@ -192,7 +293,6 @@ class SettingsActivity : AppCompatActivity(),
         // RendererSession.onDestroy on ON_DESTROY, no explicit call
         // needed here.
         disarmChoreographer()
-        prefs.unregisterOnSharedPreferenceChangeListener(this)
         super.onDestroy()
     }
 
@@ -223,6 +323,12 @@ class SettingsActivity : AppCompatActivity(),
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (supportFragmentManager.findFragmentByTag(TAG_SHEET) == null) {
+            previewTapDetector.onTouchEvent(event)
+            handlePreviewTransformEvent(event)
+            return true
+        }
+
         // Extract event payload synchronously on the main thread (MotionEvent
         // is recycled by the framework after this returns) and post a value
         // copy to the render dispatcher. The previous code read a
@@ -230,15 +336,86 @@ class SettingsActivity : AppCompatActivity(),
         // a TOCTOU window in which the render thread could free the
         // renderer before JNI dereferenced it.
         forwardTouchToSession(event)
-
-        // When the sheet is not showing, a single tap on the preview
-        // surface brings it back. The detector consumes single-tap-up
-        // only; everything else flows through to super (so the dialog
-        // can still handle drags / outside taps when it IS showing).
-        if (supportFragmentManager.findFragmentByTag(TAG_SHEET) == null) {
-            previewTapDetector.onTouchEvent(event)
-        }
         return super.dispatchTouchEvent(event)
+    }
+
+    private fun handlePreviewTransformEvent(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                p0Id = event.getPointerId(0)
+                p0x = event.x
+                p0y = event.y
+                p1Id = -1
+                previewGestureTouched = false
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if (p1Id == -1) {
+                    val ix = event.actionIndex
+                    p1Id = event.getPointerId(ix)
+                    p1x = event.getX(ix)
+                    p1y = event.getY(ix)
+                    pinchDist = hypot(p1x - p0x, p1y - p0y).coerceAtLeast(1f)
+                    pinchAngle = atan2(p1y - p0y, p1x - p0x)
+                }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val i0 = event.findPointerIndex(p0Id)
+                val i1 = if (p1Id == -1) -1 else event.findPointerIndex(p1Id)
+                if (i1 >= 0 && i0 >= 0) {
+                    val nx0 = event.getX(i0)
+                    val ny0 = event.getY(i0)
+                    val nx1 = event.getX(i1)
+                    val ny1 = event.getY(i1)
+                    val newDist = hypot(nx1 - nx0, ny1 - ny0).coerceAtLeast(1f)
+                    val newAngle = atan2(ny1 - ny0, nx1 - nx0)
+                    val scale = newDist / pinchDist
+                    val rotDelta = newAngle - pinchAngle
+                    if (
+                        previewGestureTouched
+                        || abs(newDist - pinchDist) >= touchSlopPx
+                        || abs(rotDelta) * pinchDist >= touchSlopPx
+                    ) {
+                        session.submit { ptr -> NativeBridge.touchPinch(ptr, scale, rotDelta) }
+                        pinchDist = newDist
+                        pinchAngle = newAngle
+                        p0x = nx0; p0y = ny0
+                        p1x = nx1; p1y = ny1
+                        previewGestureTouched = true
+                    }
+                } else if (i0 >= 0) {
+                    val nx = event.getX(i0)
+                    val ny = event.getY(i0)
+                    val dx = nx - p0x
+                    val dy = ny - p0y
+                    if (previewGestureTouched || dx * dx + dy * dy >= touchSlopPx * touchSlopPx) {
+                        session.submit { ptr -> NativeBridge.touchMove(ptr, dx, dy) }
+                        p0x = nx
+                        p0y = ny
+                        previewGestureTouched = true
+                    }
+                }
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                val ix = event.actionIndex
+                val id = event.getPointerId(ix)
+                if (id == p1Id) {
+                    p1Id = -1
+                } else if (id == p0Id) {
+                    p0Id = p1Id
+                    p0x = p1x
+                    p0y = p1y
+                    p1Id = -1
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                p0Id = -1
+                p1Id = -1
+                if (previewGestureTouched) {
+                    previewGestureTouched = false
+                    commitPreviewViewToSettings()
+                }
+            }
+        }
     }
 
     private fun forwardTouchToSession(event: MotionEvent) {

@@ -1,10 +1,10 @@
-// Renderer geometry pipeline: build the fill triangles and the
-// vertex-shader-expanded border-edge quads from the current Settings,
-// upload them to GPU buffers, and refresh the palette UBO.
+// Renderer geometry pipeline: build fill triangles and tile-local border-ring
+// triangles from the current Settings, upload them to GPU buffers, and refresh
+// the palette UBO.
 //
-// Owns the file-internal edge-deduplication structs and the world-space
-// border-width constant. Everything else (Vulkan resource handles,
-// Settings, view state) lives on the Renderer struct in renderer.h.
+// Owns the file-internal edge-visibility structs and geometry helpers.
+// Everything else (Vulkan resource handles, Settings, view state) lives on the
+// Renderer struct in renderer.h.
 
 #include "renderer/renderer.h"
 
@@ -14,23 +14,16 @@
 #include "tiling/penrose.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace penrose {
 
 namespace {
-
-// World-space half-width per unit of slider value. The slider stores
-// 0..600 and Kotlin maps it to 0..6; multiplied here, that yields
-// half-widths in roughly the 0..0.030 world-unit range at the gen-6
-// reference scale. updatePaletteUbo applies the per-generation
-// deflation factor on top.
-constexpr float kBorderWidthScale = 0.005f;
-constexpr float kPi = 3.14159265358979323846f;
 
 int typeBucketCount(const std::vector<Tile>& tiles, Family family, const ClassSpec& cs) {
     if (family != Family::GailiunasSpiral) return cs.typeBuckets > 0 ? cs.typeBuckets : 1;
@@ -39,9 +32,9 @@ int typeBucketCount(const std::vector<Tile>& tiles, Family family, const ClassSp
     return static_cast<int>(maxType) + 1;
 }
 
-// Edge-dedup map record. Each unique edge midpoint is hit by up to two
-// tiles; we record both kinds so hideSeam can decide whether the seam
-// is internal-to-rhombus (drop) or perimeter (keep).
+// Edge-visibility map record. Each unique edge midpoint is hit by up to two
+// tiles; we record both kinds so hideSeam can decide whether the seam is
+// internal-to-rhombus (drop) or part of the visible tile boundary (keep).
 struct EdgeRec {
     float    p1x, p1y, p2x, p2y;
     uint8_t  t1, t2;
@@ -70,19 +63,6 @@ struct EdgeKeyHash {
         mix(k.bx);
         mix(k.by);
         return std::hash<uint64_t>{}(h);
-    }
-};
-
-struct EndpointKey {
-    int32_t x, y;
-    bool operator==(const EndpointKey& o) const { return x == o.x && y == o.y; }
-};
-
-struct EndpointKeyHash {
-    size_t operator()(const EndpointKey& k) const noexcept {
-        const uint64_t a = static_cast<uint32_t>(k.x);
-        const uint64_t b = static_cast<uint32_t>(k.y);
-        return std::hash<uint64_t>{}(a * 0x9E3779B97F4A7C15ULL + b);
     }
 };
 
@@ -351,6 +331,446 @@ inline bool hideSeam(Family fam, EdgeKind k1, EdgeKind k2) {
     }
 }
 
+struct Point2 {
+    float x;
+    float y;
+};
+
+struct BorderTileEdge {
+    std::vector<Point2> pts;
+    bool visible = false;
+};
+
+inline Point2 add(Point2 a, Point2 b) { return { a.x + b.x, a.y + b.y }; }
+inline Point2 sub(Point2 a, Point2 b) { return { a.x - b.x, a.y - b.y }; }
+inline Point2 mul(Point2 a, float s) { return { a.x * s, a.y * s }; }
+inline float dot(Point2 a, Point2 b) { return a.x * b.x + a.y * b.y; }
+inline float cross(Point2 a, Point2 b) { return a.x * b.y - a.y * b.x; }
+inline float len(Point2 a) { return std::sqrt(dot(a, a)); }
+
+Point2 unit(Point2 p) {
+    const float l = len(p);
+    return l <= 1e-9f ? Point2{1.0f, 0.0f} : Point2{p.x / l, p.y / l};
+}
+
+Point2 lerp(Point2 a, Point2 b, float t) {
+    return { a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t };
+}
+
+float signedArea(const std::vector<Point2>& pts) {
+    float twice = 0.0f;
+    for (size_t i = 0; i < pts.size(); ++i) {
+        const Point2 a = pts[i];
+        const Point2 b = pts[(i + 1) % pts.size()];
+        twice += cross(a, b);
+    }
+    return twice * 0.5f;
+}
+
+EdgeKey canonicalEdgeKey(float ax, float ay, float bx, float by, float scale) {
+    Edge e{ ax, ay, bx, by, EdgeKind::ChairEdge, uint8_t{0} };
+    return canonicalEdgeKey(e, scale);
+}
+
+std::unordered_set<EdgeKey, EdgeKeyHash> visibleEdgeKeysForTiles(
+    const std::vector<Tile>& tiles,
+    Family family,
+    float keyScale
+) {
+    std::vector<Edge> edges;
+    size_t edgeCapacity = 0;
+    for (const Tile& tile : tiles) edgeCapacity += tile.vcount;
+    edges.reserve(edgeCapacity);
+    for (const Tile& tile : tiles) {
+        if (tile.vcount == 3) edgesPenrose(tile, edges);
+        else                  edgesChair(tile, edges);
+    }
+
+    std::unordered_map<EdgeKey, EdgeRec, EdgeKeyHash> edgeMap;
+    edgeMap.reserve(edges.size() / 2 + 16);
+    for (const Edge& e : edges) {
+        const EdgeKey key = canonicalEdgeKey(e, keyScale);
+        auto it = edgeMap.find(key);
+        if (it == edgeMap.end()) {
+            edgeMap.emplace(key, EdgeRec{ e.p1x, e.p1y, e.p2x, e.p2y,
+                                          e.tileType, uint8_t{0},
+                                          e.kind, EdgeKind::Leg, uint8_t{1}, false });
+        } else {
+            if (it->second.ownerCount == 1) {
+                it->second.t2 = e.tileType;
+                it->second.k2 = e.kind;
+                it->second.secondSet = true;
+            }
+            if (it->second.ownerCount < 255) ++it->second.ownerCount;
+        }
+    }
+
+    std::unordered_set<EdgeKey, EdgeKeyHash> visible;
+    visible.reserve(edgeMap.size());
+    for (const auto& kv : edgeMap) {
+        const EdgeRec& r = kv.second;
+        const bool sameTypeHiddenSeam = r.ownerCount == 2
+            && r.secondSet
+            && r.t1 == r.t2
+            && hideSeam(family, r.k1, r.k2);
+        if (!sameTypeHiddenSeam) visible.insert(kv.first);
+    }
+    return visible;
+}
+
+float averageTileRadius(const std::vector<Tile>& tiles) {
+    double sum = 0.0;
+    int count = 0;
+    for (const Tile& tile : tiles) {
+        const TilePoint c = tileAreaCentroid(tile);
+        for (int i = 0; i < tile.vcount; ++i) {
+            const double dx = static_cast<double>(tile.x[i]) - c.x;
+            const double dy = static_cast<double>(tile.y[i]) - c.y;
+            sum += std::sqrt(dx * dx + dy * dy);
+            ++count;
+        }
+    }
+    return count > 0 ? static_cast<float>(sum / count) : 1.0f;
+}
+
+Point2 radialUnproject(Point2 p, float scale) {
+    const float r = len(p);
+    if (r <= 1e-6f) return { 0.0f, 0.0f };
+    const float diskR = std::min(r, 0.999999f);
+    const float worldR = 2.0f * std::atanh(diskR) / std::max(scale, 1e-6f);
+    return mul(p, worldR / r);
+}
+
+Point2 radialProject(Point2 p, float scale);
+
+Point2 borderSourceFromGeometry(Point2 p, const Settings& settings) {
+    if (settings.projection != Projection::PoincareDisk) return p;
+    return radialUnproject(p, std::max(settings.hypScale, 1e-3f));
+}
+
+void pushBakedBorderTri(
+    std::vector<BorderVertex>& borders,
+    std::vector<uint32_t>& indices,
+    Point2 a,
+    Point2 b,
+    Point2 c,
+    const Settings& settings
+) {
+    if (std::fabs(cross(sub(b, a), sub(c, a))) <= 1e-12f) return;
+    const Point2 sourceA = borderSourceFromGeometry(a, settings);
+    const Point2 sourceB = borderSourceFromGeometry(b, settings);
+    const Point2 sourceC = borderSourceFromGeometry(c, settings);
+    const uint32_t base = static_cast<uint32_t>(borders.size());
+    borders.push_back({ a.x, a.y, sourceA.x, sourceA.y });
+    borders.push_back({ b.x, b.y, sourceB.x, sourceB.y });
+    borders.push_back({ c.x, c.y, sourceC.x, sourceC.y });
+    indices.push_back(base + 0);
+    indices.push_back(base + 1);
+    indices.push_back(base + 2);
+}
+
+void emitTileBorderRing(
+    const Tile& tile,
+    const Tile& visibilityTile,
+    const std::unordered_set<EdgeKey, EdgeKeyHash>& visible,
+    float keyScale,
+    int subdiv,
+    float halfWidth,
+    int joinStyle,
+    float fill,
+    float point,
+    float gap,
+    const Settings& settings,
+    std::vector<BorderVertex>& borders,
+    std::vector<uint32_t>& indices
+) {
+    const int k = tile.vcount;
+    if (k < 2) return;
+
+    const TilePoint centroidD = tileAreaCentroid(tile);
+    const Point2 centroid{ static_cast<float>(centroidD.x), static_cast<float>(centroidD.y) };
+    std::vector<Point2> corners;
+    std::vector<Point2> chord;
+    std::vector<BorderTileEdge> edges;
+    corners.reserve(k);
+    chord.reserve(k);
+    edges.reserve(k);
+
+    const int subCount = std::max(1, subdiv);
+    const float projectionScale = std::max(settings.hypScale, 1e-3f);
+    for (int e = 0; e < k; ++e) {
+        const int n = (e + 1) % k;
+        const Point2 a{ tile.x[e], tile.y[e] };
+        const Point2 b{ tile.x[n], tile.y[n] };
+        const Point2 sourceA{ visibilityTile.x[e], visibilityTile.y[e] };
+        const Point2 sourceB{ visibilityTile.x[n], visibilityTile.y[n] };
+        corners.push_back(a);
+        chord.push_back(unit(sub(b, a)));
+        BorderTileEdge edge{};
+        edge.visible = visible.find(canonicalEdgeKey(sourceA.x, sourceA.y, sourceB.x, sourceB.y, keyScale)) != visible.end();
+        edge.pts.reserve(static_cast<size_t>(subCount) + 1);
+        for (int s = 0; s <= subCount; ++s) {
+            const float t = static_cast<float>(s) / static_cast<float>(subCount);
+            const Point2 source = lerp(sourceA, sourceB, t);
+            const Point2 p = settings.projection == Projection::PoincareDisk
+                ? radialProject(source, projectionScale)
+                : source;
+            edge.pts.push_back(p);
+        }
+        edges.push_back(std::move(edge));
+    }
+
+    const bool ccw = signedArea(corners) >= 0.0f;
+    std::vector<Point2> inward;
+    inward.reserve(k);
+    for (Point2 d : chord) {
+        inward.push_back(ccw ? Point2{ -d.y, d.x } : Point2{ d.y, -d.x });
+    }
+
+    std::vector<bool> reflex;
+    reflex.reserve(k);
+    bool anyReflex = false;
+    for (int i = 0; i < k; ++i) {
+        const int ip = (i - 1 + k) % k;
+        const float turn = cross(chord[ip], chord[i]);
+        const bool isReflex = ccw ? turn < -1e-9f : turn > 1e-9f;
+        reflex.push_back(isReflex);
+        anyReflex = anyReflex || isReflex;
+    }
+
+    float centroidClearance = 1e30f;
+    float minEdge = 1e30f;
+    for (int e = 0; e < k; ++e) {
+        const Point2 a = corners[e];
+        const Point2 b = corners[(e + 1) % k];
+        const float dist = dot(sub(centroid, a), inward[e]);
+        if (dist > 0.0f) centroidClearance = std::min(centroidClearance, dist);
+        minEdge = std::min(minEdge, len(sub(b, a)));
+    }
+    const float cap = anyReflex
+        ? minEdge * 0.2f
+        : std::min(minEdge * 0.42f, centroidClearance < 1e29f ? centroidClearance * 0.92f : minEdge * 0.42f);
+    const float h = std::min(halfWidth, cap);
+    if (h <= 1e-7f) return;
+
+    const float f = anyReflex ? 0.0f : std::clamp(fill, 0.0f, 1.0f);
+    const float g = anyReflex ? 0.0f : std::clamp(gap, 0.0f, 1.0f);
+
+    std::vector<Point2> apex;
+    apex.reserve(k);
+    for (int i = 0; i < k; ++i) {
+        const Point2 c = corners[i];
+        if (reflex[i]) {
+            apex.push_back(c);
+            continue;
+        }
+        const int ip = (i - 1 + k) % k;
+        Point2 bis = unit(add(inward[ip], inward[i]));
+        float tMin = 1e30f;
+        for (int j = 0; j < k; ++j) {
+            const Point2 o = add(corners[j], mul(inward[j], h));
+            const Point2 d = chord[j];
+            const float denom = cross(bis, d);
+            if (std::fabs(denom) < 1e-9f) continue;
+            const float t = cross(sub(o, c), d) / denom;
+            if (t > 1e-6f && t < tMin) tMin = t;
+        }
+        if (tMin >= 1e29f) tMin = h;
+        const Point2 m = add(c, mul(bis, tMin));
+        apex.push_back(add(m, mul(sub(centroid, m), f)));
+    }
+
+    const auto pull = [](Point2 from, Point2 toward, float dist) {
+        const Point2 d = sub(toward, from);
+        const float l = len(d);
+        if (l <= 1e-9f) return from;
+        const float actual = std::min(dist, l * 0.5f);
+        return add(from, mul(d, actual / l));
+    };
+    const auto foot = [&](int e, int at) {
+        return add(corners[at], mul(inward[e], h));
+    };
+
+    const float cut = joinStyle == 0 ? 0.0f : (joinStyle == 1 ? 1.8f : 1.2f) * h;
+    std::vector<Point2> innerStart;
+    std::vector<Point2> innerEnd;
+    innerStart.reserve(k);
+    innerEnd.reserve(k);
+    for (int e = 0; e < k; ++e) {
+        const int cs = e;
+        const int ce = (e + 1) % k;
+        Point2 a0 = reflex[cs] ? foot(e, cs) : apex[cs];
+        Point2 a1 = reflex[ce] ? foot(e, ce) : apex[ce];
+        if (cut > 0.0f && !reflex[cs]) a0 = pull(a0, reflex[ce] ? foot(e, ce) : apex[ce], cut);
+        if (cut > 0.0f && !reflex[ce]) a1 = pull(a1, reflex[cs] ? foot(e, cs) : apex[cs], cut);
+        innerStart.push_back(a0);
+        innerEnd.push_back(a1);
+    }
+
+    const float trim = std::clamp(point, 0.0f, 1.0f) * h * 2.2f;
+    for (int e = 0; e < k; ++e) {
+        if (!edges[e].visible) continue;
+        const std::vector<Point2>& ep = edges[e].pts;
+        if (ep.size() < 2) continue;
+        const Point2 a0 = innerStart[e];
+        const Point2 a1 = innerEnd[e];
+        const int last = static_cast<int>(ep.size()) - 1;
+        float edgeLen = 0.0f;
+        for (int j = 0; j < last; ++j) edgeLen += len(sub(ep[j + 1], ep[j]));
+        const auto endShift = [&](int corner) {
+            return reflex[corner] || edgeLen <= 0.0f ? 0.0f : std::min(0.45f, trim / edgeLen);
+        };
+        const float tA = endShift(e);
+        const float tB = 1.0f - endShift((e + 1) % k);
+        const auto outerAt = [&](float t) {
+            const float s = t * static_cast<float>(last);
+            const int j = std::max(0, std::min(last - 1, static_cast<int>(std::floor(s))));
+            const float frac = s - static_cast<float>(j);
+            return lerp(ep[j], ep[j + 1], frac);
+        };
+        const float gapZone = g > 0.0f && edgeLen > 0.0f ? std::min(0.45f, (h * 1.5f) / edgeLen) : 0.0f;
+        const auto innerAt = [&](float t) {
+            Point2 p = lerp(a0, a1, t);
+            if (gapZone > 1e-6f) {
+                if (!reflex[e]) {
+                    const float w = g * std::clamp((tA + gapZone - t) / gapZone, 0.0f, 1.0f);
+                    if (w > 0.0f) p = add(p, mul(sub(corners[e], p), w));
+                }
+                const int next = (e + 1) % k;
+                if (!reflex[next]) {
+                    const float w = g * std::clamp((t - (tB - gapZone)) / gapZone, 0.0f, 1.0f);
+                    if (w > 0.0f) p = add(p, mul(sub(corners[next], p), w));
+                }
+            }
+            return p;
+        };
+
+        std::vector<float> params{ tA, tB };
+        for (int j = 1; j < last; ++j) {
+            const float t = static_cast<float>(j) / static_cast<float>(last);
+            if (t > tA + 1e-9f && t < tB - 1e-9f) params.push_back(t);
+        }
+        if (gapZone > 1e-6f) {
+            const float knees[2] = { tA + gapZone, tB - gapZone };
+            for (float knee : knees) {
+                if (knee > tA + 1e-9f && knee < tB - 1e-9f) params.push_back(knee);
+            }
+        }
+        std::sort(params.begin(), params.end());
+        params.erase(std::unique(params.begin(), params.end(),
+                                 [](float a, float b) { return std::fabs(a - b) <= 1e-7f; }),
+                     params.end());
+        for (size_t i = 0; i + 1 < params.size(); ++i) {
+            const float t0 = params[i];
+            const float t1 = params[i + 1];
+            if (t1 <= t0 + 1e-9f) continue;
+            const Point2 o0 = outerAt(t0);
+            const Point2 o1 = outerAt(t1);
+            const Point2 i0 = innerAt(t0);
+            const Point2 i1 = innerAt(t1);
+            pushBakedBorderTri(borders, indices, o0, o1, i1, settings);
+            pushBakedBorderTri(borders, indices, o0, i1, i0, settings);
+        }
+    }
+
+    for (int i = 0; i < k; ++i) {
+        const int ip = (i - 1 + k) % k;
+        if (!edges[ip].visible || !edges[i].visible) continue;
+        const Point2 v = corners[i];
+        const Point2 cIn = innerEnd[ip];
+        const Point2 cOut = innerStart[i];
+        if (reflex[i]) {
+            pushBakedBorderTri(borders, indices, v, cIn, cOut, settings);
+        } else if (trim > 1e-9f) {
+            continue;
+        } else if (cut > 0.0f && joinStyle == 1) {
+            const Point2 m = apex[i];
+            constexpr int kRoundSegments = 4;
+            Point2 prev = cIn;
+            for (int s = 1; s <= kRoundSegments; ++s) {
+                const float t = static_cast<float>(s) / static_cast<float>(kRoundSegments);
+                const float it = 1.0f - t;
+                const Point2 p{
+                    it * it * cIn.x + 2.0f * it * t * m.x + t * t * cOut.x,
+                    it * it * cIn.y + 2.0f * it * t * m.y + t * t * cOut.y,
+                };
+                pushBakedBorderTri(borders, indices, v, prev, p, settings);
+                prev = p;
+            }
+        } else if (cut > 0.0f) {
+            pushBakedBorderTri(borders, indices, v, cIn, cOut, settings);
+        }
+    }
+}
+
+Point2 radialProject(Point2 p, float scale) {
+    const float r = len(p);
+    if (r <= 1e-6f) return { 0.0f, 0.0f };
+    const float d = std::tanh(r * scale * 0.5f);
+    return mul(p, d / r);
+}
+
+Tile radialProjectedTile(const Tile& tile, float scale) {
+    Tile projected = tile;
+    for (int i = 0; i < projected.vcount; ++i) {
+        const Point2 p = radialProject({ tile.x[i], tile.y[i] }, scale);
+        projected.x[i] = p.x;
+        projected.y[i] = p.y;
+    }
+    return projected;
+}
+
+std::vector<Tile> borderGeometryTiles(const std::vector<Tile>& tiles, const Settings& settings) {
+    if (settings.projection != Projection::PoincareDisk) return tiles;
+    std::vector<Tile> projected;
+    projected.reserve(tiles.size());
+    const float scale = std::max(settings.hypScale, 1e-3f);
+    for (const Tile& tile : tiles) projected.push_back(radialProjectedTile(tile, scale));
+    return projected;
+}
+
+void buildBorderMeshForTiles(
+    const std::vector<Tile>& tiles,
+    const Settings& settings,
+    std::vector<BorderVertex>& borders,
+    std::vector<uint32_t>& borderIndices
+) {
+    if (!settings.borderOn) return;
+
+    constexpr float kKeyScale = 1.0e5f;
+    const auto visible = visibleEdgeKeysForTiles(tiles, settings.family, kKeyScale);
+    const int sub = (settings.projection == Projection::PoincareDisk)
+                    ? settings.hypBorderSubdiv : 1;
+    const std::vector<Tile> geometryTiles = borderGeometryTiles(tiles, settings);
+    const float requestedHalfWidth = averageTileRadius(geometryTiles)
+        * std::clamp(settings.borderWidth, 0.0f, 6.0f)
+        / 6.0f
+        * 0.08f;
+    size_t reserveVertices = 0;
+    for (const Tile& tile : geometryTiles) {
+        reserveVertices += static_cast<size_t>(tile.vcount) * static_cast<size_t>(sub) * 6u;
+        reserveVertices += static_cast<size_t>(tile.vcount) * 12u;
+    }
+    borders.reserve(reserveVertices);
+    borderIndices.reserve(reserveVertices);
+    for (size_t i = 0; i < tiles.size(); ++i) {
+        emitTileBorderRing(
+            geometryTiles[i],
+            tiles[i],
+            visible,
+            kKeyScale,
+            sub,
+            requestedHalfWidth,
+            settings.borderJoin,
+            settings.borderFill,
+            settings.borderPoint,
+            settings.borderGap,
+            settings,
+            borders,
+            borderIndices);
+    }
+}
+
 } // namespace
 
 // -----------------------------------------------------------------------------
@@ -361,7 +781,7 @@ bool Renderer::buildGeometry() {
     if (effectiveGeneration_ < settings_.generation) {
         effectiveGeneration_ = settings_.generation;
     }
-    auto tiles = generate(settings_.family, settings_.seedIdx, effectiveGeneration_);
+    std::vector<Tile> tiles = generate(settings_.family, settings_.seedIdx, effectiveGeneration_);
     if (tiles.empty()) { LOGE("buildGeometry: empty tile set"); return false; }
 
     Classification cls = classify(tiles, settings_.family, settings_.colorMode, settings_.colorCount);
@@ -542,417 +962,172 @@ bool Renderer::buildGeometry() {
             if (rSq > rSqMax) rSqMax = rSq;
         }
     }
-    fillVertexCount_ = static_cast<uint32_t>(fills.size());
-    geomMinX_ = minX; geomMaxX_ = maxX;
-    geomMinY_ = minY; geomMaxY_ = maxY;
-    geomRmax_ = std::sqrt(rSqMax);
-
-    // -------- Border geometry: indexed triangle quads -----------------------
-    // For each unique edge (dedup via canonical endpoint pair, honouring hideSeam) we
-    // emit 4 verts + 6 indices. The vertex shader expands each quad by
-    // ± borderHalfWidth along the edge normal, so the slider yields a real
-    // world-space thickness.
+    // -------- Border geometry: tile-local inset rings -------------------------
+    // Mirrors the web borderJoin model: every tile owns a ring inset toward its
+    // own interior, with shared-edge visibility determined by the same seam rule
+    // as the fill mesh. The generated triangles are real border geometry; the
+    // border vertex shader only applies the view/projection/wave transform.
     std::vector<BorderVertex> borders;
-    std::vector<uint32_t>     borderIndices;
-    if (settings_.borderOn) {
-        std::vector<Edge> edges;
-        size_t edgeCapacity = 0;
-        for (const Tile& t : tiles) edgeCapacity += t.vcount;
-        edges.reserve(edgeCapacity);
-        for (const Tile& t : tiles) {
-            if (t.vcount == 3) edgesPenrose(t, edges);
-            else               edgesChair(t, edges);
-        }
-
-        // In Poincaré-disk projection, straight world-space edges map to
-        // straight clip-space chords (the shader projects per-vertex,
-        // clip-space interpolation is linear). Splitting each edge into
-        // hypBorderSubdiv sub-segments before the dedup map sees them
-        // gives a polyline that approximates the true hyperbolic
-        // geodesic arc; the dedup map keeps a sub-segment's two
-        // endpoints shared with the adjacent tile's matching
-        // sub-segment, so the border still draws once per shared edge.
-        const int sub = (settings_.projection == Projection::PoincareDisk)
-                        ? settings_.hypBorderSubdiv : 1;
-        if (sub > 1) {
-            std::vector<Edge> tess;
-            tess.reserve(edges.size() * sub);
-            for (const Edge& e : edges) {
-                const float dx = e.p2x - e.p1x;
-                const float dy = e.p2y - e.p1y;
-                float prevX = e.p1x, prevY = e.p1y;
-                for (int k = 1; k <= sub; ++k) {
-                    const float t = static_cast<float>(k) / static_cast<float>(sub);
-                    const float curX = e.p1x + dx * t;
-                    const float curY = e.p1y + dy * t;
-                    tess.push_back(Edge{ prevX, prevY, curX, curY, e.kind, e.tileType });
-                    prevX = curX; prevY = curY;
-                }
-            }
-            edges = std::move(tess);
-        }
-
-        std::unordered_map<EdgeKey, EdgeRec, EdgeKeyHash> edgeMap;
-        edgeMap.reserve(edges.size() / 2 + 16);
-        constexpr float kKeyScale = 1.0e5f;
-        for (const Edge& e : edges) {
-            const EdgeKey key = canonicalEdgeKey(e, kKeyScale);
-            auto it = edgeMap.find(key);
-            if (it == edgeMap.end()) {
-                EdgeRec r{ e.p1x, e.p1y, e.p2x, e.p2y,
-                           e.tileType, uint8_t{0},
-                           e.kind, EdgeKind::Leg, uint8_t{1}, false };
-                edgeMap.emplace(key, r);
-            } else {
-                if (it->second.ownerCount == 1) {
-                    it->second.t2 = e.tileType;
-                    it->second.k2 = e.kind;
-                    it->second.secondSet = true;
-                }
-                if (it->second.ownerCount < 255) ++it->second.ownerCount;
-            }
-        }
-        // -------- Miter joinery pre-pass ---------------------------------
-        // The naive emit (two endpoints sharing the edge's perpendicular
-        // normal) gives perpendicular butt ends that overlap on one side
-        // and gap on the other wherever a vertex's interior angle isn't
-        // 90° — visible cog-pattern on every Penrose star vertex.
-        //
-        // The fix is the same carpentry trick the Canonical-Surface rib
-        // renderer uses: at each shared endpoint find the angularly-
-        // adjacent edges, offset both incident edge centre-lines toward
-        // the same angular wedge, and use the offset-line intersection as
-        // the shared corner. Clamp the miter length at kMiterLimit ×
-        // halfWidth so a near-degenerate acute joint can't fire a spike
-        // off into space.
-        //
-        // Planar-graph subtlety: a Penrose vertex may have 2..7 edges
-        // meeting at it (sun, star, ace, ...). We sort the incident edges
-        // by tangent angle around the vertex and, for each edge end,
-        // miter the +1 side with the CCW-adjacent neighbour and the -1
-        // side with the CW-adjacent neighbour. Two collinear sub-segments
-        // of the same parent edge (the disk-mode subdivision case) give
-        // a near-180° joint where the offset lines are effectively
-        // parallel, so the miter falls back to the edge normal at scale 1.
-        //
-        // Edge identity uses full endpoint pairs; this pass still builds a
-        // looser endpoint hash over kept edges so joinery can find every
-        // incident angular neighbour at a graph vertex.
-        std::vector<const EdgeRec*> keptEdges;
-        keptEdges.reserve(edgeMap.size());
-        for (const auto& kv : edgeMap) {
-            const EdgeRec& r = kv.second;
-            if (r.ownerCount == 2 && r.secondSet && r.t1 == r.t2 && hideSeam(settings_.family, r.k1, r.k2)) continue;
-            const float dx = r.p2x - r.p1x;
-            const float dy = r.p2y - r.p1y;
-            if ((dx * dx + dy * dy) < 1e-12f) continue;
-            keptEdges.push_back(&r);
-        }
-        // Per-edge cached tangent — computed once, reused twice (once
-        // per endpoint when computing each end's miter).
-        struct EdgeGeom { float tx, ty; };
-        std::vector<EdgeGeom> egeom(keptEdges.size());
-        for (size_t i = 0; i < keptEdges.size(); ++i) {
-            const EdgeRec& r = *keptEdges[i];
-            const float dx = r.p2x - r.p1x;
-            const float dy = r.p2y - r.p1y;
-            const float inv = 1.0f / std::sqrt(dx * dx + dy * dy);
-            egeom[i].tx = dx * inv;
-            egeom[i].ty = dy * inv;
-        }
-        // Endpoint hash. For each shared endpoint we collect (edge_idx,
-        // end (0=p1, 1=p2), outward-tangent-angle) entries; we'll sort
-        // by angle to find each entry's CCW + CW neighbours.
-        struct EndRef {
-            uint32_t edgeIdx;
-            uint8_t  end;     // 0 = p1, 1 = p2
-            float    angle;   // atan2 of outward tangent at this endpoint
-        };
-        // Endpoint clustering is intentionally looser than the edge-pair
-        // dedup above. It only needs to collect incident kept edges at the
-        // same graph vertex so the join pass can see its angular neighbours.
-        constexpr float kEndpointKeyScale = 1.0e3f;
-        std::unordered_map<EndpointKey, std::vector<EndRef>, EndpointKeyHash> endHash;
-        endHash.reserve(keptEdges.size());
-        auto endpointKey = [&](float x, float y) {
-            return EndpointKey{ quantizeCoord(x, kEndpointKeyScale),
-                                quantizeCoord(y, kEndpointKeyScale) };
-        };
-        for (uint32_t i = 0; i < keptEdges.size(); ++i) {
-            const EdgeRec& r = *keptEdges[i];
-            const EdgeGeom& g = egeom[i];
-            // Outward tangent at p1 points TOWARD p2 → (+tx,+ty).
-            // Outward tangent at p2 points TOWARD p1 → (-tx,-ty).
-            endHash[endpointKey(r.p1x, r.p1y)].push_back(
-                EndRef{ i, 0, std::atan2( g.ty,  g.tx) });
-            endHash[endpointKey(r.p2x, r.p2y)].push_back(
-                EndRef{ i, 1, std::atan2(-g.ty, -g.tx) });
-        }
-        // Sort each endpoint's incident list by angle once so the
-        // per-corner CCW / CW neighbour lookup is O(log n) (and n ≤ 7
-        // in practice, so this is functionally O(1)).
-        for (auto& kv : endHash) {
-            auto& v = kv.second;
-            std::sort(v.begin(), v.end(),
-                      [](const EndRef& a, const EndRef& b) { return a.angle < b.angle; });
-        }
-        // Miter computation for one corner. `tSelf` is the OUTWARD
-        // tangent of THIS edge at this endpoint (away from the vertex);
-        // `tNbr` is the OUTWARD tangent of the angular neighbour at the
-        // same endpoint. `sideSign` picks the angular wedge: +1 is the
-        // CCW side of tSelf, -1 is the CW side.
-        //
-        // Real joinery is the intersection of the two offset edge lines,
-        // not merely a bisector direction. In half-width units, offset
-        // self toward the wedge by sideSign * left(tSelf), offset the
-        // neighbour toward that same wedge by -sideSign * left(tNbr), and
-        // intersect those two lines. Adjacent edges compute the same point,
-        // so their ribbons meet instead of stopping with an angled gap.
-        constexpr float kMiterLimit = 4.0f;
-        auto computeMiter = [](float tSelfX, float tSelfY,
-                               float tNbrX,  float tNbrY,
-                               float sideSign) -> std::array<float, 3> {
-            const float selfNx = -tSelfY * sideSign;
-            const float selfNy =  tSelfX * sideSign;
-            const float nbrNx  =  tNbrY  * sideSign;  // -sideSign * left(tNbr)
-            const float nbrNy  = -tNbrX  * sideSign;
-
-            const float det = tSelfX * tNbrY - tSelfY * tNbrX;
-            if (std::fabs(det) < 1e-5f) {
-                // Straight-through or doubled-back pair: the two offset
-                // lines are parallel or nearly so, and the rectangle side
-                // is already the correct continuation.
-                return { selfNx, selfNy, 1.0f };
-            }
-
-            // Solve selfN + u * tSelf = nbrN + v * tNbr.
-            const float rx = nbrNx - selfNx;
-            const float ry = nbrNy - selfNy;
-            const float u = (rx * tNbrY - ry * tNbrX) / det;
-            float mx = selfNx + u * tSelfX;
-            float my = selfNy + u * tSelfY;
-            float scale = std::sqrt(mx * mx + my * my);
-            if (scale < 1e-5f) return { selfNx, selfNy, 1.0f };
-
-            mx /= scale;
-            my /= scale;
-            if (scale > kMiterLimit) scale = kMiterLimit;
-            if (scale < 1.0f)        scale = 1.0f;
-            return { mx, my, scale };
-        };
-        // Look up the angular neighbour of (edgeIdx, end) on the given
-        // angular side. Same-ray entries are a zero-width wedge, not a
-        // join; skip them so edge-to-partial-edge and hidden-seam remnants
-        // still miter against the next real angular sector.
-        auto findNeighbour = [&endHash](EndpointKey key, uint32_t edgeIdx,
-                                        uint8_t end, int angularOffset)
-                              -> const EndRef* {
-            auto it = endHash.find(key);
-            if (it == endHash.end()) return nullptr;
-            const auto& list = it->second;
-            if (list.size() < 2) return nullptr;
-            int selfIdx = -1;
-            for (int j = 0; j < static_cast<int>(list.size()); ++j) {
-                if (list[j].edgeIdx == edgeIdx && list[j].end == end) {
-                    selfIdx = j;
-                    break;
-                }
-            }
-            if (selfIdx < 0) return nullptr;
-            const int n = static_cast<int>(list.size());
-            constexpr float kSameRayEps = 1e-4f;
-            const float selfAngle = list[selfIdx].angle;
-            for (int step = 1; step < n; ++step) {
-                const int nbr = ((selfIdx + step * angularOffset) % n + n) % n;
-                float delta = list[nbr].angle - selfAngle;
-                while (delta <= -kPi) delta += 2.0f * kPi;
-                while (delta >   kPi) delta -= 2.0f * kPi;
-                if (std::fabs(delta) > kSameRayEps) return &list[nbr];
-            }
-            return nullptr;
-        };
-        auto sideNormal = [&](uint32_t edgeIdx, float worldSide) -> std::array<float, 3> {
-            const EdgeGeom& g = egeom[edgeIdx];
-            return { -g.ty * worldSide, g.tx * worldSide, 1.0f };
-        };
-
-        auto worldSideForLocal = [](uint8_t end, float localSide) {
-            return (end == 0) ? localSide : -localSide;
-        };
-
-        auto endpointPos = [&](const EndRef& ref) -> std::array<float, 2> {
-            const EdgeRec& r = *keptEdges[ref.edgeIdx];
-            return (ref.end == 0) ? std::array<float, 2>{ r.p1x, r.p1y }
-                                  : std::array<float, 2>{ r.p2x, r.p2y };
-        };
-
-        // Compute the world-side miter at one edge endpoint. The canonical
-        // world-+1 direction = perp(canonical tangent T_us). At p1 the
-        // outward tangent IS T_us, so world/local agree. At p2 the outward
-        // tangent is -T_us, so the world-side mapping flips.
-        auto cornerMiter = [&](uint32_t edgeIdx, uint8_t end,
-                               float worldSide) -> std::array<float, 3> {
-            const EdgeRec& r = *keptEdges[edgeIdx];
-            const EdgeGeom& g = egeom[edgeIdx];
-            const EndpointKey k1 = endpointKey(r.p1x, r.p1y);
-            const EndpointKey k2 = endpointKey(r.p2x, r.p2y);
-            const EndpointKey vkey = (end == 0) ? k1 : k2;
-            const float outX = (end == 0) ?  g.tx : -g.tx;
-            const float outY = (end == 0) ?  g.ty : -g.ty;
-            const float localSide = worldSideForLocal(end, worldSide);
-            const int   angOff    = (localSide > 0.0f) ? +1 : -1;
-            const EndRef* nbr = findNeighbour(vkey, edgeIdx, end, angOff);
-            if (!nbr) {
-                // Boundary / single-incident-edge — extrude along the
-                // canonical world normal, scale 1 (butt).
-                return sideNormal(edgeIdx, worldSide);
-            }
-            const EdgeGeom& gn = egeom[nbr->edgeIdx];
-            float tNbrX, tNbrY;
-            if (nbr->end == 0) { tNbrX =  gn.tx; tNbrY =  gn.ty; }
-            else               { tNbrX = -gn.tx; tNbrY = -gn.ty; }
-            return computeMiter(outX, outY, tNbrX, tNbrY, localSide);
-        };
-
-        // -------- Emit border quads with per-corner miter ----------------
-        // Edge quads carry the long stroked rectangles. Joint fans below
-        // explicitly fill the convex sectors between adjacent incident
-        // edges, so clamp/rounding at one edge cannot leave a sliver.
-        borders.reserve(keptEdges.size() * 4 + endHash.size() * 8);
-        borderIndices.reserve(keptEdges.size() * 6 + endHash.size() * 12);
-        for (uint32_t i = 0; i < keptEdges.size(); ++i) {
-            const EdgeRec& r = *keptEdges[i];
-            // World -1 side / world +1 side at each endpoint.
-            const auto p1n = cornerMiter(i, 0, -1.0f);
-            const auto p1m = cornerMiter(i, 0,  1.0f);
-            const auto p2n = cornerMiter(i, 1, -1.0f);
-            const auto p2m = cornerMiter(i, 1,  1.0f);
-            const uint32_t base = static_cast<uint32_t>(borders.size());
-            // Each vertex carries its own EXTRUSION DIRECTION in
-            // (mx, my) — already signed for the world side it belongs
-            // to. The shader extrudes by halfWidth · miterScale along
-            // (mx, my) in Euclidean mode and projects it through the
-            // Jacobian in disk mode (no separate tangent needed: the
-            // projection acts the same on any world-tangent-shaped
-            // vector, miter direction included).
-            borders.push_back({ r.p1x, r.p1y, p1n[0], p1n[1], p1n[2], 0.0f, 0.0f, 0.0f });
-            borders.push_back({ r.p1x, r.p1y, p1m[0], p1m[1], p1m[2], 0.0f, 0.0f, 0.0f });
-            borders.push_back({ r.p2x, r.p2y, p2n[0], p2n[1], p2n[2], 0.0f, 0.0f, 0.0f });
-            borders.push_back({ r.p2x, r.p2y, p2m[0], p2m[1], p2m[2], 0.0f, 0.0f, 0.0f });
-            borderIndices.push_back(base + 0);
-            borderIndices.push_back(base + 1);
-            borderIndices.push_back(base + 2);
-            borderIndices.push_back(base + 1);
-            borderIndices.push_back(base + 3);
-            borderIndices.push_back(base + 2);
-        }
-
-        // -------- Emit explicit convex joint fans ------------------------
-        // A mitered edge quad alone can still leave a visible sliver when a
-        // true offset-line intersection is clamped or when neighbouring
-        // edges come from different emit paths. For each real angular
-        // sector below 180° at a shared endpoint, emit a small fan from the
-        // graph vertex through the two edge normals and their miter corners.
-        // The border fragment is uniform colour, so overdraw is harmless.
-        for (const auto& kv : endHash) {
-            const auto& list = kv.second;
-            if (list.size() < 2) continue;
-
-            std::vector<int> reps;
-            reps.reserve(list.size());
-            for (int i = 0; i < static_cast<int>(list.size()); ++i) {
-                bool duplicateRay = false;
-                for (int r : reps) {
-                    float delta = list[i].angle - list[r].angle;
-                    while (delta <= -kPi) delta += 2.0f * kPi;
-                    while (delta >   kPi) delta -= 2.0f * kPi;
-                    if (std::fabs(delta) <= 1e-4f) {
-                        duplicateRay = true;
-                        break;
-                    }
-                }
-                if (!duplicateRay) reps.push_back(i);
-            }
-            if (reps.size() < 2) continue;
-
-            for (int ri = 0; ri < static_cast<int>(reps.size()); ++ri) {
-                const EndRef& a = list[reps[ri]];
-                const EndRef& b = list[reps[(ri + 1) % reps.size()]];
-                float delta = b.angle - a.angle;
-                while (delta <= 0.0f) delta += 2.0f * kPi;
-                if (delta <= 1e-4f || delta >= kPi - 1e-4f) continue;
-
-                const auto p = endpointPos(a);
-                const float aWorld = worldSideForLocal(a.end,  1.0f);
-                const float bWorld = worldSideForLocal(b.end, -1.0f);
-                const auto aNorm = sideNormal(a.edgeIdx, aWorld);
-                const auto bNorm = sideNormal(b.edgeIdx, bWorld);
-                const auto aMit  = cornerMiter(a.edgeIdx, a.end, aWorld);
-                const auto bMit  = cornerMiter(b.edgeIdx, b.end, bWorld);
-
-                const uint32_t base = static_cast<uint32_t>(borders.size());
-                borders.push_back({ p[0], p[1], 0.0f,     0.0f,     0.0f,     0.0f, 0.0f, 0.0f });
-                borders.push_back({ p[0], p[1], aNorm[0], aNorm[1], aNorm[2], 0.0f, 0.0f, 0.0f });
-                borders.push_back({ p[0], p[1], aMit[0],  aMit[1],  aMit[2],  0.0f, 0.0f, 0.0f });
-                borders.push_back({ p[0], p[1], bMit[0],  bMit[1],  bMit[2],  0.0f, 0.0f, 0.0f });
-                borders.push_back({ p[0], p[1], bNorm[0], bNorm[1], bNorm[2], 0.0f, 0.0f, 0.0f });
-                borderIndices.push_back(base + 0);
-                borderIndices.push_back(base + 1);
-                borderIndices.push_back(base + 2);
-                borderIndices.push_back(base + 0);
-                borderIndices.push_back(base + 2);
-                borderIndices.push_back(base + 3);
-                borderIndices.push_back(base + 0);
-                borderIndices.push_back(base + 3);
-                borderIndices.push_back(base + 4);
-            }
-        }
-    }
-    borderIndexCount_ = static_cast<uint32_t>(borderIndices.size());
+    std::vector<uint32_t> borderIndices;
+    buildBorderMeshForTiles(tiles, settings_, borders, borderIndices);
 
     // -------- Upload to GPU --------------------------------------------------
-    // Geometry rebuild is cold-path (settings change), not per-frame, so
-    // always free+reallocate rather than tracking size deltas.
-    auto reallocBuffer = [&](VkBuffer& buf, VkDeviceMemory& mem, VkDeviceSize size,
-                             VkBufferUsageFlags usage) {
-        if (buf) { vkDestroyBuffer(device_, buf, nullptr); buf = VK_NULL_HANDLE; }
-        if (mem) { vkFreeMemory(device_, mem, nullptr); mem = VK_NULL_HANDLE; }
-        if (size == 0) return true;
-        return createBuffer(size, usage,
-                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                            buf, mem);
+    // Allocate and populate replacements first. Only after every buffer is ready
+    // do we destroy the previous renderable geometry, so allocation failures keep
+    // the last valid frame intact.
+    auto destroyBuffer = [&](VkBuffer& buf, VkDeviceMemory& mem) {
+        destroyBufferNow(buf, mem);
     };
 
     const VkDeviceSize fillSize      = sizeof(FillVertex)   * fills.size();
     const VkDeviceSize borderSize    = sizeof(BorderVertex) * borders.size();
     const VkDeviceSize borderIdxSize = sizeof(uint32_t)     * borderIndices.size();
-    if (!reallocBuffer(fillVertBuf_,   fillVertMem_,   fillSize,      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) return false;
-    if (!reallocBuffer(borderVertBuf_, borderVertMem_, borderSize,    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) return false;
-    if (!reallocBuffer(borderIdxBuf_,  borderIdxMem_,  borderIdxSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT))  return false;
 
-    if (fillSize > 0) {
+    VkBuffer nextFillVertBuf = VK_NULL_HANDLE;
+    VkDeviceMemory nextFillVertMem = VK_NULL_HANDLE;
+    VkBuffer nextBorderVertBuf = VK_NULL_HANDLE;
+    VkDeviceMemory nextBorderVertMem = VK_NULL_HANDLE;
+    VkBuffer nextBorderIdxBuf = VK_NULL_HANDLE;
+    VkDeviceMemory nextBorderIdxMem = VK_NULL_HANDLE;
+
+    const auto fail = [&]() {
+        destroyBuffer(nextFillVertBuf, nextFillVertMem);
+        destroyBuffer(nextBorderVertBuf, nextBorderVertMem);
+        destroyBuffer(nextBorderIdxBuf, nextBorderIdxMem);
+        return false;
+    };
+
+    const auto uploadBuffer = [&](VkDeviceSize size,
+                                  VkBufferUsageFlags usage,
+                                  const void* src,
+                                  VkBuffer& buf,
+                                  VkDeviceMemory& mem) {
+        if (size == 0) return true;
+        if (!createBuffer(size, usage,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                          buf, mem)) {
+            return false;
+        }
         void* mapped = nullptr;
-        VK_CHECK(vkMapMemory(device_, fillVertMem_, 0, fillSize, 0, &mapped));
-        std::memcpy(mapped, fills.data(), fillSize);
-        vkUnmapMemory(device_, fillVertMem_);
+        const VkResult result = vkMapMemory(device_, mem, 0, size, 0, &mapped);
+        if (result != VK_SUCCESS) {
+            LOGE("vkMapMemory(geometry) -> %d", static_cast<int>(result));
+            return false;
+        }
+        std::memcpy(mapped, src, size);
+        vkUnmapMemory(device_, mem);
+        return true;
+    };
+
+    if (!uploadBuffer(fillSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                      fills.data(), nextFillVertBuf, nextFillVertMem)) {
+        return fail();
     }
+    if (!uploadBuffer(borderSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                      borders.data(), nextBorderVertBuf, nextBorderVertMem)) {
+        return fail();
+    }
+    if (!uploadBuffer(borderIdxSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                      borderIndices.data(), nextBorderIdxBuf, nextBorderIdxMem)) {
+        return fail();
+    }
+
+    destroyBuffer(fillVertBuf_, fillVertMem_);
+    destroyBuffer(borderVertBuf_, borderVertMem_);
+    destroyBuffer(borderIdxBuf_, borderIdxMem_);
+
+    fillVertBuf_ = nextFillVertBuf;
+    fillVertMem_ = nextFillVertMem;
+    borderVertBuf_ = nextBorderVertBuf;
+    borderVertMem_ = nextBorderVertMem;
+    borderIdxBuf_ = nextBorderIdxBuf;
+    borderIdxMem_ = nextBorderIdxMem;
+    currentTiles_ = std::move(tiles);
+    fillVertexCount_ = static_cast<uint32_t>(fills.size());
+    borderIndexCount_ = static_cast<uint32_t>(borderIndices.size());
+    geomMinX_ = minX; geomMaxX_ = maxX;
+    geomMinY_ = minY; geomMaxY_ = maxY;
+    geomRmax_ = std::sqrt(rSqMax);
+
+    LOGI("geom: %zu tiles, %u fillVerts, %u borderIdx, bounds [%.3f,%.3f]-[%.3f,%.3f]",
+         currentTiles_.size(), fillVertexCount_, borderIndexCount_,
+         geomMinX_, geomMinY_, geomMaxX_, geomMaxY_);
+    return true;
+}
+
+bool Renderer::buildBorderGeometry() {
+    if (currentTiles_.empty()) {
+        currentTiles_ = generate(settings_.family, settings_.seedIdx, effectiveGeneration_);
+    }
+    const std::vector<Tile>& tiles = currentTiles_;
+    if (tiles.empty()) { LOGE("buildBorderGeometry: empty tile set"); return false; }
+
+    std::vector<BorderVertex> borders;
+    std::vector<uint32_t> borderIndices;
+    buildBorderMeshForTiles(tiles, settings_, borders, borderIndices);
+    auto destroyBuffer = [&](VkBuffer& buf, VkDeviceMemory& mem) {
+        destroyBufferNow(buf, mem);
+    };
+    const VkDeviceSize borderSize    = sizeof(BorderVertex) * borders.size();
+    const VkDeviceSize borderIdxSize = sizeof(uint32_t)     * borderIndices.size();
+
+    VkBuffer nextBorderVertBuf = VK_NULL_HANDLE;
+    VkDeviceMemory nextBorderVertMem = VK_NULL_HANDLE;
+    VkBuffer nextBorderIdxBuf = VK_NULL_HANDLE;
+    VkDeviceMemory nextBorderIdxMem = VK_NULL_HANDLE;
+
+    const auto fail = [&]() {
+        destroyBuffer(nextBorderVertBuf, nextBorderVertMem);
+        destroyBuffer(nextBorderIdxBuf, nextBorderIdxMem);
+        return false;
+    };
+
+    if (borderSize > 0
+            && !createBuffer(borderSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                             nextBorderVertBuf, nextBorderVertMem)) {
+        return fail();
+    }
+    if (borderIdxSize > 0
+            && !createBuffer(borderIdxSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                             nextBorderIdxBuf, nextBorderIdxMem)) {
+        return fail();
+    }
+
     if (borderSize > 0) {
         void* mapped = nullptr;
-        VK_CHECK(vkMapMemory(device_, borderVertMem_, 0, borderSize, 0, &mapped));
+        const VkResult result = vkMapMemory(device_, nextBorderVertMem, 0, borderSize, 0, &mapped);
+        if (result != VK_SUCCESS) {
+            LOGE("vkMapMemory(border vertex) -> %d", static_cast<int>(result));
+            return fail();
+        }
         std::memcpy(mapped, borders.data(), borderSize);
-        vkUnmapMemory(device_, borderVertMem_);
+        vkUnmapMemory(device_, nextBorderVertMem);
     }
     if (borderIdxSize > 0) {
         void* mapped = nullptr;
-        VK_CHECK(vkMapMemory(device_, borderIdxMem_, 0, borderIdxSize, 0, &mapped));
+        const VkResult result = vkMapMemory(device_, nextBorderIdxMem, 0, borderIdxSize, 0, &mapped);
+        if (result != VK_SUCCESS) {
+            LOGE("vkMapMemory(border index) -> %d", static_cast<int>(result));
+            return fail();
+        }
         std::memcpy(mapped, borderIndices.data(), borderIdxSize);
-        vkUnmapMemory(device_, borderIdxMem_);
+        vkUnmapMemory(device_, nextBorderIdxMem);
     }
 
-    LOGI("geom: %zu tiles, %u fillVerts, %u borderIdx, bounds [%.3f,%.3f]-[%.3f,%.3f]",
-         tiles.size(), fillVertexCount_, borderIndexCount_,
-         geomMinX_, geomMinY_, geomMaxX_, geomMaxY_);
+    retireBuffer(borderVertBuf_, borderVertMem_);
+    retireBuffer(borderIdxBuf_, borderIdxMem_);
+    borderVertBuf_ = nextBorderVertBuf;
+    borderVertMem_ = nextBorderVertMem;
+    borderIdxBuf_ = nextBorderIdxBuf;
+    borderIdxMem_ = nextBorderIdxMem;
+    borderIndexCount_ = static_cast<uint32_t>(borderIndices.size());
+
+    LOGI("border geom: %zu tiles, %u borderIdx", tiles.size(), borderIndexCount_);
     return true;
 }
 
@@ -994,16 +1169,10 @@ void Renderer::updatePaletteUbo() {
     ubo.anim[2] = static_cast<float>(familyInfo(settings_.family).waveSymmetry);
     ubo.anim[3] = pageOffset_;
 
-    // Border half-width in world space, scaled by the family's deflation
-    // rate per generation past 6 so the border tracks tile size: at gen 6
-    // the multiplier is 1; gen 7 shrinks by phi^-1 (Penrose) or 1/2
-    // (Chair). Without this, increasing generation while leaving the
-    // slider alone floods the image with border.
-    const float rate = deflationRate(settings_.family);
-    float genScale = 1.0f;
-    for (int g = 6; g < effectiveGeneration_; ++g) genScale *= rate;
-    for (int g = effectiveGeneration_; g < 6; ++g) genScale /= rate;
-    ubo.borderGeom[0] = settings_.borderWidth * kBorderWidthScale * genScale;
+    // Border width is baked into the tile-local ring vertices so the slider
+    // follows the web renderer's average-tile-radius contract. The row stays
+    // present to preserve the shared UBO layout.
+    ubo.borderGeom[0] = 0.0f;
     ubo.borderGeom[1] = 0.0f;
     ubo.borderGeom[2] = 0.0f;
     ubo.borderGeom[3] = 0.0f;

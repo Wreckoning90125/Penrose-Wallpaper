@@ -17,6 +17,8 @@
 
 namespace penrose {
 
+constexpr uint32_t kRendererFramesInFlight = 2;
+
 struct FrameSync {
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
     VkSemaphore renderFinished = VK_NULL_HANDLE;
@@ -24,9 +26,15 @@ struct FrameSync {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
 };
 
-// Live gesture state that updates faster than the SharedPreferences
+struct RetiredBuffer {
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    std::array<VkFence, kRendererFramesInFlight> fences{};
+};
+
+// Live gesture state that updates faster than the persisted settings
 // round trip. The same fields exist in Settings (zoom, rotation, panX,
-// panY) and are written back to SharedPreferences by Kotlin's
+// panY) and are written back to DataStore by Kotlin's
 // Settings.saveView() at touch-end. During a gesture the Kotlin layer
 // pushes deltas straight into these via touchPinch / touchMove for
 // sub-frame responsiveness; readView() lets Kotlin pull the latest
@@ -114,11 +122,16 @@ private:
     bool initDeviceForSurface();
     bool initPipeline();
     bool buildGeometry();
+    bool buildBorderGeometry();
     void updatePaletteUbo();
     void initImGuiIfNeeded();
+    void handleDeviceLost(const char* operation);
+    void handleFatalPresentFailure(const char* operation, VkResult result);
 
     bool createSurface(ANativeWindow* window);
     bool createSwapchain(int width, int height);
+    void destroySurfaceResources();
+    void destroyDeviceResources();
     void destroySwapchain();
     // Tear down and rebuild the swapchain + pipelines + per-frame
     // resources against the surface's current size. Used both by
@@ -143,6 +156,10 @@ private:
                       VkMemoryPropertyFlags props,
                       VkBuffer& buffer, VkDeviceMemory& memory);
     uint32_t findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags props) const;
+    void destroyBufferNow(VkBuffer& buffer, VkDeviceMemory& memory);
+    void retireBuffer(VkBuffer& buffer, VkDeviceMemory& memory);
+    void collectRetiredBuffers();
+    void destroyRetiredBuffersNow();
     bool loadShader(const char* assetPath, VkShaderModule& outModule);
 
     // Generative-pan: bump effectiveGeneration_ when the gesture has
@@ -169,7 +186,7 @@ private:
     VkShaderModule borderVert_ = VK_NULL_HANDLE;
     VkShaderModule borderFrag_ = VK_NULL_HANDLE;
 
-    static constexpr uint32_t kFramesInFlight = 2;
+    static constexpr uint32_t kFramesInFlight = kRendererFramesInFlight;
 
     // Palette UBO (set 0, binding 0). One mapped buffer/descriptor per
     // in-flight frame, so per-vsync graph/audio writes never overwrite a range
@@ -183,8 +200,7 @@ private:
     VkDeviceSize paletteUboSize_ = 0;
 
     // Fills: one triangle per Penrose tri, 4 triangles per Chair L-tromino.
-    // Borders: one indexed triangle quad per unique edge, vertex-shader
-    // expanded by `borderGeom.x` half-width.
+    // Borders: indexed tile-local border-ring triangles.
     VkBuffer fillVertBuf_ = VK_NULL_HANDLE;
     VkDeviceMemory fillVertMem_ = VK_NULL_HANDLE;
     uint32_t fillVertexCount_ = 0;
@@ -193,6 +209,7 @@ private:
     VkBuffer borderIdxBuf_ = VK_NULL_HANDLE;
     VkDeviceMemory borderIdxMem_ = VK_NULL_HANDLE;
     uint32_t borderIndexCount_ = 0;
+    std::vector<RetiredBuffer> retiredBuffers_;
 
     // Untransformed geometry extent (model space). `geomRmax_` is the
     // largest |vertex| over the actual emitted tile vertices, not the
@@ -251,7 +268,8 @@ private:
     float fxLightWarmth_    = 0.50f;
     float fxLightAmbient_   = 0.22f;
     // Hyperbolic-projection targets — slider/setting baseline plus the
-    // sum of any connected OutHypBoost{X,Y} / OutHypScale Target nodes.
+    // sum of any connected OutHypBoost{X,Y} Target nodes. hypScale stays
+    // static because Android border geometry is baked in projected disk space.
     // The boost is clamped to |b| <= 0.92 in the graph so the τ_b
     // transform never goes singular near the disk boundary.
     float fxHypBoostX_      = 0.0f;
@@ -262,6 +280,10 @@ private:
     // settings_.generation in Locked pan mode; grows past it in Generative
     // mode as the user drags.
     int effectiveGeneration_ = 0;
+    // Current generated tile topology. Full geometry rebuilds refresh it;
+    // border-only rebuilds reuse it so border sliders do not regenerate
+    // substitution geometry or drift from the fill mesh being drawn.
+    std::vector<Tile> currentTiles_;
     // Cumulative pan delta in pixels since the last growth trigger.
     float panAccumPx_ = 0.0f;
 

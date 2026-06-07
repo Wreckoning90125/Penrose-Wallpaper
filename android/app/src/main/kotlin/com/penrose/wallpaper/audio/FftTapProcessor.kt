@@ -19,7 +19,8 @@ import java.nio.ByteOrder
  */
 @OptIn(UnstableApi::class)
 internal class FftTapProcessor(
-    private val onPcm: (samples: FloatArray, frames: Int, sampleRate: Int) -> Unit,
+    private val onSampleRate: (sampleRate: Int) -> Unit,
+    private val onPcm: (samples: FloatArray, frames: Int) -> Unit,
 ) : BaseAudioProcessor() {
 
     private var pcmEncoding: Int = C.ENCODING_PCM_16BIT
@@ -31,6 +32,7 @@ internal class FftTapProcessor(
         pcmEncoding = inputAudioFormat.encoding
         channelCount = inputAudioFormat.channelCount.coerceAtLeast(1)
         sampleRate = inputAudioFormat.sampleRate
+        onSampleRate(sampleRate)
         return inputAudioFormat
     }
 
@@ -69,7 +71,7 @@ internal class FftTapProcessor(
                         for (c in 0 until channelCount) sum += sb.get().toInt()
                         scratch[f] = sum * inv
                     }
-                    onPcm(scratch, chunk, sampleRate)
+                    onPcm(scratch, chunk)
                     remaining -= chunk
                 }
             }
@@ -84,7 +86,7 @@ internal class FftTapProcessor(
                         for (c in 0 until channelCount) sum += fb.get()
                         scratch[f] = sum * inv
                     }
-                    onPcm(scratch, chunk, sampleRate)
+                    onPcm(scratch, chunk)
                     remaining -= chunk
                 }
             }
@@ -98,7 +100,7 @@ internal class FftTapProcessor(
                         for (c in 0 until channelCount) sum += ((dup.get().toInt() and 0xff) - 128)
                         scratch[f] = sum * inv
                     }
-                    onPcm(scratch, chunk, sampleRate)
+                    onPcm(scratch, chunk)
                     remaining -= chunk
                 }
             }

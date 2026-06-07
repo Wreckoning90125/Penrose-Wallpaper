@@ -53,7 +53,7 @@ author + year appear here.
 | Robinson triangle | 4 | — | P1 / P2 / P3 | Tiling is MLD to Penrose P1, P2, P3, and "Starfish, ivy leaf, hex" — rendered via the Penrose families |
 | Danzer triangles | 6 | 1996 | Danzer | The renderer's `Danzer` family is the 4-prototile F₇ triangle substitution (Nischke–Danzer 1996); see `heptagonal.md` |
 | Pinwheel tiles | 1 | 1994 | Pinwheel | Date is for publication of matching rules |
-| Socolar–Taylor tile | 1 | 2010 | — | Not a connected set; aperiodic hierarchical tiling |
+| Socolar–Taylor tile | 1 | 2010 | SocolarTaylor | Marked hexagonal monotile with local matching rules; rendered through the MLD-equivalent Akiyama-Lee half-hex substitution; shape-only 2D form is disconnected; aperiodic hierarchical, limit-periodic tiling |
 | Wang tiles | 20426 | 1966 | — | |
 | Wang tiles | 104 | 2008 | — | |
 | Wang tiles | 52 | 1971 | — | Enforce aperiodicity by forming an infinite hierarchy of square lattices |
@@ -108,9 +108,8 @@ author + year appear here.
 
 The renderer covers the three Penrose sets (P1, P2, P3) directly, plus the
 Binary, Pinwheel, Chair, dodecagonal/Ammann–Beenker/heptagonal (de Bruijn
-multigrid), Tübingen, Danzer 7-fold, Hat, and Spectre families; the
-Robinson-triangle and "starfish, ivy leaf, hex" sets are MLD to the Penrose
-tilings and so are covered through P1/P2/P3. The obvious near-term candidates
-are the **Socolar–Taylor** monotile and the **square-triangle** and **Shield /
-Socolar** sets, which are 12-fold and relate directly to our existing
-Dodecagonal family.
+multigrid), Tübingen, Danzer 7-fold, Hat, Spectre, and Socolar-Taylor
+families; the Robinson-triangle and "starfish, ivy leaf, hex" sets are MLD to
+the Penrose tilings and so are covered through P1/P2/P3. The obvious near-term
+12-fold candidates are the **square-triangle** and **Shield / Socolar** sets,
+which relate directly to our existing Dodecagonal family.

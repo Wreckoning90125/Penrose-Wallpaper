@@ -4,13 +4,14 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.annotation.OptIn
-import androidx.core.content.edit
 import androidx.core.net.toUri
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.penrose.wallpaper.NativeBridge
 import com.penrose.wallpaper.Settings
+import com.penrose.wallpaper.SettingsStore
+import com.penrose.wallpaper.StoredSetting
 
 /**
  * Foreground service hosting the file-playback ExoPlayer wrapped in a
@@ -44,7 +45,7 @@ class AudioPlaybackService : MediaSessionService() {
 
         // Display-only mirror of what the service is currently playing.
         // In-memory state owned by the running service — not persisted to
-        // SharedPreferences, never re-loaded on app launch. When the
+        // persistent settings, never re-loaded on app launch. When the
         // service dies or is stopped, this clears and the settings UI
         // shows "No file selected" again.
         @Volatile var currentDisplayName: String? = null
@@ -91,9 +92,11 @@ class AudioPlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        val p = AudioFilePlayer(this) { samples, frames, rate ->
-            NativeBridge.pushAudio(samples, frames, rate)
-        }
+        val p = AudioFilePlayer(
+            this,
+            onSampleRate = { rate -> NativeBridge.configureAudio(rate) },
+            onPcm = { samples, frames -> NativeBridge.pushAudio(samples, frames) },
+        )
         player = p
         session = MediaSession.Builder(this, p.exoPlayer).build()
     }
@@ -101,15 +104,13 @@ class AudioPlaybackService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
     /**
-     * Publish playback state to the shared settings prefs. The wallpaper
+     * Publish playback state to the working settings store. The wallpaper
      * engine observes [Settings.KEY_AUDIO_ACTIVE] and arms its per-frame
      * render loop while audio is active, so audio-reactive modulation
      * keeps evaluating on the home screen even with no time-based ripple.
      */
     private fun writeAudioActive(active: Boolean) {
-        getSharedPreferences(Settings.PREFS_NAME, Context.MODE_PRIVATE).edit {
-            putBoolean(Settings.KEY_AUDIO_ACTIVE, active)
-        }
+        SettingsStore.working(this).putAsync(Settings.KEY_AUDIO_ACTIVE, StoredSetting.BoolValue(active))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -121,6 +122,7 @@ class AudioPlaybackService : MediaSessionService() {
                     currentUri = uri
                     val parsed = uri.toUri()
                     currentDisplayName = parsed.lastPathSegment
+                    NativeBridge.clearAudio()
                     player?.play(parsed)
                 } else if (uri != null) {
                     player?.resume()

@@ -24,6 +24,7 @@
         <item>Pinwheel (right triangles)</item>
         <item>Chair (L-trominoes)</item>
         <item>Cairo pentagons</item>
+        <item>Socolar-Taylor half-hexes</item>
         <item>Gailiunas spirals</item>
     </string-array>
     <string-array name="family_values">
@@ -43,7 +44,19 @@
         <item>4</item>
         <item>2</item>
         <item>16</item>
+        <item>17</item>
         <item>15</item>
+    </string-array>
+
+    <string-array name="border_join_entries">
+        <item>Miter</item>
+        <item>Round</item>
+        <item>Bevel</item>
+    </string-array>
+    <string-array name="border_join_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
     </string-array>
 
     <!-- Seeds per family — SettingsFragment swaps these into the seed
@@ -222,6 +235,15 @@
     </string-array>
     <string-array name="seed_cairo_values">
         <item>0</item>
+    </string-array>
+
+    <string-array name="seed_socolar_taylor_entries">
+        <item>Generating triad</item>
+        <item>A hex supertile</item>
+    </string-array>
+    <string-array name="seed_socolar_taylor_values">
+        <item>0</item>
+        <item>1</item>
     </string-array>
 
     <string-array name="seed_gailiunas_spiral_entries">

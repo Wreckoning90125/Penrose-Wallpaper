@@ -60,7 +60,7 @@ const NodeDescriptor kDescriptors[] = {
     { NodeKind::OutLightAmbient,    "Ambient level",    "Target"   },
     { NodeKind::OutHypBoostX,      "Hyperbolic boost X","Target"   },
     { NodeKind::OutHypBoostY,      "Hyperbolic boost Y","Target"   },
-    { NodeKind::OutHypScale,       "Hyperbolic scale",  "Target"   },
+    { NodeKind::OutHypScale,       "Hyperbolic scale",  "Projection" },
     { NodeKind::SrcPageScroll,   "Home-screen scroll",  "Source"   },
     { NodeKind::SrcRms,          "RMS level",           "Source"   },
     { NodeKind::SrcSpectralFlux, "Spectral flux",       "Source"   },
@@ -115,11 +115,11 @@ inline float widestBandLabelWidth() {
 // Pixel width of the widest Target label. Used by every TargetNode to
 // pad its body so the right-side stack is uniform-width regardless of
 // which Targets the user has wired in. Iterates the contiguous Target
-// block in NodeKind (OutRippleAmount .. OutHypScale).
+// block in NodeKind (OutRippleAmount .. OutHypBoostY).
 inline float widestTargetLabelWidth() {
     float w = 0.0f;
     const int first = static_cast<int>(NodeKind::OutRippleAmount);
-    const int last  = static_cast<int>(NodeKind::OutHypScale);
+    const int last  = static_cast<int>(NodeKind::OutHypBoostY);
     for (int i = first; i <= last; ++i) {
         w = std::max(w, ImGui::CalcTextSize(
             descriptor(static_cast<NodeKind>(i)).label).x);
@@ -560,8 +560,8 @@ uint64_t Graph::addNode(NodeKind kind, float x, float y) {
     return spawn(handler_, kind, ImVec2(x, y), this);
 }
 
-// The contiguous Target block, OutRippleAmount .. OutHypScale inclusive.
-constexpr int kTargetCount = static_cast<int>(NodeKind::OutHypScale)
+// The contiguous Target block, OutRippleAmount .. OutHypBoostY inclusive.
+constexpr int kTargetCount = static_cast<int>(NodeKind::OutHypBoostY)
                            - static_cast<int>(NodeKind::OutRippleAmount) + 1;
 
 void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
@@ -606,21 +606,20 @@ void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
         &out.matAnisotropy, &out.matIridescence, &out.matEmissive, &out.matRelief,
         &out.lightAngle, &out.lightElevation, &out.lightIntensity,
         &out.lightWarmth, &out.lightAmbient,
-        &out.hypBoostX, &out.hypBoostY, &out.hypScale,
+        &out.hypBoostX, &out.hypBoostY,
     };
     // Hyperbolic boost clamped to |b| <= 0.92 component-wise so a runaway
     // graph can't drive the τ_b transform near the disk boundary where it
-    // becomes numerically singular. Scale stays positive — negative would
-    // invert the radial map sign and put the world outside the disk.
+    // becomes numerically singular.
     const float lo[kTargetCount] = {
         0.0f, 0.1f, 0.0f, 0.0f,  0.05f, 0.0f, 0.0f, 0.0f,  -1.0f, 0.0f, 0.0f, 0.0f,
         0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-        -0.92f, -0.92f, 0.05f,
+        -0.92f, -0.92f,
     };
     const float hi[kTargetCount] = {
         1.0f, 3.0f, 2.0f, 1.0f,  1.0f,  1.0f, 2.0f, 1.0f,   1.0f, 1.0f, 2.0f, 2.0f,
         360.0f, 90.0f, 2.0f, 1.0f, 1.0f,
-        0.92f, 0.92f, 3.0f,
+        0.92f, 0.92f,
     };
     for (int i = 0; i < kTargetCount; ++i)
         if (seen[i]) *slot[i] = std::clamp(*slot[i] + add[i], lo[i], hi[i]);

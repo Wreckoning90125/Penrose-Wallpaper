@@ -78,6 +78,18 @@ inline int log2int(int n) {
     return b;
 }
 
+inline uint32_t floatToBits(float value) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+inline float bitsToFloat(uint32_t bits) {
+    float value = 0.0f;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
 // Welford-style asymmetric EMA update of mean + variance, then return a
 // 0..1+ normalisation. Matches RollingStat::update + RollingStat::normalize
 // from lib.rs but specialised for our two scalar streams (onset, CWT).
@@ -191,6 +203,7 @@ void AudioAnalyzer::rebuildCwtKernels() {
 void AudioAnalyzer::configure(int sampleRate) {
     if (sampleRate <= 0) return;
     std::lock_guard<std::mutex> g(analyzeMutex_);
+    if (sampleRate_ == sampleRate) return;
     sampleRate_ = sampleRate;
     computeBandRanges();
     rebuildCwtKernels();
@@ -198,7 +211,10 @@ void AudioAnalyzer::configure(int sampleRate) {
 }
 
 void AudioAnalyzer::resetDspStateUnlocked() {
-    std::memset(ring_,             0, sizeof(ring_));
+    const uint32_t silence = floatToBits(0.0f);
+    for (std::atomic<uint32_t>& sample : ring_) {
+        sample.store(silence, std::memory_order_relaxed);
+    }
     std::memset(prevMag_,          0, sizeof(prevMag_));
     std::memset(onsetBuf_,         0, sizeof(onsetBuf_));
     std::memset(acf_,              0, sizeof(acf_));
@@ -228,7 +244,7 @@ void AudioAnalyzer::pushPcm(const float* samples, int count) {
     if (!samples || count <= 0) return;
     uint32_t w = writeIdx_.load(std::memory_order_relaxed);
     for (int i = 0; i < count; ++i) {
-        ring_[w & (kRingSamples - 1)] = samples[i];
+        ring_[w & (kRingSamples - 1)].store(floatToBits(samples[i]), std::memory_order_relaxed);
         ++w;
     }
     writeIdx_.store(w, std::memory_order_release);
@@ -356,10 +372,10 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
         fpsEma_ = fpsEma_ * 0.9f + instFps * 0.1f;
     }
 
-    // Snapshot the most recent kFftSize samples. The audio thread may
-    // race a write into the ring while we copy; that produces at most a
-    // few replaced samples at the trailing edge, which is inaudible at
-    // 60 Hz analysis rate.
+    // Snapshot the most recent kFftSize samples. The audio thread writes the
+    // SPSC ring with relaxed atomic sample stores followed by release-publishing
+    // writeIdx_; the acquire load here makes the published slice visible without
+    // blocking the audio callback.
     const uint32_t w = writeIdx_.load(std::memory_order_acquire);
     const uint32_t start = w - kFftSize;
     // Keep the un-windowed copy for the CWT (Morlet kernels already
@@ -369,7 +385,7 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
     float rawSumSq = 0.0f;
     float rawPeak = 0.0f;
     for (int i = 0; i < kFftSize; ++i) {
-        const float s = ring_[(start + i) & (kRingSamples - 1)];
+        const float s = bitsToFloat(ring_[(start + i) & (kRingSamples - 1)].load(std::memory_order_relaxed));
         rawWindow[i] = s;
         rawSumSq += s * s;
         rawPeak = std::max(rawPeak, std::fabs(s));

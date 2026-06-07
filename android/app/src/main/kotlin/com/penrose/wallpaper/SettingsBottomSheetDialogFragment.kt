@@ -23,7 +23,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialogFragment
  * wallpaper".
  *
  * Back-button behaviour:
- *   - On a sub-pref-screen, back asks SettingsFragment to navigate to
+ *   - On a sub-settings screen, back asks SettingsFragment to navigate to
  *     the main screen and the dialog stays open.
  *   - On the main screen, back dismisses the dialog. The host
  *     SettingsActivity then keeps showing the wallpaper preview with
@@ -45,9 +45,9 @@ class SettingsBottomSheetDialogFragment : BottomSheetDialogFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        if (childFragmentManager.findFragmentById(R.id.prefs_container) == null) {
+        if (childFragmentManager.findFragmentById(R.id.settings_container) == null) {
             childFragmentManager.commit {
-                add(R.id.prefs_container, SettingsFragment())
+                add(R.id.settings_container, SettingsFragment())
             }
         }
     }
@@ -82,15 +82,15 @@ class SettingsBottomSheetDialogFragment : BottomSheetDialogFragment() {
             }
         }
 
-        // Intercept the system back key so a back press on a sub-pref-
+        // Intercept the system back key so a back press on a sub-settings
         // screen unwinds the in-sheet navigation instead of nuking the
         // whole dialog. Only when we're already on the main screen do
         // we let the default (dismiss) fire.
         dialog.setOnKeyListener { _, keyCode, event ->
             if (keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
-                val prefs = childFragmentManager.findFragmentById(R.id.prefs_container)
+                val settings = childFragmentManager.findFragmentById(R.id.settings_container)
                         as? SettingsFragment
-                if (prefs != null && prefs.popBackToMainIfNeeded()) {
+                if (settings != null && settings.popBackToMainIfNeeded()) {
                     return@setOnKeyListener true
                 }
             }

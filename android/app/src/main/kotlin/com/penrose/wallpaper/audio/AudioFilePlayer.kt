@@ -29,10 +29,11 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 @OptIn(UnstableApi::class)
 internal class AudioFilePlayer(
     context: Context,
-    onPcm: (FloatArray, Int, Int) -> Unit,
+    onSampleRate: (Int) -> Unit,
+    onPcm: (FloatArray, Int) -> Unit,
 ) {
     private val appContext = context.applicationContext
-    private val tap = FftTapProcessor(onPcm)
+    private val tap = FftTapProcessor(onSampleRate, onPcm)
 
     private val renderersFactory = object : DefaultRenderersFactory(appContext) {
         override fun buildAudioSink(

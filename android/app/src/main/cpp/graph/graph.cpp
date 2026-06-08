@@ -283,9 +283,6 @@ public:
                 addIN<float>("signal", 0.0f, filt);
                 break;
             case NodeKind::OpBias:
-                p0 = 0.0f;
-                addIN<float>("signal", 0.0f, filt);
-                break;
             case NodeKind::OpSmooth:
                 p0 = 0.0f;
                 addIN<float>("signal", 0.0f, filt);

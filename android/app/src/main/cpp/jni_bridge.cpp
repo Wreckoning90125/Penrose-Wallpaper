@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
@@ -67,10 +68,14 @@ void pushInterleavedPcmToAnalyzer(const uint8_t* bytes, int byteCount, int forma
     while (frame < frames) {
         const int chunk = std::min(kChunkFrames, frames - frame);
         for (int f = 0; f < chunk; ++f) {
-            const uint8_t* src = bytes + (frame + f) * frameBytes;
+            const auto frameOffset =
+                static_cast<std::ptrdiff_t>(frame + f) * static_cast<std::ptrdiff_t>(frameBytes);
+            const uint8_t* src = bytes + frameOffset;
             float sum = 0.0f;
             for (int c = 0; c < channels; ++c) {
-                sum += audioSampleAt(src + c * bytesPerSample, format);
+                const auto sampleOffset =
+                    static_cast<std::ptrdiff_t>(c) * static_cast<std::ptrdiff_t>(bytesPerSample);
+                sum += audioSampleAt(src + sampleOffset, format);
             }
             mono[f] = sum / static_cast<float>(channels);
         }

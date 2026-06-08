@@ -10,6 +10,7 @@ import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -18,6 +19,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.penrose.wallpaper.preset.SettingsSnapshotStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
@@ -95,17 +97,34 @@ class FullScreenActivity : AppCompatActivity(),
         // native pointer directly.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                val handled = session.query { ptr ->
+                val graphClose = session.query { ptr ->
                     if (NativeBridge.graphIsVisible(ptr)) {
-                        NativeBridge.graphSetVisible(ptr, false)
-                        true
+                        val json = NativeBridge.graphSave(ptr)
+                        if (json.isBlank()) {
+                            GraphCloseAction.SaveFailed
+                        } else {
+                            NativeBridge.graphSetVisible(ptr, false)
+                            NativeBridge.drawFrame(ptr)
+                            GraphCloseAction.Save(json)
+                        }
                     } else {
-                        false
+                        GraphCloseAction.NavigateBack
                     }
-                } ?: false
-                if (!handled) {
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
+                } ?: GraphCloseAction.NavigateBack
+                when (graphClose) {
+                    is GraphCloseAction.Save -> queueGraphSave(graphClose.graphJson)
+                    GraphCloseAction.SaveFailed -> {
+                        Log.w(TAG, "graph save failed")
+                        Toast.makeText(
+                            this@FullScreenActivity,
+                            R.string.graph_save_failed_toast,
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                    GraphCloseAction.NavigateBack -> {
+                        isEnabled = false
+                        onBackPressedDispatcher.onBackPressed()
+                    }
                 }
             }
         })
@@ -416,20 +435,10 @@ class FullScreenActivity : AppCompatActivity(),
 
     override fun onStop() {
         val closeGraphEditor = showGraphOnStart && !isChangingConfigurations() && !isFinishing()
-        val graphSave = if (graphLoadedFromStore && showGraphOnStart) {
+        var graphSave: Deferred<Unit>? = null
+        if (graphLoadedFromStore && showGraphOnStart) {
             val json = readGraphFromRenderer()
-            if (json == null) {
-                null
-            } else {
-                try {
-                    SettingsSnapshotStore.saveWorkingGraphAsync(settingsStore, json)
-                } catch (e: Exception) {
-                    Log.w(TAG, "graph save failed", e)
-                    null
-                }
-            }
-        } else {
-            null
+            if (json != null) graphSave = queueGraphSave(json)
         }
         unregisterSettingsListener()
         super.onStop()
@@ -443,17 +452,15 @@ class FullScreenActivity : AppCompatActivity(),
         // activity recreate, not the user leaving.
         if (closeGraphEditor && !graphEditorStopHandled) {
             graphEditorStopHandled = true
-            if (graphSave == null) {
-                finish()
-                return
-            }
-            lifecycleScope.launch {
-                try {
-                    graphSave.await()
-                } catch (e: Exception) {
-                    Log.w(TAG, "graph save failed", e)
+            val save = graphSave
+            if (save != null) {
+                save.invokeOnCompletion {
+                    uiHandler.post {
+                        if (!isDestroyed) finish()
+                    }
                 }
-                if (!isFinishing()) finish()
+            } else {
+                finish()
             }
         }
     }
@@ -488,21 +495,49 @@ class FullScreenActivity : AppCompatActivity(),
 
     private fun readGraphFromRenderer(): String? =
         try {
-            session.query { ptr -> NativeBridge.graphSave(ptr) }
+            session.query { ptr ->
+                NativeBridge.graphSave(ptr)
+            }
+                ?.takeIf { it.isNotBlank() }
         } catch (e: Exception) {
             Log.w(TAG, "graph save failed", e)
             null
         }
 
+    private fun queueGraphSave(graphJson: String): Deferred<Unit>? {
+        if (graphJson.isBlank()) return null
+        if (!::settingsStore.isInitialized) return null
+        return try {
+            SettingsSnapshotStore.saveWorkingGraphAsync(settingsStore, graphJson).also { save ->
+                save.invokeOnCompletion { cause ->
+                    if (cause != null) Log.w(TAG, "graph save failed", cause)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "graph save failed", e)
+            null
+        }
+    }
+
     private fun persistView(out: FloatArray) {
         if (!::settingsStore.isInitialized) return
-        Settings.saveViewAsync(settingsStore, out[0], out[1], out[2], out[3])
+        try {
+            Settings.saveViewAsync(settingsStore, out[0], out[1], out[2], out[3])
+        } catch (e: Exception) {
+            Log.w(TAG, "view save failed", e)
+        }
     }
 
     private fun currentScreenSize(): Pair<Int, Int> {
         val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val bounds = wm.currentWindowMetrics.bounds
         return bounds.width() to bounds.height()
+    }
+
+    private sealed class GraphCloseAction {
+        data class Save(val graphJson: String) : GraphCloseAction()
+        object SaveFailed : GraphCloseAction()
+        object NavigateBack : GraphCloseAction()
     }
 
     /** Render-thread only. */

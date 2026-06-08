@@ -116,6 +116,7 @@ public:
     ui::ImGuiHost&   imGuiHost()  { return imGuiHost_; }
 
     void drawFrame();
+    bool flushGraphInput();
 
 private:
     bool initInstance();
@@ -130,6 +131,7 @@ private:
 
     bool createSurface(ANativeWindow* window);
     bool createSwapchain(int width, int height);
+    bool createSurfaceFrameResources(int width, int height);
     void destroySurfaceResources();
     void destroyDeviceResources();
     void destroySwapchain();

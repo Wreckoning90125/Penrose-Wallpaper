@@ -1,5 +1,7 @@
 package com.penrose.wallpaper
 
+import kotlinx.coroutines.Deferred
+
 /**
  * Strongly-typed projection of our persisted settings, encoded into the
  * int/float arrays the C++ renderer reads in `decodeSettings()`
@@ -312,16 +314,27 @@ internal class Settings(
             )
         }
 
-        fun saveViewAsync(
+        suspend fun saveView(
             store: SettingsStore,
             zoom: Float, rotation: Float, panX: Float, panY: Float,
         ) {
-            store.updateAsync {
+            store.updateAwait {
                 this[KEY_ZOOM] = StoredSetting.FloatValue(zoom)
                 this[KEY_ROTATION] = StoredSetting.FloatValue(rotation)
                 this[KEY_PAN_X] = StoredSetting.FloatValue(panX)
                 this[KEY_PAN_Y] = StoredSetting.FloatValue(panY)
             }
         }
+
+        fun saveViewAsync(
+            store: SettingsStore,
+            zoom: Float, rotation: Float, panX: Float, panY: Float,
+        ): Deferred<Unit> =
+            store.updateAsync {
+                this[KEY_ZOOM] = StoredSetting.FloatValue(zoom)
+                this[KEY_ROTATION] = StoredSetting.FloatValue(rotation)
+                this[KEY_PAN_X] = StoredSetting.FloatValue(panX)
+                this[KEY_PAN_Y] = StoredSetting.FloatValue(panY)
+            }
     }
 }

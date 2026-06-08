@@ -48,21 +48,26 @@ if(NOT imnodeflow_POPULATED)
     FetchContent_Populate(imnodeflow)
 endif()
 
-# Patch ImNodeFlow: its vendored copy of thedmd's imgui_extra_math.inl
-# defines operator*(float, ImVec2&) unconditionally, while ImGui ≥1.91
-# defines the same operator inside its IMGUI_DEFINE_MATH_OPERATORS block
-# (which ImNodeFlow.h force-enables). Two competing inline definitions
-# trip clang's ODR check. Gate the editor's copy behind the same version
-# check upstream used for ==/!=. Idempotent across rebuilds.
+# Patch ImNodeFlow: older copies of thedmd's imgui_extra_math.inl define
+# operator*(float, ImVec2&) unconditionally, while current ImGui defines the
+# same operator inside its IMGUI_DEFINE_MATH_OPERATORS block (which ImNodeFlow.h
+# force-enables). Two competing inline definitions trip clang's ODR check. Use
+# the same version guard carried by current ImNodeFlow, and leave already-guarded
+# sources untouched.
 set(_INF_INL "${imnodeflow_SOURCE_DIR}/src/imgui_extra_math.inl")
 file(READ "${_INF_INL}" _INF_INL_TEXT)
 string(FIND "${_INF_INL_TEXT}" "PENROSE_OPSTAR_GATED" _inf_patched)
-if(_inf_patched EQUAL -1)
-    string(REPLACE
-        "inline ImVec2 operator*(const float lhs, const ImVec2& rhs)\n{\n    return ImVec2(lhs * rhs.x, lhs * rhs.y);\n}"
-        "// PENROSE_OPSTAR_GATED: ImGui 1.91+ already defines this under IMGUI_DEFINE_MATH_OPERATORS.\n# if IMGUI_VERSION_NUM < 19002\ninline ImVec2 operator*(const float lhs, const ImVec2& rhs)\n{\n    return ImVec2(lhs * rhs.x, lhs * rhs.y);\n}\n# endif"
-        _INF_INL_TEXT "${_INF_INL_TEXT}")
+set(_INF_OPSTAR_OLD "inline ImVec2 operator*(const float lhs, const ImVec2& rhs)\n{\n    return ImVec2(lhs * rhs.x, lhs * rhs.y);\n}")
+string(FIND "${_INF_INL_TEXT}" "# if IMGUI_VERSION_NUM < 19268\n${_INF_OPSTAR_OLD}" _inf_guarded)
+string(FIND "${_INF_INL_TEXT}" "${_INF_OPSTAR_OLD}" _inf_opstar_old)
+if(_inf_patched EQUAL -1 AND _inf_guarded EQUAL -1 AND _inf_opstar_old GREATER_EQUAL 0)
+    string(REPLACE "${_INF_OPSTAR_OLD}"
+        "// PENROSE_OPSTAR_GATED: IMGUI_VERSION_NUM >= 19268 already defines this under IMGUI_DEFINE_MATH_OPERATORS.\n# if IMGUI_VERSION_NUM < 19268\n${_INF_OPSTAR_OLD}\n# endif"
+        _INF_INL_TEXT "${_INF_INL_TEXT}"
+    )
     file(WRITE "${_INF_INL}" "${_INF_INL_TEXT}")
+elseif(_inf_patched EQUAL -1 AND _inf_guarded EQUAL -1 AND _inf_opstar_old EQUAL -1)
+    message(FATAL_ERROR "ImNodeFlow imgui_extra_math.inl did not match the expected operator* patch shape")
 endif()
 
 # Patch ImNodeFlow: widen the link hit-test radius. Link::update() tests
@@ -97,6 +102,25 @@ if(_inf_redlink_patched EQUAL -1)
         "smart_bezier(start, end, m_selected ? IM_COL32(225, 65, 65, 235) /* PENROSE_LINK_RED */ : m_left->getStyle()->color, thickness);"
         _INF_CPP_TEXT "${_INF_CPP_TEXT}")
     file(WRITE "${_INF_CPP}" "${_INF_CPP_TEXT}")
+endif()
+
+# Patch ImNodeFlow: the inner viewport wrapper should not be independently
+# resizable. Android users resize the outer GraphEditorHost window; keeping the
+# inner invisible wrapper resizable leaves hidden edge hit targets over the
+# canvas and can turn a pan/link gesture into an ImGui window resize.
+set(_INF_CTX "${imnodeflow_SOURCE_DIR}/src/context_wrapper.h")
+file(READ "${_INF_CTX}" _INF_CTX_TEXT)
+string(FIND "${_INF_CTX_TEXT}" "PENROSE_INNER_NORESIZE" _inf_inner_noresize)
+if(_inf_inner_noresize EQUAL -1)
+    string(REPLACE
+        "ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove\n                                                | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse"
+        "ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove\n                                                | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse\n                                                | ImGuiWindowFlags_NoResize /* PENROSE_INNER_NORESIZE */"
+        _INF_CTX_TEXT "${_INF_CTX_TEXT}")
+    string(FIND "${_INF_CTX_TEXT}" "PENROSE_INNER_NORESIZE" _inf_inner_noresize_after)
+    if(_inf_inner_noresize_after EQUAL -1)
+        message(FATAL_ERROR "ImNodeFlow context_wrapper.h did not match the expected inner-window flags patch shape")
+    endif()
+    file(WRITE "${_INF_CTX}" "${_INF_CTX_TEXT}")
 endif()
 
 add_library(penrose SHARED
@@ -173,21 +197,26 @@ set_source_files_properties(
 )
 
 # clang-tidy - opt-in static analysis on the penrose target.
-# Enabled with -DPENROSE_TIDY=ON through Gradle -PpenroseTidy=true. CI's
-# ratchet ignores diagnostics from CMake _deps; project diagnostics remain
-# gated. Off by default because tidy roughly doubles native build time.
+# Enabled with -DPENROSE_TIDY=ON through Gradle -PpenroseTidy=true. The wrapper
+# skips FetchContent _deps so CI logs and the ratchet cover checked-in project
+# sources without vendored ImGui/ImNodeFlow diagnostics.
 option(PENROSE_TIDY "Run clang-tidy on the penrose target" OFF)
 if(PENROSE_TIDY)
     find_program(CLANG_TIDY_EXE
         NAMES clang-tidy clang-tidy-19 clang-tidy-18 clang-tidy-17
         PATHS ENV PATH)
-    if(CLANG_TIDY_EXE)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(CLANG_TIDY_EXE AND Python3_Interpreter_FOUND)
+        set(PENROSE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../..")
+        set(PENROSE_CLANG_TIDY_FILTER "${PENROSE_ROOT}/tools/clang_tidy_project_filter.py")
         message(STATUS "Enabling clang-tidy: ${CLANG_TIDY_EXE}")
         set_target_properties(penrose PROPERTIES
             CXX_CLANG_TIDY
-            "${CLANG_TIDY_EXE};-checks=bugprone-*,concurrency-*,cppcoreguidelines-pro-type-static-cast-downcast,performance-*,readability-misleading-indentation,-bugprone-easily-swappable-parameters,-bugprone-narrowing-conversions")
+            "${Python3_EXECUTABLE};${PENROSE_CLANG_TIDY_FILTER};${CLANG_TIDY_EXE};-checks=bugprone-*,concurrency-*,cppcoreguidelines-pro-type-static-cast-downcast,performance-*,readability-misleading-indentation,-bugprone-easily-swappable-parameters,-bugprone-narrowing-conversions")
+    elseif(CLANG_TIDY_EXE)
+        message(FATAL_ERROR "PENROSE_TIDY=ON requires Python3 for the clang-tidy project-source filter")
     else()
-        message(WARNING "PENROSE_TIDY=ON but clang-tidy not found on PATH; skipping")
+        message(FATAL_ERROR "PENROSE_TIDY=ON but clang-tidy was not found on PATH")
     endif()
 endif()
 

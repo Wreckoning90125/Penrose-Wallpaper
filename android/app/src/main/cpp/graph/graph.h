@@ -74,6 +74,17 @@ enum class NodeKind : uint16_t {
     SrcBeatConfidence,
     OpThresholdCompare,
     OpLag,
+    OpGain,
+    OpBias,
+    OpSmooth,
+    OpMap,
+    OpEnvelope,
+    OpGate,
+    OpMath,
+    OpSampleHold,
+    SrcBass,
+    SrcMid,
+    SrcHigh,
 
     Count_,
 };
@@ -92,6 +103,9 @@ int                   descriptorCount();
 
 struct EvalContext {
     float bands[8]  = {};
+    float bass      = 0.0f;
+    float mid       = 0.0f;
+    float high      = 0.0f;
     float beat      = 0.0f;
     float rms       = 0.0f;
     float spectralFlux = 0.0f;
@@ -140,16 +154,32 @@ public:
 
     // Saved scalar parameters used by parameter-bearing kinds:
     //   SrcConstant     p0=value
+    //   OpAdd           p0=offset
+    //   OpMultiply      p0=scale
+    //   OpMix           p0=blend when mix input is unconnected
     //   OpClamp         p0=lo,  p1=hi
     //   OpSmoothstep    p0=edge0, p1=edge1
     //   OpScaleBias     p0=gain, p1=bias
     //   OpThresholdCompare p0=threshold
     //   OpLag           p0=time_seconds
-    // p2 is unused today; carried in the save shape because every
-    // node serialises three floats regardless of kind.
+    //   OpInvert        p0=pivot
+    //   OpGain          p0=gain
+    //   OpBias          p0=bias
+    //   OpSmooth        p0=amount
+    //   OpMap           p0=inMin, p1=inMax, p2=outMin, p3=outMax
+    //   OpEnvelope      p0=threshold, p1=attack, p2=release
+    //   OpGate          p0=open, p1=close, p2=hold, p3=attack, p4=release, p5=floor
+    //   OpMath          p0=valB, p1=operation index
+    //   OpSampleHold    p0=threshold
     float p0 = 0.0f;
     float p1 = 1.0f;
     float p2 = 0.0f;
+    float p3 = 0.0f;
+    float p4 = 0.0f;
+    float p5 = 0.0f;
+    float state0 = 0.0f;
+    float state1 = 0.0f;
+    bool  flag0 = false;
 
 protected:
     NodeKind     kind_;
@@ -168,6 +198,7 @@ public:
 
     // Sources read this each frame inside their behaviour() lambdas.
     const EvalContext& context() const { return ctx_; }
+    uint64_t evalSerial() const { return evalSerial_; }
 
     // Stash ctx, walk Target nodes, sum-then-clamp by kind, fill out.
     void evaluate(const EvalContext& ctx, EvalResult& out);
@@ -175,6 +206,11 @@ public:
     // Spawn a node at the given grid position. Returns the ImFlow node
     // UID, or 0 if the kind is invalid.
     uint64_t addNode(NodeKind kind, float x, float y);
+
+    // Native equivalent of the web graph DAG guard. ImNodeFlow evaluates by
+    // recursively pulling upstream pins, so cycles must be rejected at connect
+    // and load time rather than handled by its cached-value recursion fallback.
+    bool canConnect(ImFlow::Pin* out, ImFlow::Pin* in);
 
     // toJson is non-const because ImNodeFlow::getNodes() returns a
     // non-const reference; the call is conceptually read-only but the
@@ -195,6 +231,7 @@ private:
 
     ImFlow::ImNodeFlow handler_;
     EvalContext        ctx_{};
+    uint64_t           evalSerial_ = 0;
     bool               defaultLayout_ = true;
 };
 

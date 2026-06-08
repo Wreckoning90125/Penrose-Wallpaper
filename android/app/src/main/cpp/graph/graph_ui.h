@@ -49,11 +49,9 @@ public:
     // render dispatcher), same thread render() runs on.
     void onGraphReloaded() { arrangePending_ = true; }
 
-    // System-bar insets in surface pixels. The host forwards these
-    // from WindowInsets so the editor's top app bar can sit below
-    // the status bar / cutout instead of being drawn under it. Set
-    // from the JNI thread; read on the render thread each frame —
-    // plain floats with sloppy ordering are fine for a layout hint.
+    // System-bar insets in surface pixels. The host forwards these from
+    // WindowInsets through RendererSession, so the values are written and read
+    // on the render thread with the rest of the native renderer state.
     void setSystemInsets(int topPx, int bottomPx, int leftPx, int rightPx) {
         insetTopPx_    = static_cast<float>(topPx    > 0 ? topPx    : 0);
         insetBottomPx_ = static_cast<float>(bottomPx > 0 ? bottomPx : 0);
@@ -71,6 +69,7 @@ private:
     void drawToolbar(Graph& graph,
                      FlowNode* selNode,
                      const std::shared_ptr<ImFlow::Link>& selLink);
+    void drawParameterSheet(FlowNode* selNode);
     void drawSpawnPopup(Graph& graph);
     // One-shot layout pass: arrange the default graph into a grid
     // fitted to the visible canvas, accounting for each node's

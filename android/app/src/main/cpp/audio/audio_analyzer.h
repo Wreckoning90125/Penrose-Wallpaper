@@ -32,8 +32,9 @@ namespace penrose {
 //      (snare/hat/cymbal range) convolve the raw time window via a
 //      strided dot-product. Catches sub-beat percussive flashes the
 //      tempo grid alone would miss.
-//   5. Final beat scalar = max(PLL flash, CWT flash) → asymmetric
-//      smoother (fast attack 0.55/frame, slow release 0.10/frame).
+//   5. Final beat scalar = max(PLL flash, clamped CWT flash) →
+//      asymmetric smoother (fast attack 0.90/frame, slow release
+//      0.10/frame).
 //
 // The instance is process-wide (see globalAudioAnalyzer below) so the
 // foreground AudioPlaybackService and every Renderer share one analyzer.
@@ -51,7 +52,7 @@ namespace penrose {
 //   - quiesce / configure: any thread; both take analyzeMutex_.
 class AudioAnalyzer {
 public:
-    static constexpr int kFftSize     = 1024;
+    static constexpr int kFftSize     = 2048;
     static constexpr int kBands       = 8;
     static constexpr int kRingSamples = kFftSize * 4;
 
@@ -71,6 +72,9 @@ public:
 
     struct FeatureSnapshot {
         float bands[kBands] = {};
+        float bass = 0.0f;
+        float mid = 0.0f;
+        float high = 0.0f;
         float beat = 0.0f;
         float rms = 0.0f;
         float spectralFlux = 0.0f;
@@ -193,9 +197,14 @@ private:
     // Band range = [loBin, hiBin) into the magnitude spectrum.
     int bandLo_[kBands] = {};
     int bandHi_[kBands] = {};
+    int webBandLo_[3] = {};
+    int webBandHi_[3] = {};
 
     // Smoothing state. Mutated by analyzeFrame and read by snapshot.
     float bandsSmoothed_[kBands] = {};
+    float bass_                  = 0.0f;
+    float mid_                   = 0.0f;
+    float high_                  = 0.0f;
     float beatSmoothed_          = 0.0f;
     float rms_                   = 0.0f;
     float spectralFlux_          = 0.0f;
@@ -207,6 +216,9 @@ private:
     // Stream-active sentinel: time since last pushPcm. Beyond a small
     // window we treat the source as silent.
     std::atomic<uint64_t> lastPushNs_{0};
+    uint32_t lastAnalyzedWriteIdx_ = 0;
+    uint64_t lastAnalyzeNs_ = 0;
+    bool haveAnalyzedSlice_ = false;
 };
 
 // Process-wide analyzer. The AudioPlaybackService feeds it from its

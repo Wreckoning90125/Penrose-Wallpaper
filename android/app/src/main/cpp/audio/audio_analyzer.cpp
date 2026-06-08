@@ -109,6 +109,18 @@ inline float updateAndZ(float value, float& avg, float& var) {
     return std::max(0.0f, z * 0.5f);
 }
 
+inline void assignBandRange(float loHz, float hiHz, float binHz, int maxBin, int& loOut, int& hiOut) {
+    const int start = std::max(1, static_cast<int>(std::floor(loHz / binHz)));
+    const int end = std::min(maxBin, std::max(start + 1, static_cast<int>(std::ceil(hiHz / binHz))));
+    if (start >= maxBin || end <= start) {
+        loOut = maxBin;
+        hiOut = maxBin;
+        return;
+    }
+    loOut = start;
+    hiOut = end;
+}
+
 } // namespace
 
 AudioAnalyzer::AudioAnalyzer() {
@@ -152,10 +164,12 @@ void AudioAnalyzer::computeBandRanges() {
     const float binHz = static_cast<float>(sampleRate_) / kFftSize;
     const int maxBin = kFftSize / 2;
     for (int b = 0; b < kBands; ++b) {
-        int lo = std::clamp(static_cast<int>(edgesHz[b]     / binHz), 1, maxBin);
-        int hi = std::clamp(static_cast<int>(edgesHz[b + 1] / binHz), lo + 1, maxBin);
-        bandLo_[b] = lo;
-        bandHi_[b] = hi;
+        assignBandRange(edgesHz[b], edgesHz[b + 1], binHz, maxBin, bandLo_[b], bandHi_[b]);
+    }
+
+    static constexpr float webEdgesHz[4] = { 30.0f, 150.0f, 1600.0f, 16000.0f };
+    for (int b = 0; b < 3; ++b) {
+        assignBandRange(webEdgesHz[b], webEdgesHz[b + 1], binHz, maxBin, webBandLo_[b], webBandHi_[b]);
     }
 }
 
@@ -227,6 +241,9 @@ void AudioAnalyzer::resetDspStateUnlocked() {
     beatConf_     = 0.0f;
     periodFrames_ = 60.0f * 60.0f / 120.0f;
     fpsEma_       = 60.0f;
+    bass_         = 0.0f;
+    mid_          = 0.0f;
+    high_         = 0.0f;
     beatSmoothed_ = 0.0f;
     rms_          = 0.0f;
     spectralFlux_ = 0.0f;
@@ -237,6 +254,9 @@ void AudioAnalyzer::resetDspStateUnlocked() {
     onsetVar_     = 0.0f;
     cwtAvg_       = 0.0f;
     cwtVar_       = 0.0f;
+    lastAnalyzedWriteIdx_ = 0;
+    lastAnalyzeNs_ = 0;
+    haveAnalyzedSlice_ = false;
     writeIdx_.store(0, std::memory_order_release);
 }
 
@@ -263,6 +283,9 @@ void AudioAnalyzer::clear() {
 
 void AudioAnalyzer::quiesceUnlocked() {
     for (int b = 0; b < kBands; ++b) bandsSmoothed_[b] *= 0.85f;
+    bass_ *= 0.85f;
+    mid_ *= 0.85f;
+    high_ *= 0.85f;
     beatSmoothed_ *= 0.85f;
     rms_ *= 0.85f;
     spectralFlux_ *= 0.85f;
@@ -275,6 +298,9 @@ void AudioAnalyzer::quiesceUnlocked() {
 void AudioAnalyzer::snapshot(FeatureSnapshot& out) const {
     std::lock_guard<std::mutex> g(analyzeMutex_);
     for (int b = 0; b < kBands; ++b) out.bands[b] = bandsSmoothed_[b];
+    out.bass = bass_;
+    out.mid = mid_;
+    out.high = high_;
     out.beat = beatSmoothed_;
     out.rms = rms_;
     out.spectralFlux = spectralFlux_;
@@ -377,6 +403,17 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
     // writeIdx_; the acquire load here makes the published slice visible without
     // blocking the audio callback.
     const uint32_t w = writeIdx_.load(std::memory_order_acquire);
+    constexpr uint64_t kDuplicateRendererWindowNs = 8'000'000ull;
+    if (
+        haveAnalyzedSlice_
+        && w == lastAnalyzedWriteIdx_
+        && nowNs - lastAnalyzeNs_ < kDuplicateRendererWindowNs
+    ) {
+        return;
+    }
+    lastAnalyzedWriteIdx_ = w;
+    lastAnalyzeNs_ = nowNs;
+    haveAnalyzedSlice_ = true;
     const uint32_t start = w - kFftSize;
     // Keep the un-windowed copy for the CWT (Morlet kernels already
     // taper themselves; a second Hann taper would attenuate the snare
@@ -402,6 +439,8 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
     const int   nMag  = kFftSize / 2;
     float bandSumSq[kBands] = {};
     float bandCount[kBands] = {};
+    float webBandSumSq[3] = {};
+    float webBandCount[3] = {};
 
     // SuperFlux onset = sum over bins of max(0, mag_i - prevMag_i) *
     // (i + 1). The HFC weighting tilts onset sensitivity toward
@@ -432,7 +471,18 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
                 break;
             }
         }
+        for (int b = 0; b < 3; ++b) {
+            if (i >= webBandLo_[b] && i < webBandHi_[b]) {
+                webBandSumSq[b] += mag * mag;
+                webBandCount[b] += 1.0f;
+                break;
+            }
+        }
     }
+
+    bass_ = std::clamp(std::sqrt(webBandSumSq[0] / std::max(1.0f, webBandCount[0])), 0.0f, 1.0f);
+    mid_ = std::clamp(std::sqrt(webBandSumSq[1] / std::max(1.0f, webBandCount[1])), 0.0f, 1.0f);
+    high_ = std::clamp(std::sqrt(webBandSumSq[2] / std::max(1.0f, webBandCount[2])), 0.0f, 1.0f);
 
     float bandsRaw[kBands] = {};
     for (int b = 0; b < kBands; ++b) {
@@ -590,8 +640,7 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
         if (mag > cwtPeak) cwtPeak = mag;
     }
     const float cwtZ = updateAndZ(cwtPeak, cwtAvg_, cwtVar_);
-    const float cwtStrength = std::min(2.0f, cwtZ);
-    cwtTransient_ = std::clamp(cwtStrength, 0.0f, 1.0f);
+    cwtTransient_ = std::clamp(cwtZ, 0.0f, 1.0f);
 
     // -------- Final composition --------
     // Band asymmetric smoothing: fast attack so peaks pop, slow release
@@ -615,7 +664,7 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
     // (matches the earlier beat scalar's feel so existing graph wiring
     // keeps the same character but tracks far more accurately).
     const float beatFlash = beatBoundary ? 1.0f : 0.0f;
-    const float transient = std::min(1.0f, cwtStrength * 0.7f);
+    const float transient = cwtTransient_;
     const float beatTarget = std::max(beatFlash, transient);
     const float beatRate   = beatTarget > beatSmoothed_ ? 0.90f : 0.10f;
     const float beatK      = std::clamp(beatRate * dt60, 0.0f, 1.0f);

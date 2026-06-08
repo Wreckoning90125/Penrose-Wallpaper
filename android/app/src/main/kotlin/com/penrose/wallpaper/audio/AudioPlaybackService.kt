@@ -95,7 +95,9 @@ class AudioPlaybackService : MediaSessionService() {
         val p = AudioFilePlayer(
             this,
             onSampleRate = { rate -> NativeBridge.configureAudio(rate) },
-            onPcm = { samples, frames -> NativeBridge.pushAudio(samples, frames) },
+            onPcmBuffer = { buffer, position, bytes, format, channels ->
+                NativeBridge.pushAudioBuffer(buffer, position, bytes, format, channels)
+            },
         )
         player = p
         session = MediaSession.Builder(this, p.exoPlayer).build()

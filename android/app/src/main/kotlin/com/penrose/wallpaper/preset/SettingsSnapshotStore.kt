@@ -47,12 +47,18 @@ internal object SettingsSnapshotStore {
         }
     }
 
-    fun saveWorkingGraphAsync(settings: SettingsStore, graphJson: String): Deferred<Unit> {
-        return settings.updateAsync(Settings.KEY_GRAPH_REVISION) {
+    suspend fun saveWorkingGraph(settings: SettingsStore, graphJson: String) {
+        settings.updateAwait(Settings.KEY_GRAPH_REVISION) {
             this[Settings.KEY_GRAPH_JSON] = StoredSetting.StringValue(canonicalGraphText(graphJson))
             this[Settings.KEY_GRAPH_REVISION] = StoredSetting.LongValue(System.currentTimeMillis())
         }
     }
+
+    fun saveWorkingGraphAsync(settings: SettingsStore, graphJson: String): Deferred<Unit> =
+        settings.updateAsync(Settings.KEY_GRAPH_REVISION) {
+            this[Settings.KEY_GRAPH_JSON] = StoredSetting.StringValue(canonicalGraphText(graphJson))
+            this[Settings.KEY_GRAPH_REVISION] = StoredSetting.LongValue(System.currentTimeMillis())
+        }
 
     suspend fun updateWorkingSettingsAndGraph(
         settings: SettingsStore,

@@ -356,10 +356,9 @@ void Renderer::destroyPipelines() {
 // -----------------------------------------------------------------------------
 
 bool Renderer::buildPipelines() {
-    if (pipelinesBuilt_) {
-        if (fillPipeline_)   { vkDestroyPipeline(device_, fillPipeline_, nullptr);   fillPipeline_ = VK_NULL_HANDLE; }
-        if (borderPipeline_) { vkDestroyPipeline(device_, borderPipeline_, nullptr); borderPipeline_ = VK_NULL_HANDLE; }
-    }
+    if (fillPipeline_)   { vkDestroyPipeline(device_, fillPipeline_, nullptr);   fillPipeline_ = VK_NULL_HANDLE; }
+    if (borderPipeline_) { vkDestroyPipeline(device_, borderPipeline_, nullptr); borderPipeline_ = VK_NULL_HANDLE; }
+    pipelinesBuilt_ = false;
 
     VkPipelineRasterizationStateCreateInfo rs{};
     rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;

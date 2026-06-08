@@ -86,17 +86,19 @@ internal object NativeBridge {
     external fun configureAudio(sampleRate: Int)
 
     /**
-     * Forward PCM samples to the process-wide audio analyzer. Called
-     * from the AudioPlaybackService's Media3 AudioProcessor tap.
-     * Writes the analyzer's SPSC ring and returns immediately.
+     * Forward PCM samples to the process-wide audio analyzer. Direct Media3
+     * buffers call this directly; heap-backed buffers are downmixed by
+     * FftTapProcessor into a reusable direct mono scratch buffer and then call
+     * this with float PCM and one channel.
      */
-    external fun pushAudio(samples: FloatArray, count: Int)
+    external fun pushAudioBuffer(buffer: java.nio.ByteBuffer, position: Int, bytes: Int,
+                                 format: Int, channels: Int)
 
     /**
      * Read the latest analyzer features from the global analyzer. `out`
-     * must have length >= 9 for 8 bands + beat; length >= 15 also receives
-     * RMS, spectral flux, onset strength, CWT transient, crest factor, and
-     * beat confidence.
+     * must have length >= 9 for 8 bands + beat; length >= 18 also receives
+     * RMS, spectral flux, onset strength, CWT transient, crest factor, beat
+     * confidence, bass, mid, and high.
      * Used by the modulation matrix evaluator each Choreographer frame.
      */
     external fun readAudio(out: FloatArray)

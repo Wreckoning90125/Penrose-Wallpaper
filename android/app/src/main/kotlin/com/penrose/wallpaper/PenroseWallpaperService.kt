@@ -139,7 +139,9 @@ class PenroseWallpaperService : WallpaperService() {
         private fun loadGraphFromStore(ptr: Long) {
             try {
                 val json = SettingsSnapshotStore.storedGraphJson(settingsStore)
-                NativeBridge.graphLoad(ptr, json)
+                if (!NativeBridge.graphLoad(ptr, json)) {
+                    Log.w(TAG, "graph load failed")
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "graph load failed", e)
             }
@@ -276,7 +278,29 @@ class PenroseWallpaperService : WallpaperService() {
                 NativeBridge.readView(ptr, out)
                 out
             } ?: return
-            Settings.saveViewAsync(settingsStore, out[0], out[1], out[2], out[3])
+            try {
+                queueViewSaveToProfiles(out)
+            } catch (e: Exception) {
+                Log.w(TAG, "view save failed", e)
+            }
+        }
+
+        private fun queueViewSaveToProfiles(out: FloatArray) {
+            val wallpaperWrite = Settings.saveViewAsync(settingsStore, out[0], out[1], out[2], out[3])
+            wallpaperWrite.invokeOnCompletion { cause ->
+                if (cause != null) {
+                    Log.w(TAG, "wallpaper view save failed", cause)
+                    return@invokeOnCompletion
+                }
+                try {
+                    val workingWrite = Settings.saveViewAsync(workingSettingsStore, out[0], out[1], out[2], out[3])
+                    workingWrite.invokeOnCompletion { workingCause ->
+                        if (workingCause != null) Log.w(TAG, "working view save failed", workingCause)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "working view save failed", e)
+                }
+            }
         }
 
         override fun onDestroy() {

@@ -260,7 +260,9 @@ class SettingsActivity : AppCompatActivity(),
         } ?: false
 
     fun currentGraphJson(): String? =
-        session.query { ptr -> NativeBridge.graphSave(ptr) }
+        session.query { ptr ->
+            NativeBridge.graphSave(ptr)
+        }?.takeIf { it.isNotBlank() }
 
     fun commitPreviewViewToSettings() {
         val out = session.query { ptr ->
@@ -269,6 +271,16 @@ class SettingsActivity : AppCompatActivity(),
             out
         } ?: return
         persistView(out)
+    }
+
+    suspend fun commitPreviewViewToSettingsAwait() {
+        val out = session.query { ptr ->
+            val out = FloatArray(4)
+            NativeBridge.readView(ptr, out)
+            out
+        } ?: return
+        if (!::settingsStore.isInitialized) return
+        Settings.saveView(settingsStore, out[0], out[1], out[2], out[3])
     }
 
     fun resetPreviewView() {
@@ -284,7 +296,11 @@ class SettingsActivity : AppCompatActivity(),
 
     private fun persistView(out: FloatArray) {
         if (!::settingsStore.isInitialized) return
-        Settings.saveViewAsync(settingsStore, out[0], out[1], out[2], out[3])
+        try {
+            Settings.saveViewAsync(settingsStore, out[0], out[1], out[2], out[3])
+        } catch (e: Exception) {
+            Log.w(TAG, "view save failed", e)
+        }
     }
 
     override fun onDestroy() {
@@ -329,13 +345,6 @@ class SettingsActivity : AppCompatActivity(),
             return true
         }
 
-        // Extract event payload synchronously on the main thread (MotionEvent
-        // is recycled by the framework after this returns) and post a value
-        // copy to the render dispatcher. The previous code read a
-        // @Volatile pointer and called pushTouchEvent inline on main —
-        // a TOCTOU window in which the render thread could free the
-        // renderer before JNI dereferenced it.
-        forwardTouchToSession(event)
         return super.dispatchTouchEvent(event)
     }
 
@@ -418,51 +427,8 @@ class SettingsActivity : AppCompatActivity(),
         }
     }
 
-    private fun forwardTouchToSession(event: MotionEvent) {
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                val idx = event.actionIndex
-                val x = event.getX(idx); val y = event.getY(idx)
-                session.submit { ptr ->
-                    NativeBridge.pushTouchEvent(ptr, PHASE_DOWN, idx, x, y)
-                }
-            }
-            MotionEvent.ACTION_MOVE -> {
-                val count = event.pointerCount
-                val xs = FloatArray(count) { event.getX(it) }
-                val ys = FloatArray(count) { event.getY(it) }
-                session.submit { ptr ->
-                    for (i in 0 until count) {
-                        NativeBridge.pushTouchEvent(ptr, PHASE_MOVE, i, xs[i], ys[i])
-                    }
-                }
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
-                val idx = event.actionIndex
-                val x = event.getX(idx); val y = event.getY(idx)
-                session.submit { ptr ->
-                    NativeBridge.pushTouchEvent(ptr, PHASE_UP, idx, x, y)
-                }
-            }
-            MotionEvent.ACTION_CANCEL -> {
-                val count = event.pointerCount
-                val xs = FloatArray(count) { event.getX(it) }
-                val ys = FloatArray(count) { event.getY(it) }
-                session.submit { ptr ->
-                    for (i in 0 until count) {
-                        NativeBridge.pushTouchEvent(ptr, PHASE_CANCEL, i, xs[i], ys[i])
-                    }
-                }
-            }
-        }
-    }
-
     private companion object {
         const val TAG = "PenroseSettings"
         const val TAG_SHEET = "settings_sheet"
-        const val PHASE_DOWN = 0
-        const val PHASE_MOVE = 1
-        const val PHASE_UP   = 2
-        const val PHASE_CANCEL = 3
     }
 }

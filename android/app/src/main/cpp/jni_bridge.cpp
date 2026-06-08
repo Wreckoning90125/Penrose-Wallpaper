@@ -5,6 +5,9 @@
 #include "settings.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
 
 #include <android/asset_manager.h>
 #include <android/asset_manager_jni.h>
@@ -17,6 +20,64 @@ using namespace penrose;
 namespace {
 
 inline Renderer* asRenderer(jlong ptr) { return reinterpret_cast<Renderer*>(ptr); } // NOLINT(performance-no-int-to-ptr)
+
+constexpr int kAudioPcm16 = 1;
+constexpr int kAudioPcmFloat = 2;
+constexpr int kAudioPcm8 = 3;
+
+int audioBytesPerSample(int format) {
+    switch (format) {
+        case kAudioPcm16: return 2;
+        case kAudioPcmFloat: return 4;
+        case kAudioPcm8: return 1;
+        default: return 0;
+    }
+}
+
+float audioSampleAt(const uint8_t* p, int format) {
+    switch (format) {
+        case kAudioPcm16: {
+            const auto bits = static_cast<uint16_t>(p[0])
+                | static_cast<uint16_t>(static_cast<uint16_t>(p[1]) << 8);
+            return static_cast<float>(static_cast<int16_t>(bits)) * (1.0f / 32768.0f);
+        }
+        case kAudioPcmFloat: {
+            float v = 0.0f;
+            std::memcpy(&v, p, sizeof(float));
+            return v;
+        }
+        case kAudioPcm8:
+            return static_cast<float>((static_cast<int>(p[0]) & 0xff) - 128) * (1.0f / 128.0f);
+        default:
+            return 0.0f;
+    }
+}
+
+void pushInterleavedPcmToAnalyzer(const uint8_t* bytes, int byteCount, int format, int channels) {
+    const int bytesPerSample = audioBytesPerSample(format);
+    if (!bytes || byteCount <= 0 || bytesPerSample <= 0 || channels <= 0) return;
+    const int frameBytes = bytesPerSample * channels;
+    if (frameBytes <= 0) return;
+    const int frames = byteCount / frameBytes;
+    if (frames <= 0) return;
+
+    constexpr int kChunkFrames = 1024;
+    std::array<float, kChunkFrames> mono{};
+    int frame = 0;
+    while (frame < frames) {
+        const int chunk = std::min(kChunkFrames, frames - frame);
+        for (int f = 0; f < chunk; ++f) {
+            const uint8_t* src = bytes + (frame + f) * frameBytes;
+            float sum = 0.0f;
+            for (int c = 0; c < channels; ++c) {
+                sum += audioSampleAt(src + c * bytesPerSample, format);
+            }
+            mono[f] = sum / static_cast<float>(channels);
+        }
+        penrose::globalAudioAnalyzer().pushPcm(mono.data(), chunk);
+        frame += chunk;
+    }
+}
 
 // Decode a Settings struct from the flat int/float arrays the Kotlin side
 // passes us. Layout (ints / floats):
@@ -251,22 +312,27 @@ Java_com_penrose_wallpaper_NativeBridge_configureAudio(JNIEnv*, jobject, jint sa
 }
 
 JNIEXPORT void JNICALL
-Java_com_penrose_wallpaper_NativeBridge_pushAudio(JNIEnv* env, jobject,
-                                                 jfloatArray samples, jint count) {
-    if (!samples || count <= 0) return;
-    const jint len = env->GetArrayLength(samples);
-    const int n = std::min(static_cast<int>(count), static_cast<int>(len));
-    jfloat* p = env->GetFloatArrayElements(samples, nullptr);
-    if (!p) return;
-    penrose::globalAudioAnalyzer().pushPcm(p, n);
-    env->ReleaseFloatArrayElements(samples, p, JNI_ABORT);
+Java_com_penrose_wallpaper_NativeBridge_pushAudioBuffer(JNIEnv* env, jobject,
+                                                       jobject buffer,
+                                                       jint position,
+                                                       jint byteCount,
+                                                       jint format,
+                                                       jint channels) {
+    if (!buffer || position < 0 || byteCount <= 0 || channels <= 0) return;
+    auto* base = static_cast<uint8_t*>(env->GetDirectBufferAddress(buffer));
+    const jlong capacity = env->GetDirectBufferCapacity(buffer);
+    if (!base || capacity <= 0) return;
+    const auto start = static_cast<jlong>(position);
+    const auto count = static_cast<jlong>(byteCount);
+    if (start > capacity || count > capacity - start) return;
+    pushInterleavedPcmToAnalyzer(base + position, byteCount, format, channels);
 }
 
 JNIEXPORT void JNICALL
 Java_com_penrose_wallpaper_NativeBridge_readAudio(JNIEnv* env, jobject, jfloatArray out) {
     if (!out) return;
     constexpr int kBaseSlots = AudioAnalyzer::kBands + 1; // 8 bands + beat
-    constexpr int kFeatureSlots = kBaseSlots + 6; // RMS, flux, onset, CWT, crest, confidence
+    constexpr int kFeatureSlots = kBaseSlots + 9; // RMS, flux, onset, CWT, crest, confidence, bass, mid, high
     const int len = env->GetArrayLength(out);
     if (len < kBaseSlots) return;
     AudioAnalyzer::FeatureSnapshot snap{};
@@ -281,6 +347,9 @@ Java_com_penrose_wallpaper_NativeBridge_readAudio(JNIEnv* env, jobject, jfloatAr
         values[kBaseSlots + 3] = snap.cwtTransient;
         values[kBaseSlots + 4] = snap.crestFactor;
         values[kBaseSlots + 5] = snap.beatConfidence;
+        values[kBaseSlots + 6] = snap.bass;
+        values[kBaseSlots + 7] = snap.mid;
+        values[kBaseSlots + 8] = snap.high;
         env->SetFloatArrayRegion(out, 0, kFeatureSlots, values);
     } else {
         env->SetFloatArrayRegion(out, 0, kBaseSlots, values);

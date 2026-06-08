@@ -89,23 +89,42 @@ bool Renderer::onSurfaceCreated(ANativeWindow* window) {
         deviceReady_ = true;
     }
 
-    int w = ANativeWindow_getWidth(window);
-    int h = ANativeWindow_getHeight(window);
-    if (!createSwapchain(w, h)) return fail();
-    if (!buildPipelines()) return fail();
-    if (!buildGeometry()) return fail();
-    updatePaletteUbo();
-    if (!createPerFrameResources()) return fail();
-    swapchainReady_ = true;
-    settingsDirty_ = false;
+    const int w = ANativeWindow_getWidth(window);
+    const int h = ANativeWindow_getHeight(window);
+    if (w <= 0 || h <= 0) {
+        swapchainReady_ = false;
+        return true;
+    }
+    if (!createSurfaceFrameResources(w, h)) return fail();
     return true;
 }
 
 bool Renderer::onSurfaceChanged(int width, int height) {
     if (!deviceReady_ || width <= 0 || height <= 0) return false;
+    if (!swapchainReady_) return createSurfaceFrameResources(width, height);
     if ((uint32_t)width == swapchainExtent_.width &&
         (uint32_t)height == swapchainExtent_.height) return true;
     return rebuildSwapchain();
+}
+
+bool Renderer::createSurfaceFrameResources(int width, int height) {
+    if (!deviceReady_ || surface_ == VK_NULL_HANDLE || width <= 0 || height <= 0) return false;
+    const auto fail = [this]() {
+        destroyPerFrameResources();
+        destroySwapchain();
+        swapchainReady_ = false;
+        return false;
+    };
+    if (!createSwapchain(width, height)) return fail();
+    if (!buildPipelines()) return fail();
+    if (fillVertexCount_ == 0 || settingsDirty_) {
+        if (!buildGeometry()) return fail();
+        settingsDirty_ = false;
+    }
+    updatePaletteUbo();
+    if (!createPerFrameResources()) return fail();
+    swapchainReady_ = true;
+    return true;
 }
 
 bool Renderer::rebuildSwapchain() {
@@ -121,10 +140,7 @@ bool Renderer::rebuildSwapchain() {
     swapchainReady_ = false;
     destroyPerFrameResources();
     destroySwapchain();
-    if (!createSwapchain(w, h))       return false;
-    if (!buildPipelines())            return false;
-    if (!createPerFrameResources())   return false;
-    swapchainReady_ = true;
+    if (!createSurfaceFrameResources(w, h)) return false;
     if (imGuiReady_) {
         const uint32_t imageCount = static_cast<uint32_t>(swapchainImages_.size());
         const uint32_t minImageCount = std::max<uint32_t>(2, imageCount);
@@ -136,14 +152,29 @@ bool Renderer::rebuildSwapchain() {
 void Renderer::syncSwapchainToSurface() {
     if (!deviceReady_ || surface_ == VK_NULL_HANDLE) return;
     VkSurfaceCapabilitiesKHR caps{};
-    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, surface_, &caps)
-            != VK_SUCCESS) return;
+    const VkResult capsResult =
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, surface_, &caps);
+    if (capsResult == VK_ERROR_SURFACE_LOST_KHR) {
+        LOGE("vkGetPhysicalDeviceSurfaceCapabilitiesKHR surface lost");
+        destroySurfaceResources();
+        return;
+    }
+    if (capsResult == VK_ERROR_DEVICE_LOST) {
+        handleDeviceLost("vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+        return;
+    }
+    if (capsResult != VK_SUCCESS) {
+        handleFatalPresentFailure("vkGetPhysicalDeviceSurfaceCapabilitiesKHR", capsResult);
+        return;
+    }
     const VkExtent2D ce = caps.currentExtent;
     // 0 — the surface is not presentable right now (window minimised /
     // mid-teardown); UINT32_MAX — the surface leaves sizing to the
     // swapchain. Either way there is no surface size to match against.
     if (ce.width == 0 || ce.height == 0 || ce.width == UINT32_MAX) return;
-    if (ce.width != swapchainExtent_.width || ce.height != swapchainExtent_.height) {
+    if (!swapchainReady_) {
+        createSurfaceFrameResources(static_cast<int>(ce.width), static_cast<int>(ce.height));
+    } else if (ce.width != swapchainExtent_.width || ce.height != swapchainExtent_.height) {
         rebuildSwapchain();
     }
 }
@@ -385,7 +416,7 @@ void Renderer::considerGrowth() {
 // =============================================================================
 
 void Renderer::drawFrame() {
-    if (!deviceReady_ || !swapchainReady_) return;
+    if (!deviceReady_) return;
 
     // A device rotation resizes the surface. If the swapchain no longer
     // matches, rebuild it before drawing so this frame already targets
@@ -433,6 +464,9 @@ void Renderer::drawFrame() {
     {
         graph::EvalContext gctx{};
         for (int i = 0; i < 8; ++i) gctx.bands[i] = audio.bands[i];
+        gctx.bass = audio.bass;
+        gctx.mid = audio.mid;
+        gctx.high = audio.high;
         gctx.beat       = audio.beat;
         gctx.rms        = audio.rms;
         gctx.spectralFlux = audio.spectralFlux;
@@ -991,6 +1025,26 @@ void Renderer::drawFrame() {
     } else if (pr != VK_SUCCESS) {
         handleFatalPresentFailure("vkQueuePresentKHR", pr);
     }
+}
+
+bool Renderer::flushGraphInput() {
+    if (!graphUi_.visible()) return true;
+    if (!deviceReady_) return false;
+    syncSwapchainToSurface();
+    if (!swapchainReady_) return false;
+
+    initImGuiIfNeeded();
+    bool flushed = false;
+    if (imGuiReady_) {
+        imGuiHost_.newFrame(
+            static_cast<int>(swapchainExtent_.width),
+            static_cast<int>(swapchainExtent_.height),
+            1.0f / 60.0f);
+        graphUi_.render(graph_);
+        imGuiHost_.render();
+        flushed = true;
+    }
+    return flushed;
 }
 
 } // namespace penrose

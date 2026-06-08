@@ -622,7 +622,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    host?.commitPreviewViewToSettings()
+                    host?.commitPreviewViewToSettingsAwait()
                     SettingsSnapshotStore.saveWallpaperSnapshot(ctx, settingsStore, host?.currentGraphJson())
                 }
             } catch (e: Exception) {
@@ -687,7 +687,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 viewLifecycleOwner.lifecycleScope.launch {
                     try {
                         val preset = withContext(Dispatchers.IO) {
-                            host?.commitPreviewViewToSettings()
+                            host?.commitPreviewViewToSettingsAwait()
                             SettingsSnapshotStore.saveUserPreset(
                                 ctx,
                                 settingsStore,

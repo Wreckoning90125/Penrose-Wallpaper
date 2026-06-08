@@ -36,6 +36,7 @@ Java_com_penrose_wallpaper_NativeBridge_graphIsVisible(JNIEnv*, jobject, jlong p
 JNIEXPORT jstring JNICALL
 Java_com_penrose_wallpaper_NativeBridge_graphSave(JNIEnv* env, jobject, jlong ptr) {
     auto* r = asRenderer(ptr); if (!r) return env->NewStringUTF("");
+    r->flushGraphInput();
     const std::string text = r->graph().toJson();
     return env->NewStringUTF(text.c_str());
 }
@@ -48,7 +49,7 @@ Java_com_penrose_wallpaper_NativeBridge_graphLoad(JNIEnv* env, jobject, jlong pt
     std::string text(utf);
     env->ReleaseStringUTFChars(jjson, utf);
     const bool ok = r->graph().fromJson(text);
-    if (ok) r->graphUi().onGraphReloaded();
+    r->graphUi().onGraphReloaded();
     return ok ? JNI_TRUE : JNI_FALSE;
 }
 

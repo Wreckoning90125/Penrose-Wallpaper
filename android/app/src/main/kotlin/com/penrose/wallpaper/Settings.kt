@@ -15,6 +15,8 @@ internal class Settings(
     val preset: Int,
     val colorCount: Int,
     val colorMode: Int,
+    val colorSpread: Int,
+    val colorSpectral: Int,
     val borderOn: Boolean,
     val borderWidth: Float,
     val borderJoin: Int,
@@ -53,6 +55,12 @@ internal class Settings(
     val lightIntensity: Float,
     val lightWarmth: Float,
     val lightAmbient: Float,
+    val lightChoreoAmount: Float,
+    val lightChoreoSpeed: Float,
+    val lightChoreoSource: Float,
+    // 0 saw, 1 sine, 2 triangle, 3 square — shapes the choreography clock
+    // phase (web parity: the Clock node's clock_waveform setting).
+    val clockWaveform: Int,
     // Per-preset characteristic colours. The Material screen exposes direct
     // controls, and the preset picker seeds coherent sheen tint and
     // iridescence-band defaults that match MaterialParams.
@@ -67,6 +75,35 @@ internal class Settings(
     // metalness from Phase B.
     val matRoughMod: Float,
     val matMetalMod: Float,
+    val ornamentStyle: Float,
+    val ornamentAmount: Float,
+    val ornamentWidth: Float,
+    val ornamentDensity: Float,
+    val ornamentPhase: Float,
+    val ornamentTwist: Float,
+    val ornamentSeed: Float,
+    val surfaceContourAmount: Float,
+    val surfaceContourSource: Float,
+    val surfaceContourSpacing: Float,
+    val surfaceContourWidth: Float,
+    val surfaceContourPhase: Float,
+    val surfaceContourL: Float,
+    val surfaceContourC: Float,
+    val surfaceContourH: Float,
+    val sourceMarkAL: Float,
+    val sourceMarkAC: Float,
+    val sourceMarkAH: Float,
+    val sourceMarkBL: Float,
+    val sourceMarkBC: Float,
+    val sourceMarkBH: Float,
+    val sourceMarkCL: Float,
+    val sourceMarkCC: Float,
+    val sourceMarkCH: Float,
+    val edgeProfileWidth: Float,
+    val edgeProfileGlow: Float,
+    val edgeProfileL: Float,
+    val edgeProfileC: Float,
+    val edgeProfileH: Float,
     // Hyperbolic projection mode (docs/hyperbolic/projection-design.md).
     // `projection` 0 = Euclidean (default; original affine view),
     //              1 = Poincaré disk.
@@ -86,9 +123,9 @@ internal class Settings(
 ) {
     fun toNative(): Pair<IntArray, FloatArray> {
         val ints = intArrayOf(
-            family, seedIdx, generation, preset, colorCount, colorMode,
+            family, seedIdx, generation, preset, colorCount, colorMode, colorSpread, colorSpectral,
             if (borderOn) 1 else 0, borderJoin, bgMode, rippleMode, panMode, rippleKind,
-            projection, hypBorderSubdiv, hypFillSubdiv,
+            projection, hypBorderSubdiv, hypFillSubdiv, clockWaveform,
         )
         val baseFloats = floatArrayOf(
             borderWidth, borderFill, borderPoint, borderGap, borderL, borderC, borderH, borderAlpha,
@@ -98,10 +135,19 @@ internal class Settings(
             matRoughness, matMetalness, matSheen, matClearcoat,
             matAnisotropy, matIridescence, matEmissive, matRelief,
             lightAngle, lightElevation, lightIntensity, lightWarmth, lightAmbient,
+            lightChoreoAmount, lightChoreoSpeed, lightChoreoSource,
             matSheenColorR, matSheenColorG, matSheenColorB,
             matIridThickMin, matIridThickMax,
             matRoughMod, matMetalMod,
+            ornamentStyle, ornamentAmount, ornamentWidth, ornamentDensity,
+            ornamentPhase, ornamentTwist, ornamentSeed,
             hypScale, hypBoostX, hypBoostY,
+            surfaceContourAmount, surfaceContourSource, surfaceContourSpacing, surfaceContourWidth,
+            surfaceContourPhase, surfaceContourL, surfaceContourC, surfaceContourH,
+            sourceMarkAL, sourceMarkAC, sourceMarkAH,
+            sourceMarkBL, sourceMarkBC, sourceMarkBH,
+            sourceMarkCL, sourceMarkCC, sourceMarkCH,
+            edgeProfileWidth, edgeProfileGlow, edgeProfileL, edgeProfileC, edgeProfileH,
         )
         val floats = FloatArray(baseFloats.size + customOklch.size)
         baseFloats.copyInto(floats)
@@ -121,6 +167,8 @@ internal class Settings(
         const val KEY_PRESET        = "preset"
         const val KEY_COLOR_COUNT   = "color_count"
         const val KEY_COLOR_MODE    = "color_mode"
+        const val KEY_COLOR_SPREAD  = "color_spread"
+        const val KEY_COLOR_SPECTRAL = "color_spectral"
         const val KEY_BORDER_ON     = "border_on"
         const val KEY_BORDER_W      = "border_width"
         const val KEY_BORDER_JOIN   = "border_join"
@@ -131,6 +179,11 @@ internal class Settings(
         const val KEY_BORDER_C      = "border_c"
         const val KEY_BORDER_H      = "border_h"
         const val KEY_BORDER_A      = "border_a"
+        const val KEY_EDGE_PROFILE_WIDTH = "edge_profile_width"
+        const val KEY_EDGE_PROFILE_GLOW  = "edge_profile_glow"
+        const val KEY_EDGE_PROFILE_L     = "edge_profile_l"
+        const val KEY_EDGE_PROFILE_C     = "edge_profile_c"
+        const val KEY_EDGE_PROFILE_H     = "edge_profile_h"
         const val KEY_BG_MODE       = "bg_mode"
         const val KEY_BG_L          = "bg_l"
         const val KEY_BG_C          = "bg_c"
@@ -166,6 +219,10 @@ internal class Settings(
         const val KEY_LIGHT_INTENSITY = "light_intensity"
         const val KEY_LIGHT_WARMTH    = "light_warmth"
         const val KEY_LIGHT_AMBIENT   = "light_ambient"
+        const val KEY_LIGHT_CHOREO_AMOUNT = "light_choreo_amount"
+        const val KEY_LIGHT_CHOREO_SPEED  = "light_choreo_speed"
+        const val KEY_LIGHT_CHOREO_SOURCE = "light_choreo_source"
+        const val KEY_CLOCK_WAVEFORM      = "clock_waveform"
 
         // Per-preset characteristic colours (sheen tint + iridescent
         // thin-film range). The Material screen can tune them directly;
@@ -179,6 +236,30 @@ internal class Settings(
         // Variation knobs — opt-in seam roughness + per-tile metalness.
         const val KEY_MAT_ROUGH_MOD = "mat_rough_mod"
         const val KEY_MAT_METAL_MOD = "mat_metal_mod"
+        const val KEY_ORNAMENT_STYLE = "ornament_style"
+        const val KEY_ORNAMENT_AMOUNT = "ornament_amount"
+        const val KEY_ORNAMENT_WIDTH = "ornament_width"
+        const val KEY_ORNAMENT_DENSITY = "ornament_density"
+        const val KEY_ORNAMENT_PHASE = "ornament_phase"
+        const val KEY_ORNAMENT_TWIST = "ornament_twist"
+        const val KEY_ORNAMENT_SEED = "ornament_seed"
+        const val KEY_SURFACE_CONTOUR_AMOUNT = "surface_contour_amount"
+        const val KEY_SURFACE_CONTOUR_SOURCE = "surface_contour_source"
+        const val KEY_SURFACE_CONTOUR_SPACING = "surface_contour_spacing"
+        const val KEY_SURFACE_CONTOUR_WIDTH = "surface_contour_width"
+        const val KEY_SURFACE_CONTOUR_PHASE = "surface_contour_phase"
+        const val KEY_SURFACE_CONTOUR_L = "surface_contour_l"
+        const val KEY_SURFACE_CONTOUR_C = "surface_contour_c"
+        const val KEY_SURFACE_CONTOUR_H = "surface_contour_h"
+        const val KEY_SOURCE_MARK_A_L = "source_mark_a_l"
+        const val KEY_SOURCE_MARK_A_C = "source_mark_a_c"
+        const val KEY_SOURCE_MARK_A_H = "source_mark_a_h"
+        const val KEY_SOURCE_MARK_B_L = "source_mark_b_l"
+        const val KEY_SOURCE_MARK_B_C = "source_mark_b_c"
+        const val KEY_SOURCE_MARK_B_H = "source_mark_b_h"
+        const val KEY_SOURCE_MARK_C_L = "source_mark_c_l"
+        const val KEY_SOURCE_MARK_C_C = "source_mark_c_c"
+        const val KEY_SOURCE_MARK_C_H = "source_mark_c_h"
 
         // Hyperbolic projection. PROJECTION is a ListPreference ("0"=E²,
         // "1"=Poincaré disk); HYP_SCALE / HYP_BOOST_{X,Y} are 0..100
@@ -248,8 +329,10 @@ internal class Settings(
                 seedIdx      = snapshot.string(KEY_SEED, "0").toIntOrNull() ?: 0,
                 generation   = snapshot.int(KEY_GENERATION, 4),
                 preset       = snapshot.string(KEY_PRESET, "4").toIntOrNull() ?: 4,
-                colorCount   = snapshot.int(KEY_COLOR_COUNT, 2),
-                colorMode    = snapshot.string(KEY_COLOR_MODE, "0").toIntOrNull() ?: 0,
+                colorCount   = snapshot.int(KEY_COLOR_COUNT, 2).coerceIn(2, 18),
+                colorMode    = (snapshot.string(KEY_COLOR_MODE, "0").toIntOrNull() ?: 0).coerceIn(0, 3),
+                colorSpread  = snapshot.int(KEY_COLOR_SPREAD, 100).coerceIn(0, 100),
+                colorSpectral = snapshot.int(KEY_COLOR_SPECTRAL, 0).coerceIn(0, 100),
                 borderOn     = snapshot.boolean(KEY_BORDER_ON, true),
                 borderWidth  = snapshot.int(KEY_BORDER_W, 80) / 100f,
                 borderJoin   = (snapshot.string(KEY_BORDER_JOIN, "0").toIntOrNull() ?: 0).coerceIn(0, 2),
@@ -288,6 +371,10 @@ internal class Settings(
                 lightIntensity = snapshot.int(KEY_LIGHT_INTENSITY, 100) / 100f,
                 lightWarmth    = snapshot.int(KEY_LIGHT_WARMTH, 50) / 100f,
                 lightAmbient   = snapshot.int(KEY_LIGHT_AMBIENT, 22) / 100f,
+                lightChoreoAmount = snapshot.int(KEY_LIGHT_CHOREO_AMOUNT, 18).coerceIn(0, 100) / 100f,
+                lightChoreoSpeed = snapshot.int(KEY_LIGHT_CHOREO_SPEED, 100).coerceIn(0, 200) / 100f,
+                lightChoreoSource = (snapshot.string(KEY_LIGHT_CHOREO_SOURCE, "3").toIntOrNull() ?: 3).coerceIn(0, 3).toFloat(),
+                clockWaveform = (snapshot.string(KEY_CLOCK_WAVEFORM, "0").toIntOrNull() ?: 0).coerceIn(0, 3),
                 matSheenColorR  = snapshot.int(KEY_MAT_SHEEN_COLOR_R, 100) / 100f,
                 matSheenColorG  = snapshot.int(KEY_MAT_SHEEN_COLOR_G, 97)  / 100f,
                 matSheenColorB  = snapshot.int(KEY_MAT_SHEEN_COLOR_B, 92)  / 100f,
@@ -295,6 +382,35 @@ internal class Settings(
                 matIridThickMax = snapshot.int(KEY_MAT_IRID_THICK_MAX, 560).toFloat(),
                 matRoughMod = snapshot.int(KEY_MAT_ROUGH_MOD, 0) / 100f,
                 matMetalMod = snapshot.int(KEY_MAT_METAL_MOD, 0) / 100f,
+                ornamentStyle = snapshot.int(KEY_ORNAMENT_STYLE, 0).coerceIn(0, 4).toFloat(),
+                ornamentAmount = snapshot.int(KEY_ORNAMENT_AMOUNT, 0).coerceIn(0, 100) / 100f,
+                ornamentWidth = snapshot.int(KEY_ORNAMENT_WIDTH, 45).coerceIn(0, 100) / 100f,
+                ornamentDensity = snapshot.int(KEY_ORNAMENT_DENSITY, 100).coerceIn(0, 100) / 100f,
+                ornamentPhase = snapshot.int(KEY_ORNAMENT_PHASE, 0).coerceIn(0, 100) / 100f,
+                ornamentTwist = snapshot.int(KEY_ORNAMENT_TWIST, 50).coerceIn(0, 100) / 100f,
+                ornamentSeed = snapshot.int(KEY_ORNAMENT_SEED, 0).coerceIn(0, 999).toFloat(),
+                surfaceContourAmount = snapshot.int(KEY_SURFACE_CONTOUR_AMOUNT, 0).coerceIn(0, 100) / 100f,
+                surfaceContourSource = (snapshot.string(KEY_SURFACE_CONTOUR_SOURCE, "0").toIntOrNull() ?: 0).coerceIn(0, 7).toFloat(),
+                surfaceContourSpacing = snapshot.int(KEY_SURFACE_CONTOUR_SPACING, 16).coerceIn(1, 64).toFloat(),
+                surfaceContourWidth = snapshot.int(KEY_SURFACE_CONTOUR_WIDTH, 18).coerceIn(1, 50) / 100f,
+                surfaceContourPhase = snapshot.int(KEY_SURFACE_CONTOUR_PHASE, 0).coerceIn(0, 100) / 100f,
+                surfaceContourL = snapshot.int(KEY_SURFACE_CONTOUR_L, 92).coerceIn(0, 100) / 100f,
+                surfaceContourC = snapshot.int(KEY_SURFACE_CONTOUR_C, 6).coerceIn(0, 40) / 100f,
+                surfaceContourH = snapshot.int(KEY_SURFACE_CONTOUR_H, 85).coerceIn(0, 360).toFloat(),
+                sourceMarkAL = snapshot.int(KEY_SOURCE_MARK_A_L, 62).coerceIn(0, 100) / 100f,
+                sourceMarkAC = snapshot.int(KEY_SOURCE_MARK_A_C, 28).coerceIn(0, 40) / 100f,
+                sourceMarkAH = snapshot.int(KEY_SOURCE_MARK_A_H, 30).coerceIn(0, 360).toFloat(),
+                sourceMarkBL = snapshot.int(KEY_SOURCE_MARK_B_L, 58).coerceIn(0, 100) / 100f,
+                sourceMarkBC = snapshot.int(KEY_SOURCE_MARK_B_C, 24).coerceIn(0, 40) / 100f,
+                sourceMarkBH = snapshot.int(KEY_SOURCE_MARK_B_H, 265).coerceIn(0, 360).toFloat(),
+                sourceMarkCL = snapshot.int(KEY_SOURCE_MARK_C_L, 72).coerceIn(0, 100) / 100f,
+                sourceMarkCC = snapshot.int(KEY_SOURCE_MARK_C_C, 4).coerceIn(0, 40) / 100f,
+                sourceMarkCH = snapshot.int(KEY_SOURCE_MARK_C_H, 85).coerceIn(0, 360).toFloat(),
+                edgeProfileWidth = snapshot.int(KEY_EDGE_PROFILE_WIDTH, 0).coerceIn(0, 100) / 100f,
+                edgeProfileGlow = snapshot.int(KEY_EDGE_PROFILE_GLOW, 0).coerceIn(0, 100) / 100f,
+                edgeProfileL = snapshot.int(KEY_EDGE_PROFILE_L, 100).coerceIn(0, 100) / 100f,
+                edgeProfileC = snapshot.int(KEY_EDGE_PROFILE_C, 0).coerceIn(0, 37) / 100f,
+                edgeProfileH = snapshot.int(KEY_EDGE_PROFILE_H, 0).coerceIn(0, 359).toFloat(),
                 // Projection mode + disk-mode params. PROJECTION is a
                 // "0"/"1" ListPreference. Scale slider 0..100 maps
                 // LINEAR to 0.05..3.0 — the lower bound is 0.05 (not 0)

@@ -36,6 +36,7 @@ internal object NativeBridge {
      * Push the current Settings to the renderer. Encoded as two flat arrays:
      *
      *   ints   = [family, seedIdx, generation, preset, colorCount, colorMode,
+     *             colorSpread, colorSpectral,
      *             borderOn, borderJoin, bgMode, rippleMode, panMode, rippleKind,
      *             projection, hypBorderSubdiv, hypFillSubdiv]
      *   floats = [borderWidth, borderFill, borderPoint, borderGap,
@@ -44,7 +45,10 @@ internal object NativeBridge {
      *             zoom, rotation, panX, panY,
      *             brightness, depthAmount, rippleSpeed,
      *             material sliders, light sliders, material colour sliders,
-     *             matRoughMod, matMetalMod, hypScale, hypBoostX, hypBoostY,
+     *             matRoughMod, matMetalMod,
+     *             ornament sliders, hypScale, hypBoostX, hypBoostY,
+     *             surface contour sliders, source-mark colour sliders,
+     *             inner edge-profile sliders,
      *             followed by custom OKLCH palette triples]
      *
      * Both must match the layout the JNI bridge expects (jni_bridge.cpp).
@@ -54,7 +58,7 @@ internal object NativeBridge {
     /** Pinch gesture: relative scale + rotation delta. */
     external fun touchPinch(nativePtr: Long, scale: Float, rotDelta: Float)
 
-    /** Single-finger drag delta. In Locked pan mode this is ignored. */
+    /** Single-finger drag delta. In Free pan mode this translates the live view. */
     external fun touchMove(nativePtr: Long, dx: Float, dy: Float)
 
     /** Read back the current live view transform for persistence on touch-end. */
@@ -77,10 +81,11 @@ internal object NativeBridge {
                                  screenW: Int, screenH: Int)
 
     /**
-     * Push the home-screen horizontal scroll offset (0..1, 0.5 = centered)
-     * so the quasicrystal ripple can phase-shift with page swipes.
+     * Push the home-screen horizontal scroll offset. xOffset is normalized
+     * phase (0..1); xPixelOffset is the launcher's real surface-window
+     * translation in pixels for Endless pan mode.
      */
-    external fun setPageOffset(nativePtr: Long, xOffset: Float)
+    external fun setPageOffset(nativePtr: Long, xOffset: Float, xPixelOffset: Int)
 
     /** Configure analyzer kernels from Media3's format callback. */
     external fun configureAudio(sampleRate: Int)
@@ -109,6 +114,7 @@ internal object NativeBridge {
     /** Toggle the ImGui-based node graph editor overlay on/off. */
     external fun graphSetVisible(nativePtr: Long, visible: Boolean)
     external fun graphIsVisible(nativePtr: Long): Boolean
+    external fun graphNeedsFrameLoop(nativePtr: Long): Boolean
     /** Serialize the current node graph to JSON for profile persistence. */
     external fun graphSave(nativePtr: Long): String
     external fun graphLoad(nativePtr: Long, json: String): Boolean

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { ChevronLeft, ChevronRight, GripVertical } from 'lucide-react';
+import { ChevronLeft, ChevronRight, GripVertical, Move, Rotate3D, RotateCcw } from 'lucide-react';
 import type { BufferGeometry } from 'three/webgpu';
 import { loadAtlasManifest, firstTarget, targetSettings } from './atlas/loadAtlas';
 import { familyByValue, maxGenerationForFamily, seedLabel, seedOptionsForFamily } from './tiling/families';
@@ -23,10 +23,25 @@ import {
   editRidesParam,
   finiteModulation,
 } from './flow/modulationTargetRuntime';
-import type { AtlasCategory, AtlasItem, AtlasManifest, BoostPosition, DragMode, FieldSlot, Gains, GraphPresetAppState, LiveBoostStore, Patch, PostChainSpec, RenderInputs } from './types';
-import type { WallpaperRenderer } from './render/webgpuRenderer';
+import type { AtlasCategory, AtlasItem, AtlasManifest, BoostPosition, DragMode, FieldSlot, Gains, GraphPresetAppState, LiveBoostStore, Patch, PostChainSpec, RenderInputs, TilingWindow } from './types';
+import type { ViewGestureMode, WallpaperRenderer } from './render/webgpuRenderer';
+import { isOrderFiveIfsSettings, orderFiveIfsPointCount } from './tiling/orderFiveIfs';
+import { sourceOverlayActiveForStyle } from './tiling/capabilities';
+import { supportsWindowedPatchGeneration, windowedPatchKey } from './tiling/windowedGeneration';
+
+// Loaded with the renderer chunk (see the renderer-init effect): the wrapper
+// touches three/webgpu, and a static import would drag three into the entry
+// bundle. Every call site runs behind a `rendererRef.current` guard, and the
+// renderer-init effect assigns this before setRendererReady(true), so the stub
+// throwing means that invariant was broken — fail loudly rather than render
+// nothing.
+let buildOrderFiveIfsGeometry: typeof import('./tiling/orderFiveIfsGeometry')['buildOrderFiveIfsGeometry'] = () => {
+  throw new Error('orderFiveIfsGeometry is loaded with the renderer chunk; renderer is not initialized yet');
+};
 
 const CURRENT_CONTROLS = '__current_controls__';
+const FILL_GEOMETRY_CACHE_LIMIT = 4;
+const EDGE_GEOMETRY_CACHE_LIMIT = 6;
 // Settings that change the baked fill mesh (vertices + the per-vertex
 // paletteSlot index), so changing one must rebuild the surface mesh. NOT included:
 // `preset`/`customColors` — those change only the colour *values* per slot, which
@@ -35,9 +50,22 @@ const CURRENT_CONTROLS = '__current_controls__';
 // change (and the Poincaré flatten/re-ball flicker that came with it).
 const FILL_GEOMETRY_SETTINGS: SettingKey[] = [
   'hyp_fill_subdiv',
+  'ornament_style',
   'projection',
+  'surface_relief_mode',
+  'facet_refine',
+  'adapt_tess',
+  'source_mark_detail',
 ];
 const PALETTE_CLASS_SETTINGS: SettingKey[] = ['color_count', 'color_mode', 'color_spread'];
+const ATTRACTOR_GEOMETRY_SETTINGS: SettingKey[] = [
+  'family',
+  'seed',
+  'generation',
+  'preset',
+  'color_count',
+  'color_spectral',
+];
 
 // Border shape is real edge geometry: round/bevel/miter/fill/point/gap live in
 // borderJoin.ts. Rebuild only the edge mesh for these controls.
@@ -49,6 +77,13 @@ const BORDER_GEOMETRY_SETTINGS: SettingKey[] = [
   'border_point',
   'border_gap',
   'hyp_border_subdiv',
+];
+const EDGE_PROJECTED_GEOMETRY_SETTINGS: SettingKey[] = [
+  'projection',
+  'hyp_scale',
+  'hyp_fill_subdiv',
+  'adapt_tess',
+  'surface_relief_mode',
 ];
 type PreviewGeometryMode = 'fill' | 'border';
 
@@ -66,9 +101,38 @@ type SettingsMutator = (current: Settings) => Settings;
 type LiveModulatedSettingBases = Partial<Record<SettingKey, number>>;
 type LuminanceModulationBase = { index: number; value: number };
 type PendingPaletteRender = { settings: Settings; palette: Palette };
+type FillGeometryCacheEntry = {
+  key: string;
+  geometry: BufferGeometry;
+  overlayGeometry: BufferGeometry | null;
+};
+type EdgeGeometryCacheEntry = {
+  key: string;
+  geometry: BufferGeometry | null;
+};
+type CachedEdgeGeometry = {
+  key: string;
+  geometry: BufferGeometry | null;
+  retainPrevious: boolean;
+};
+type CachedFillGeometry = {
+  key: string;
+  geometry: BufferGeometry;
+  edgeGeometry: BufferGeometry | null;
+  overlayGeometry: BufferGeometry | null;
+  edgeKey: string;
+  palette: Palette;
+  retainPrevious: boolean;
+  retainPreviousEdge: boolean;
+};
 
 function errorMessage(error: Error | string): string {
   return error instanceof Error ? error.stack ?? error.message : error;
+}
+
+function isGeometryBudgetMessage(message: string): boolean {
+  return message.includes('tiling mesh exceeds vertex budget')
+    || message.includes('WebGPU buffer budget exceeded');
 }
 
 function clampGeneration(settings: Settings): Settings {
@@ -95,11 +159,36 @@ function settingsKey(settings: Settings, keys: SettingKey[]): string {
 }
 
 function fillGeometryKey(settings: Settings): string {
-  return settingsKey(settings, FILL_GEOMETRY_SETTINGS);
+  const family = intSetting(settings, 'family', 0, 19);
+  const overlayActive = sourceOverlayActiveForStyle(family, intSetting(settings, 'ornament_style', 0, 4)) ? '1' : '0';
+  return `${settingsKey(settings, FILL_GEOMETRY_SETTINGS)}|source_overlay:${overlayActive}`;
 }
 
 function borderGeometryKey(settings: Settings): string {
   return settingsKey(settings, BORDER_GEOMETRY_SETTINGS);
+}
+
+function geometryWindowCacheKey(window: TilingWindow | null): string {
+  if (!window) return 'window:full';
+  const q = (value: number): string => String(Math.round(value * 1000));
+  return `window:${q(window.centerX)},${q(window.centerY)},${q(window.halfWidth)},${q(window.halfHeight)}`;
+}
+
+function fillGeometryCacheKey(settings: Settings, window: TilingWindow | null): string {
+  return [
+    fillGeometryKey(settings),
+    borderGeometryKey(settings),
+    settingsKey(settings, PALETTE_CLASS_SETTINGS),
+    geometryWindowCacheKey(window),
+  ].join('||');
+}
+
+function edgeGeometryCacheKey(settings: Settings, window: TilingWindow | null): string {
+  return [
+    borderGeometryKey(settings),
+    settingsKey(settings, EDGE_PROJECTED_GEOMETRY_SETTINGS),
+    geometryWindowCacheKey(window),
+  ].join('||');
 }
 
 function borderGeometryBasisSettings(current: Settings, baked: Settings | null): Settings {
@@ -124,7 +213,6 @@ function isPaletteClassSetting(key: SettingKey): boolean {
 function copyOklch(color: Oklch): Oklch {
   return [color[0], color[1], color[2]];
 }
-
 
 function heldSettingKeys(preview: Settings | null, heldParams: Record<string, boolean | undefined>): SettingKey[] {
   if (!preview) return [];
@@ -188,6 +276,14 @@ function sameLiveModulatedSettings(a: Partial<Settings>, b: Partial<Settings>): 
   return LIVE_MODULATED_SETTING_KEYS.every(key => a[key] === b[key]);
 }
 
+function mergeHeldPreviewSettings(settings: Settings, preview: Settings | null, heldParams: Record<string, boolean | undefined>): Settings {
+  const keys = heldSettingKeys(preview, heldParams);
+  if (!preview || keys.length === 0) return settings;
+  const merged = { ...settings };
+  for (const key of keys) merged[key] = preview[key];
+  return merged;
+}
+
 function paletteWithLuminance(palette: Palette, index: number, luminance: number): Palette {
   return {
     ...palette,
@@ -234,10 +330,13 @@ export function App() {
   const audioModulationsRef = useRef<Record<string, number | undefined>>({});
   const postChainRef = useRef<PostChainSpec>([]);
   const fieldPhaseRef = useRef(0);
+  const choreoPhaseRef = useRef(0);
   const fieldSlotsRef = useRef<FieldSlot[]>([]);
   const renderInputsRef = useRef<RenderInputs>({
     geometry: true,
+    attractor: true,
     lighting: true,
+    choreoPhase: true,
     color: true,
     material: true,
     materialColor: true,
@@ -266,10 +365,17 @@ export function App() {
   const previewGeometryFrameRef = useRef(0);
   const previewGeometryModeRef = useRef<PreviewGeometryMode>('border');
   const previewPaletteFrameRef = useRef(0);
+  const viewWindowChangeTimeoutRef = useRef(0);
   const liveModulatedSettingBasesRef = useRef<LiveModulatedSettingBases>({});
   const luminanceModBaseRef = useRef<LuminanceModulationBase | null>(null);
   const luminanceModActiveRef = useRef(false);
   const bakedGeometrySettingsRef = useRef<Settings | null>(null);
+  const fillGeometryCacheRef = useRef<FillGeometryCacheEntry[]>([]);
+  const fillGeometryCachePatchRef = useRef<Patch | null>(null);
+  const activeFillGeometryCacheKeyRef = useRef('');
+  const edgeGeometryCacheRef = useRef<EdgeGeometryCacheEntry[]>([]);
+  const edgeGeometryCachePatchRef = useRef<Patch | null>(null);
+  const activeEdgeGeometryCacheKeyRef = useRef('');
   const gainsRef = useRef<Gains>({ relief: 0.28, emissive: 0.55, film: 0.36, metal: 0.18 });
   const dragModeRef = useRef<DragMode>('ride');
   if (!liveBoostStoreRef.current) liveBoostStoreRef.current = createLiveBoostStore();
@@ -280,12 +386,15 @@ export function App() {
   const [settings, setSettings] = useState(() => normalizeSettings(DEFAULT_SETTINGS));
   const [liveModulatedSettings, setLiveModulatedSettings] = useState<Partial<Settings>>({});
   const [patch, setPatch] = useState<Patch | null>(null);
+  const [viewWindowPatchKey, setViewWindowPatchKey] = useState('full');
   const [customColors, setCustomColors] = useState<Oklch[] | null>(null);
   const customColorsRef = useRef<Oklch[] | null>(null);
   const [selectedColor, setSelectedColor] = useState(0);
   const [rendererReady, setRendererReady] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [drawerWidth, setDrawerWidth] = useState(() => Math.min(780, Math.max(560, window.innerWidth * 0.48)));
+  const [viewGestureMode, setViewGestureMode] = useState<ViewGestureMode>('rotate');
+  const viewGestureModeRef = useRef<ViewGestureMode>('rotate');
   const [loading, setLoading] = useState('Loading atlas');
   const [error, setError] = useState('');
   const [gains, setGains] = useState({ relief: 0.28, emissive: 0.55, film: 0.36, metal: 0.18 });
@@ -341,7 +450,11 @@ export function App() {
   const fillGeometrySettingsKey = useMemo(() => fillGeometryKey(renderSettings), [renderSettings]);
   const borderGeometrySettingsKey = useMemo(() => borderGeometryKey(renderSettings), [renderSettings]);
   const paletteClassSettingsKey = useMemo(() => settingsKey(renderSettings, PALETTE_CLASS_SETTINGS), [renderSettings]);
+  const attractorGeometrySettingsKey = useMemo(() => settingsKey(renderSettings, ATTRACTOR_GEOMETRY_SETTINGS), [renderSettings]);
   const appliedBorderGeometryRef = useRef<{ key: string; patch: Patch } | null>(null);
+  const renderIsAttractor = isOrderFiveIfsSettings(renderSettings);
+  const renderItemCount = renderIsAttractor ? orderFiveIfsPointCount(renderSettings) : (patch?.tiles.length ?? 0);
+  const renderUnit = renderIsAttractor ? 'points' : 'tiles';
   const selectedColorValue: Oklch =
     editablePalette.colors[Math.min(selectedColor, colorCount - 1)] ?? editablePalette.colors[0] ?? [0.78, 0.13, 80];
   const drawerStyle: CSSProperties & Record<'--drawer-width', string> = {
@@ -352,6 +465,22 @@ export function App() {
     setTargetId(CURRENT_CONTROLS);
     setSettings(current => clampGeneration(normalizeSettings(mutator({ ...current }))));
   }, []);
+
+  const fallbackMonotileGenerationForBudget = useCallback((): boolean => {
+    const current = settingsRef.current;
+    const familyValue = String(current.family ?? '');
+    if (familyValue !== '11' && familyValue !== '12') return false;
+    const generation = Math.floor(Number(current.generation ?? 0));
+    if (!Number.isFinite(generation) || generation <= 0) return false;
+    setLoading('Reducing geometry detail');
+    updateSettings(next => {
+      if (String(next.family ?? '') === familyValue && Number(next.generation ?? 0) >= generation) {
+        next.generation = generation - 1;
+      }
+      return next;
+    });
+    return true;
+  }, [updateSettings]);
 
   const setSetting = useCallback((key: SettingKey, value: SettingValue) => {
     updateSettings(current => {
@@ -393,6 +522,10 @@ export function App() {
     const nextPalette = key === 'preset' || key === 'color_spectral'
       ? paletteForSettings(next, customColorsRef.current)
       : paletteRef.current;
+    if (key === 'preset' || key === 'color_spectral') {
+      paletteRef.current = nextPalette;
+      renderPaletteRef.current = nextPalette;
+    }
     rendererRef.current?.setSettings(next, nextPalette);
     // setSettings renders the un-modulated baseline; re-apply the current audio
     // modulation in the same tick so the preview render already includes it.
@@ -418,11 +551,14 @@ export function App() {
           audioModulationsRef.current,
           boostRef.current ?? liveBoostStore.getSnapshot(),
         );
-        const { paletteSlot, palette: builtPalette } = buildSlots(currentPatch, current, customColorsRef.current);
-        if (!renderer.setPaletteSlots(paletteSlot, builtPalette, { render: false })) {
+        const window = renderer.currentTilingWindow();
+        const { paletteSlot, topologyPaletteColor, palette: builtPalette } = buildSlots(currentPatch, current, customColorsRef.current, window);
+        if (!renderer.setPaletteSlots(paletteSlot, topologyPaletteColor, builtPalette, { render: false })) {
           schedulePreviewGeometryRef.current('fill');
           return;
         }
+        paletteRef.current = builtPalette;
+        renderPaletteRef.current = builtPalette;
         renderer.setSettings(current, builtPalette);
         applyAudioDriveRef.current();
       } catch (caught) {
@@ -434,6 +570,155 @@ export function App() {
   useEffect(() => {
     schedulePreviewPaletteSlotsRef.current = schedulePreviewPaletteSlots;
   }, [schedulePreviewPaletteSlots]);
+
+  const cachedOrBuildEdgeGeometry = useCallback((
+    buildEdge: typeof import('./tiling/geometry').buildEdgeGeometryForPatch,
+    currentPatch: Patch,
+    current: Settings,
+    window: TilingWindow | null,
+  ): CachedEdgeGeometry => {
+    const samePatch = edgeGeometryCachePatchRef.current === currentPatch;
+    if (!samePatch) {
+      const activeKey = activeEdgeGeometryCacheKeyRef.current;
+      for (const entry of edgeGeometryCacheRef.current) {
+        if (entry.key !== activeKey) entry.geometry?.dispose();
+      }
+      edgeGeometryCacheRef.current = [];
+      edgeGeometryCachePatchRef.current = currentPatch;
+      activeEdgeGeometryCacheKeyRef.current = '';
+    }
+
+    const key = edgeGeometryCacheKey(current, window);
+    const entries = edgeGeometryCacheRef.current;
+    const existingIndex = entries.findIndex(entry => entry.key === key);
+    if (existingIndex >= 0) {
+      const [entry] = entries.splice(existingIndex, 1);
+      entries.unshift(entry!);
+      return {
+        key,
+        geometry: entry!.geometry,
+        retainPrevious: samePatch,
+      };
+    }
+
+    const geometry = buildEdge(currentPatch, current, window);
+    entries.unshift({ key, geometry });
+    while (entries.length > EDGE_GEOMETRY_CACHE_LIMIT) {
+      const activeKey = activeEdgeGeometryCacheKeyRef.current;
+      let evictIndex = entries.length - 1;
+      while (evictIndex >= 0 && entries[evictIndex]?.key === activeKey) evictIndex -= 1;
+      if (evictIndex < 0) break;
+      const [evicted] = entries.splice(evictIndex, 1);
+      evicted?.geometry?.dispose();
+    }
+    return {
+      key,
+      geometry,
+      retainPrevious: samePatch,
+    };
+  }, []);
+
+  const cachedOrBuildFillGeometry = useCallback((
+    buildMesh: typeof import('./tiling/geometry').buildMeshGeometry,
+    buildEdge: typeof import('./tiling/geometry').buildEdgeGeometryForPatch,
+    currentPatch: Patch,
+    current: Settings,
+    window: TilingWindow | null,
+  ): CachedFillGeometry => {
+    const samePatch = fillGeometryCachePatchRef.current === currentPatch;
+    if (!samePatch) {
+      const activeKey = activeFillGeometryCacheKeyRef.current;
+      for (const entry of fillGeometryCacheRef.current) {
+        if (entry.key !== activeKey) {
+          entry.geometry.dispose();
+          entry.overlayGeometry?.dispose();
+        }
+      }
+      fillGeometryCacheRef.current = [];
+      fillGeometryCachePatchRef.current = currentPatch;
+      activeFillGeometryCacheKeyRef.current = '';
+    }
+
+    const key = fillGeometryCacheKey(current, window);
+    const entries = fillGeometryCacheRef.current;
+    const existingIndex = entries.findIndex(entry => entry.key === key);
+    if (existingIndex >= 0) {
+      const [entry] = entries.splice(existingIndex, 1);
+      entries.unshift(entry!);
+      const edge = cachedOrBuildEdgeGeometry(buildEdge, currentPatch, current, window);
+      return {
+        key,
+        geometry: entry!.geometry,
+        edgeGeometry: edge.geometry,
+        overlayGeometry: entry!.overlayGeometry,
+        edgeKey: edge.key,
+        palette: paletteForSettings(current, customColorsRef.current),
+        retainPrevious: samePatch,
+        retainPreviousEdge: edge.retainPrevious,
+      };
+    }
+
+    const built = buildMesh(currentPatch, current, customColorsRef.current, window);
+    const edgeKey = edgeGeometryCacheKey(current, window);
+    if (edgeGeometryCachePatchRef.current !== currentPatch) {
+      const activeEdgeKey = activeEdgeGeometryCacheKeyRef.current;
+      for (const entry of edgeGeometryCacheRef.current) {
+        if (entry.key !== activeEdgeKey) entry.geometry?.dispose();
+      }
+      edgeGeometryCacheRef.current = [];
+    }
+    edgeGeometryCachePatchRef.current = currentPatch;
+    activeEdgeGeometryCacheKeyRef.current = edgeKey;
+    edgeGeometryCacheRef.current.unshift({ key: edgeKey, geometry: built.edgeGeometry });
+    while (edgeGeometryCacheRef.current.length > EDGE_GEOMETRY_CACHE_LIMIT) {
+      const activeEdgeKey = activeEdgeGeometryCacheKeyRef.current;
+      let evictIndex = edgeGeometryCacheRef.current.length - 1;
+      while (evictIndex >= 0 && edgeGeometryCacheRef.current[evictIndex]?.key === activeEdgeKey) evictIndex -= 1;
+      if (evictIndex < 0) break;
+      const [evicted] = edgeGeometryCacheRef.current.splice(evictIndex, 1);
+      evicted?.geometry?.dispose();
+    }
+    entries.unshift({ key, geometry: built.geometry, overlayGeometry: built.overlayGeometry });
+    while (entries.length > FILL_GEOMETRY_CACHE_LIMIT) {
+      const activeKey = activeFillGeometryCacheKeyRef.current;
+      let evictIndex = entries.length - 1;
+      while (evictIndex >= 0 && entries[evictIndex]?.key === activeKey) evictIndex -= 1;
+      if (evictIndex < 0) break;
+      const [evicted] = entries.splice(evictIndex, 1);
+      evicted?.geometry.dispose();
+      evicted?.overlayGeometry?.dispose();
+    }
+    return {
+      key,
+      geometry: built.geometry,
+      edgeGeometry: built.edgeGeometry,
+      overlayGeometry: built.overlayGeometry,
+      edgeKey,
+      palette: built.palette,
+      retainPrevious: samePatch,
+      retainPreviousEdge: samePatch,
+    };
+  }, [cachedOrBuildEdgeGeometry]);
+
+  const disposeInactiveGeometryCaches = useCallback(() => {
+    const activeKey = activeFillGeometryCacheKeyRef.current;
+    for (const entry of fillGeometryCacheRef.current) {
+      if (entry.key !== activeKey) {
+        entry.geometry.dispose();
+        entry.overlayGeometry?.dispose();
+      }
+    }
+    fillGeometryCacheRef.current = activeKey
+      ? fillGeometryCacheRef.current.filter(entry => entry.key === activeKey)
+      : [];
+    const activeEdgeKey = activeEdgeGeometryCacheKeyRef.current;
+    for (const entry of edgeGeometryCacheRef.current) {
+      if (entry.key !== activeEdgeKey) entry.geometry?.dispose();
+    }
+    edgeGeometryCacheRef.current = activeEdgeKey
+      ? edgeGeometryCacheRef.current.filter(entry => entry.key === activeEdgeKey)
+      : [];
+  }, []);
 
   // Rebuild the mesh from the live preview settings, coalesced to one rebuild per
   // frame. Uses lazy builders cached by the geometry effect; before that import
@@ -460,26 +745,46 @@ export function App() {
           audioModulationsRef.current,
           boostRef.current ?? liveBoostStore.getSnapshot(),
         );
+        if (isOrderFiveIfsSettings(current)) {
+          const pointGeometry = buildOrderFiveIfsGeometry(current, customColorsRef.current);
+          renderer.setSettings(current, paletteForSettings(current, customColorsRef.current));
+          renderer.setGeometry(null, null, null, { frame: false, warmup: false });
+          renderer.setAttractorGeometry(pointGeometry, { frame: false, warmup: false });
+          bakedGeometrySettingsRef.current = current;
+          appliedBorderGeometryRef.current = null;
+          applyAudioDriveRef.current();
+          return;
+        }
         if (scheduledMode === 'border') {
           if (!buildEdge) return;
           const edgeBasis = borderGeometryBasisSettings(current, bakedGeometrySettingsRef.current);
+          const window = renderer.currentTilingWindow();
+          const { key, geometry, retainPrevious } = cachedOrBuildEdgeGeometry(buildEdge, currentPatch, edgeBasis, window);
           renderer.setSettings(current, paletteForSettings(current, customColorsRef.current));
-          renderer.setEdgeGeometry(buildEdge(currentPatch, edgeBasis));
+          renderer.setEdgeGeometry(geometry, { retirePrevious: !retainPrevious });
+          activeEdgeGeometryCacheKeyRef.current = key;
           appliedBorderGeometryRef.current = { key: borderGeometryKey(current), patch: currentPatch };
         } else {
-          if (!buildMesh) return;
-          const { geometry, edgeGeometry, palette: builtPalette } = buildMesh(currentPatch, current, customColorsRef.current);
+          if (!buildMesh || !buildEdge) return;
+          const window = renderer.currentTilingWindow();
+          const { key, geometry, edgeGeometry, overlayGeometry, edgeKey, palette: builtPalette, retainPrevious, retainPreviousEdge } = cachedOrBuildFillGeometry(buildMesh, buildEdge, currentPatch, current, window);
+          renderPaletteRef.current = builtPalette;
           renderer.setSettings(current, builtPalette);
-          renderer.setGeometry(geometry, edgeGeometry, { frame: false, warmup: false });
+          renderer.setGeometry(geometry, edgeGeometry, overlayGeometry, { frame: false, warmup: false, retirePrevious: !retainPrevious, retirePreviousEdge: !retainPreviousEdge });
+          renderer.applyPaletteColors(builtPalette);
+          activeFillGeometryCacheKeyRef.current = key;
+          activeEdgeGeometryCacheKeyRef.current = edgeKey;
           bakedGeometrySettingsRef.current = current;
           appliedBorderGeometryRef.current = { key: borderGeometryKey(current), patch: currentPatch };
         }
         applyAudioDriveRef.current();
       } catch (caught) {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        if (isGeometryBudgetMessage(message) && fallbackMonotileGenerationForBudget()) return;
         setError(caught instanceof Error ? errorMessage(caught) : String(caught));
       }
     });
-  }, []);
+  }, [cachedOrBuildEdgeGeometry, cachedOrBuildFillGeometry, fallbackMonotileGenerationForBudget, liveBoostStore]);
 
   useEffect(() => {
     schedulePreviewGeometryRef.current = schedulePreviewGeometry;
@@ -494,7 +799,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    previewSettingsRef.current = settings;
+    previewSettingsRef.current = mergeHeldPreviewSettings(settings, previewSettingsRef.current, heldParamsRef.current);
     settingsRef.current = settings;
     liveModulatedSettingBasesRef.current = {};
   }, [settings]);
@@ -540,7 +845,7 @@ export function App() {
     rendererRef.current?.setAudioDrive({
       dragMode: dragModeRef.current,
       heldParams: heldParamsRef.current,
-    }, audioModulationsRef.current);
+    }, audioModulationsRef.current, audio.getSnapshot().features);
   }, [audio]);
 
   useEffect(() => {
@@ -627,6 +932,23 @@ export function App() {
     });
   }, [applyLiveSettingModulations]);
 
+  const handleViewWindowChange = useCallback(() => {
+    const renderer = rendererRef.current;
+    const family = intSetting(renderSettingsRef.current, 'family', 0, 19);
+    if (renderer && supportsWindowedPatchGeneration(family)) {
+      if (viewWindowChangeTimeoutRef.current) window.clearTimeout(viewWindowChangeTimeoutRef.current);
+      viewWindowChangeTimeoutRef.current = window.setTimeout(() => {
+        viewWindowChangeTimeoutRef.current = 0;
+        const activeRenderer = rendererRef.current;
+        if (!activeRenderer) return;
+        const activeFamily = intSetting(renderSettingsRef.current, 'family', 0, 19);
+        if (!supportsWindowedPatchGeneration(activeFamily)) return;
+        const key = windowedPatchKey(activeRenderer.currentTilingWindow());
+        setViewWindowPatchKey(current => current === key ? current : key);
+      }, 180);
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     async function boot() {
@@ -637,7 +959,7 @@ export function App() {
         const first = firstTarget(nextManifest);
         setCategoryId(first.category.id);
         setTargetId(first.item.id);
-        setSettings(targetSettings(first.item));
+        setSettings(targetSettings(first.category, first.item));
         setLoading('');
       } catch (caught) {
         if (!cancelled) setError(caught instanceof Error ? errorMessage(caught) : String(caught));
@@ -650,6 +972,7 @@ export function App() {
       if (customColorFrameRef.current) cancelAnimationFrame(customColorFrameRef.current);
       if (liveSettingModulationFrameRef.current) cancelAnimationFrame(liveSettingModulationFrameRef.current);
       if (previewGeometryFrameRef.current) cancelAnimationFrame(previewGeometryFrameRef.current);
+      if (viewWindowChangeTimeoutRef.current) window.clearTimeout(viewWindowChangeTimeoutRef.current);
     };
   }, []);
 
@@ -658,9 +981,13 @@ export function App() {
     let cancelled = false;
     async function initRenderer() {
       try {
-        const { WallpaperRenderer } = await import('./render/webgpuRenderer');
+        const [{ WallpaperRenderer }, orderFiveIfsGeometryModule] = await Promise.all([
+          import('./render/webgpuRenderer'),
+          import('./tiling/orderFiveIfsGeometry'),
+        ]);
+        buildOrderFiveIfsGeometry = orderFiveIfsGeometryModule.buildOrderFiveIfsGeometry;
         if (cancelled || !viewportRef.current) return;
-        const renderer = new WallpaperRenderer(viewportRef.current);
+        const renderer = new WallpaperRenderer(viewportRef.current, { onViewWindowChange: handleViewWindowChange });
         rendererRef.current = renderer;
         renderer.onDeviceLost = (message) => {
           if (!cancelled) setError(`WebGPU device lost: ${message}. Reload the page — this should not happen, so investigate the cause rather than masking it.`);
@@ -670,7 +997,9 @@ export function App() {
         renderer.setPostChain(postChainRef.current);
         renderer.setRenderInputs(renderInputsRef.current);
         renderer.setFieldPhase(fieldPhaseRef.current);
+        renderer.setChoreoPhase(choreoPhaseRef.current);
         renderer.setFieldSlots(fieldSlotsRef.current);
+        renderer.setViewGestureMode(viewGestureModeRef.current);
         setRendererReady(true);
       } catch (caught) {
         if (!cancelled) setError(caught instanceof Error ? errorMessage(caught) : String(caught));
@@ -682,20 +1011,30 @@ export function App() {
       // StrictMode's dev mount→unmount→remount) releases the WebGPU instance
       // before a new one is created — no orphaned/double instance.
       cancelled = true;
+      disposeInactiveGeometryCaches();
       rendererRef.current?.dispose();
       rendererRef.current = null;
       setRendererReady(false);
     };
-  }, []);
+  }, [disposeInactiveGeometryCaches, handleViewWindowChange]);
 
   useEffect(() => {
     if (!manifest) return;
     let cancelled = false;
-    setLoading('Generating geometry');
+    const family = intSetting(renderSettings, 'family', 0, 19);
+    const seed = intSetting(renderSettings, 'seed', 0, 1000);
+    const generation = intSetting(renderSettings, 'generation', 0, 1000);
+    const currentPatch = patchRef.current;
+    if (!currentPatch || currentPatch.family !== family || currentPatch.seed !== seed || currentPatch.generation !== generation) {
+      setLoading('Generating geometry');
+    }
     async function loadPatch() {
       try {
         const { loadPatchForSettings } = await import('./tiling/geometry');
-        const nextPatch = await loadPatchForSettings(renderSettings, activeItem);
+        const rendererWindow = currentPatch && rendererRef.current && supportsWindowedPatchGeneration(family)
+          ? rendererRef.current.currentTilingWindow()
+          : null;
+        const nextPatch = await loadPatchForSettings(renderSettings, activeItem, rendererWindow);
         if (cancelled) return;
         setPatch(nextPatch);
         setLoading('');
@@ -707,13 +1046,13 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeItem, manifest, renderSettings.family, renderSettings.generation, renderSettings.seed]);
+  }, [activeItem, manifest, rendererReady, renderSettings.family, renderSettings.generation, renderSettings.seed, viewWindowPatchKey]);
 
   useEffect(() => {
     if (!patch || !rendererReady || !rendererRef.current) return;
+    if (isOrderFiveIfsSettings(renderSettingsRef.current)) return;
     const currentPatch = patch;
     let cancelled = false;
-    let activeGeometry: BufferGeometry | null = null;
     let activeEdgeGeometry: BufferGeometry | null = null;
     async function buildGeometry() {
       const { buildEdgeGeometryForPatch, buildMeshGeometry, buildPaletteSlotsForPatch } = await import('./tiling/geometry');
@@ -735,30 +1074,62 @@ export function App() {
         audioModulationsRef.current,
         boostRef.current ?? liveBoostStore.getSnapshot(),
       );
-      const { geometry, edgeGeometry, palette: builtPalette } = buildMeshGeometry(currentPatch, current, customColorsRef.current);
+      const { key, geometry, edgeGeometry, overlayGeometry, edgeKey, palette: builtPalette, retainPrevious, retainPreviousEdge } = cachedOrBuildFillGeometry(
+        buildMeshGeometry,
+        buildEdgeGeometryForPatch,
+        currentPatch,
+        current,
+        rendererRef.current.currentTilingWindow(),
+      );
       const shouldFrame = framedPatchRef.current !== currentPatch;
-      activeGeometry = geometry;
       activeEdgeGeometry = edgeGeometry;
       rendererRef.current.setSettings(current, builtPalette);
-      rendererRef.current.setGeometry(geometry, edgeGeometry, { frame: shouldFrame, warmup: shouldFrame });
+      rendererRef.current.setGeometry(geometry, edgeGeometry, overlayGeometry, { frame: shouldFrame, warmup: shouldFrame, retirePrevious: !retainPrevious, retirePreviousEdge: !retainPreviousEdge });
+      rendererRef.current.applyPaletteColors(builtPalette);
+      activeFillGeometryCacheKeyRef.current = key;
+      activeEdgeGeometryCacheKeyRef.current = edgeKey;
       bakedGeometrySettingsRef.current = current;
       framedPatchRef.current = currentPatch;
       appliedBorderGeometryRef.current = { key: borderGeometryKey(current), patch: currentPatch };
-      activeGeometry = null;
       activeEdgeGeometry = null;
     }
     void buildGeometry().catch(caught => {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      if (!cancelled && isGeometryBudgetMessage(message) && fallbackMonotileGenerationForBudget()) return;
       if (!cancelled) setError(caught instanceof Error ? errorMessage(caught) : String(caught));
     });
     return () => {
       cancelled = true;
-      activeGeometry?.dispose();
       activeEdgeGeometry?.dispose();
     };
-  }, [fillGeometrySettingsKey, patch, rendererReady]);
+  }, [cachedOrBuildFillGeometry, fallbackMonotileGenerationForBudget, fillGeometrySettingsKey, patch, rendererReady]);
+
+  useEffect(() => {
+    if (!rendererReady || !rendererRef.current) return;
+    if (!isOrderFiveIfsSettings(renderSettingsRef.current)) {
+      rendererRef.current.setAttractorGeometry(null, { frame: false, warmup: false });
+      return;
+    }
+    const current = effectiveRenderSettings(
+      renderSettingsRef.current,
+      previewSettingsRef.current,
+      heldParamsRef.current,
+      dragModeRef.current,
+      audioModulationsRef.current,
+      boostRef.current ?? liveBoostStore.getSnapshot(),
+    );
+    const paletteForRender = paletteForSettings(current, customColorsRef.current);
+    const geometry = buildOrderFiveIfsGeometry(current, customColorsRef.current);
+    rendererRef.current.setSettings(current, paletteForRender);
+    rendererRef.current.setGeometry(null, null, null, { frame: false, warmup: false });
+    rendererRef.current.setAttractorGeometry(geometry, { frame: true, warmup: true });
+    bakedGeometrySettingsRef.current = current;
+    applyAudioDriveRef.current();
+  }, [attractorGeometrySettingsKey, customColors, liveBoostStore, rendererReady]);
 
   useEffect(() => {
     if (!patch || !rendererReady || !rendererRef.current) return;
+    if (isOrderFiveIfsSettings(renderSettingsRef.current)) return;
     const currentPatch = patch;
     let cancelled = false;
     async function reclassifyPaletteSlots() {
@@ -773,8 +1144,11 @@ export function App() {
         audioModulationsRef.current,
         boostRef.current ?? liveBoostStore.getSnapshot(),
       );
-      const { paletteSlot, palette: builtPalette } = buildPaletteSlotsForPatch(currentPatch, current, customColorsRef.current);
-      if (!rendererRef.current.setPaletteSlots(paletteSlot, builtPalette, { render: false })) return;
+      const { paletteSlot, topologyPaletteColor, palette: builtPalette } = buildPaletteSlotsForPatch(currentPatch, current, customColorsRef.current, rendererRef.current.currentTilingWindow());
+      if (!rendererRef.current.setPaletteSlots(paletteSlot, topologyPaletteColor, builtPalette, { render: false })) {
+        schedulePreviewGeometryRef.current('fill');
+        return;
+      }
       rendererRef.current.setSettings(current, builtPalette);
       applyAudioDriveRef.current();
     }
@@ -788,6 +1162,7 @@ export function App() {
 
   useEffect(() => {
     if (!patch || !rendererReady || !rendererRef.current) return;
+    if (isOrderFiveIfsSettings(renderSettingsRef.current)) return;
     const currentPatch = patch;
     const applied = appliedBorderGeometryRef.current;
     if (applied?.patch === currentPatch && applied.key === borderGeometrySettingsKey) return;
@@ -806,9 +1181,11 @@ export function App() {
         boostRef.current ?? liveBoostStore.getSnapshot(),
       );
       const edgeBasis = borderGeometryBasisSettings(current, bakedGeometrySettingsRef.current);
-      activeEdgeGeometry = buildEdgeGeometryForPatch(currentPatch, edgeBasis);
+      const { key, geometry, retainPrevious } = cachedOrBuildEdgeGeometry(buildEdgeGeometryForPatch, currentPatch, edgeBasis, rendererRef.current.currentTilingWindow());
+      activeEdgeGeometry = geometry;
       rendererRef.current.setSettings(current, paletteForSettings(current, customColorsRef.current));
-      rendererRef.current.setEdgeGeometry(activeEdgeGeometry);
+      rendererRef.current.setEdgeGeometry(activeEdgeGeometry, { retirePrevious: !retainPrevious });
+      activeEdgeGeometryCacheKeyRef.current = key;
       appliedBorderGeometryRef.current = { key: borderGeometrySettingsKey, patch: currentPatch };
       activeEdgeGeometry = null;
       applyAudioDriveRef.current();
@@ -820,7 +1197,7 @@ export function App() {
       cancelled = true;
       activeEdgeGeometry?.dispose();
     };
-  }, [borderGeometrySettingsKey, patch, rendererReady]);
+  }, [borderGeometrySettingsKey, cachedOrBuildEdgeGeometry, patch, rendererReady]);
 
   useEffect(() => {
     if (!rendererReady || !rendererRef.current) return;
@@ -895,7 +1272,7 @@ export function App() {
     if (!category || !item) return;
     setCategoryId(category.id);
     setTargetId(item.id);
-    setSettings(targetSettings(item));
+    setSettings(targetSettings(category, item));
     customColorPreviewActiveRef.current = false;
     customColorsRef.current = null;
     setCustomColors(null);
@@ -925,7 +1302,13 @@ export function App() {
       const pending = pendingCustomColorRenderRef.current;
       pendingCustomColorRenderRef.current = null;
       if (!pending) return;
-      rendererRef.current?.setSettings(pending.settings, pending.palette);
+      const renderer = rendererRef.current;
+      if (renderer && isOrderFiveIfsSettings(pending.settings)) {
+        renderer.setSettings(pending.settings, pending.palette);
+        renderer.setAttractorGeometry(buildOrderFiveIfsGeometry(pending.settings, customColorsRef.current), { frame: false, warmup: false });
+      } else {
+        renderer?.setSettings(pending.settings, pending.palette);
+      }
       applyAudioDriveRef.current();
     });
   }, []);
@@ -1002,6 +1385,11 @@ export function App() {
     rendererRef.current?.setFieldPhase(phase);
   }, []);
 
+  const onChoreoPhase = useCallback((phase: number) => {
+    choreoPhaseRef.current = phase;
+    rendererRef.current?.setChoreoPhase(phase);
+  }, []);
+
   const onFieldSlots = useCallback((slots: FieldSlot[]) => {
     fieldSlotsRef.current = slots;
     const renderer = rendererRef.current;
@@ -1039,6 +1427,12 @@ export function App() {
 
   const resetView = useCallback(() => {
     rendererRef.current?.resetView();
+  }, []);
+
+  const setGestureMode = useCallback((mode: ViewGestureMode) => {
+    viewGestureModeRef.current = mode;
+    setViewGestureMode(mode);
+    rendererRef.current?.setViewGestureMode(mode);
   }, []);
 
   const resetClock = useCallback(() => {
@@ -1084,6 +1478,34 @@ export function App() {
   return (
     <>
       <section id="viewport" ref={viewportRef} aria-label="Tiling renderer" />
+      <div className="view-toolbar" aria-label="Renderer view controls">
+        <button
+          type="button"
+          className={viewGestureMode === 'rotate' ? 'selected' : ''}
+          onClick={() => setGestureMode('rotate')}
+          aria-label="Rotate view"
+          title="Rotate view"
+        >
+          <Rotate3D size={17} />
+        </button>
+        <button
+          type="button"
+          className={viewGestureMode === 'pan' ? 'selected' : ''}
+          onClick={() => setGestureMode('pan')}
+          aria-label="Pan view"
+          title="Pan view"
+        >
+          <Move size={17} />
+        </button>
+        <button
+          type="button"
+          onClick={resetView}
+          aria-label="Reset view"
+          title="Reset view"
+        >
+          <RotateCcw size={17} />
+        </button>
+      </div>
       <aside
         id="controls"
         ref={controlsRef}
@@ -1097,8 +1519,8 @@ export function App() {
             <h1>{activeItem?.name ?? `${family.label} / ${seedLabel(settings.family, settings.seed)}`}</h1>
           </div>
           <div className="status">
-            <span>{patch?.tiles.length ?? 0}</span>
-            <span>tiles</span>
+            <span>{renderItemCount}</span>
+            <span>{renderUnit}</span>
           </div>
         </header>
         <div className="graph-frame">
@@ -1138,7 +1560,8 @@ export function App() {
               customColors={customColors}
               gains={gains}
               dragMode={dragMode}
-              tiles={patch?.tiles.length ?? 0}
+              tiles={renderItemCount}
+              renderUnit={renderUnit}
               loading={loading}
               gamut={displayGamutLabel()}
               onCategory={onCategory}
@@ -1155,6 +1578,7 @@ export function App() {
               onPostChain={onPostChain}
               onRenderInputs={onRenderInputs}
               onFieldPhase={onFieldPhase}
+              onChoreoPhase={onChoreoPhase}
               onFieldSlots={onFieldSlots}
               onGraphPresetState={applyGraphPresetState}
               onDragMode={setDragMode}

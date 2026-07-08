@@ -113,10 +113,14 @@ function isValidGraphConnection(connection: GraphConnectionLike, nodes: readonly
     return false;
   }
   if (source.id === 'lighting') return sourceHandle === 'out' && target.id === 'renderer' && targetHandle === 'lighting';
+  if (source.id === 'ifs') return sourceHandle === 'points' && target.id === 'renderer' && targetHandle === 'attractor';
   if (source.id === 'postfx') return isDefaultFieldConnection(connection);
   if (source.id === 'edgeProfile') return sourceHandle === 'border' && target.id === 'renderer' && targetHandle === 'border';
   if (source.id === 'clock' && sourceHandle === 'out' && targetHandle === FIELD_SOURCE_PHASE_INLET.id) {
-    return (target.id === 'postfx' || target.type === 'fieldSource') && targetHandle === FIELD_SOURCE_PHASE_INLET.id;
+    // Field-source phase inlets are clock-only transports; the lighting
+    // choreography phase inlet shares the handle id but is a generic signal
+    // target (any source may drive it — see isSignalTarget).
+    return target.id === 'postfx' || target.type === 'fieldSource' || target.id === 'lighting';
   }
   if (source.type === 'fieldSource') {
     return target.id === 'renderer' && sourceHandle === targetHandle && ADDABLE_FIELD_HANDLES.has(sourceHandle);

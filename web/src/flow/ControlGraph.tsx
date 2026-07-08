@@ -30,7 +30,8 @@ import {
 } from 'lucide-react';
 import { EFFECT_CATALOG, fxParamDefaults, fxSelectDefaults, isFxKind } from '../render/postFxCatalog';
 import { fxIconComponent } from './fxIcons';
-import { isSignalSource, isSignalTarget, signalKey } from './signalUtils';
+import { clockTransportPhase, isSignalSource, isSignalTarget, signalKey } from './signalUtils';
+import { LIGHT_CHOREO_PHASE_INLET } from './controlSpecs';
 import { spliceMaterialFieldBypasses } from './materialLanes';
 import {
   evaluateSignals,
@@ -86,6 +87,7 @@ import {
   EdgeProfileNode,
   FieldSourceNode,
   FxNode,
+  IfsAttractorNode,
   LightingNode,
   MaterialNode,
   OperatorNode,
@@ -139,6 +141,12 @@ type AddCategorySpec = {
   label: string;
 };
 
+function postChainRuntimeSignature(chain: PostChainSpec): string {
+  return chain
+    .map(node => `${node.id}:${node.kind}:${node.bypass ? 1 : 0}:${numberRecordSignature(node.params)}:${stringRecordSignature(node.selects)}`)
+    .join('|');
+}
+
 const ADD_CATEGORIES: AddCategorySpec[] = [
   { id: 'sources', label: 'Sources' },
   { id: 'operators', label: 'Operators' },
@@ -182,6 +190,7 @@ type ControlGraphProps = {
   gains: Gains;
   dragMode: DragMode;
   tiles: number;
+  renderUnit: string;
   loading: string;
   gamut: string;
   onCategory: (categoryId: string) => void;
@@ -198,6 +207,7 @@ type ControlGraphProps = {
   onPostChain: (spec: PostChainSpec) => void;
   onRenderInputs: (inputs: RenderInputs) => void;
   onFieldPhase: (phase: number) => void;
+  onChoreoPhase: (phase: number) => void;
   onFieldSlots: (slots: FieldSlot[]) => void;
   onGraphPresetState: (state: GraphPresetAppState) => void;
   onDragMode: (mode: DragMode) => void;
@@ -223,6 +233,7 @@ const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 0.62 };
 const PROTECTED_NODE_IDS = new Set([
   'atlas',
   'tiling',
+  'ifs',
   'palette',
   'projection',
   'material',
@@ -300,6 +311,7 @@ function sameSelection(a: FlowSelection, b: FlowSelection): boolean {
 const nodeTypes = {
   atlas: AtlasNode,
   tiling: TilingNode,
+  ifs: IfsAttractorNode,
   palette: PaletteNode,
   material: MaterialNode,
   lighting: LightingNode,
@@ -569,6 +581,7 @@ export function ControlGraph(props: ControlGraphProps) {
   const liveClockSettingsRef = useRef<Settings>(props.settings);
   const emitGraphFrameRef = useRef(0);
   const audioModulationSignatureRef = useRef('');
+  const postChainSignatureRef = useRef('');
   const activeEditRef = useRef<string | null>(null);
   const [editFlush, setEditFlush] = useState(0);
   const editCallbacks = useMemo<EditCallbacks>(() => ({
@@ -622,12 +635,29 @@ export function ControlGraph(props: ControlGraphProps) {
       clockEpochRef.current,
     );
     operatorSignalStore.set(operatorSignalSnapshot(nodesForRuntime, signals));
+    // Field-source phase inlets are clock-only transports: they must receive
+    // the raw monotonic sawtooth (the renderer unwraps and integrates it), not
+    // the clock's waveform-shaped output signal.
     const phaseForNode = (nodeId: string): number => {
       const edge = edgesRef.current.find(item => item.target === nodeId && item.targetHandle === FIELD_SOURCE_PHASE_INLET.id);
       if (!edge) return 0;
-      const value = signals.get(signalKey(edge.source, edge.sourceHandle));
-      return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+      const clock = nodesForRuntime.find(item => item.id === edge.source && item.type === 'clock');
+      if (!clock) return 0;
+      const value = clockTransportPhase(clock, now, clockEpochRef.current);
+      return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
     };
+    // The lighting choreography phase is an ordinary signal inlet: average
+    // whatever is wired in (shaped clock, audio feature, operator blend).
+    const choreoEdges = edgesRef.current.filter(item => item.target === 'lighting' && item.targetHandle === LIGHT_CHOREO_PHASE_INLET.id);
+    let choreoPhase = 0;
+    if (choreoEdges.length > 0) {
+      let total = 0;
+      for (const edge of choreoEdges) {
+        const value = signals.get(signalKey(edge.source, edge.sourceHandle));
+        total += typeof value === 'number' && Number.isFinite(value) ? value : 0;
+      }
+      choreoPhase = Math.max(0, Math.min(1, total / choreoEdges.length));
+    }
     const modulations = modulationsFromSignals(signals, edgesRef.current);
     const modulationSignature = Object.entries(modulations)
       .sort(([a], [b]) => a.localeCompare(b))
@@ -642,15 +672,20 @@ export function ControlGraph(props: ControlGraphProps) {
       if (!flowNode) return node;
       return { ...node, params: fxModulatedParams(flowNode, edgesRef.current, signals, activeEditRef.current, props.dragMode) };
     });
-    props.onPostChain(chain);
+    const postChainSignature = postChainRuntimeSignature(chain);
+    if (postChainSignatureRef.current !== postChainSignature) {
+      postChainSignatureRef.current = postChainSignature;
+      props.onPostChain(chain);
+    }
     props.onFieldPhase(phaseForNode('postfx'));
+    props.onChoreoPhase(choreoPhase);
     props.onFieldSlots(deriveFieldSlots(
       nodesForRuntime,
       edgesRef.current,
       node => fieldModulatedValues(node, edgesRef.current, signals, activeEditRef.current, props.dragMode),
       node => phaseForNode(node.id),
     ));
-  }, [operatorSignalStore, props.audio, props.dragMode, props.onAudioModulation, props.onFieldPhase, props.onFieldSlots, props.onPostChain, runtimeNodes]);
+  }, [operatorSignalStore, props.audio, props.dragMode, props.onAudioModulation, props.onChoreoPhase, props.onFieldPhase, props.onFieldSlots, props.onPostChain, runtimeNodes]);
 
   const scheduleEmitAudioGraph = useCallback(() => {
     if (emitGraphFrameRef.current) return;
@@ -719,6 +754,12 @@ export function ControlGraph(props: ControlGraphProps) {
         onPreviewCustomColor: props.onPreviewCustomColor,
         onCommitCustomColor: props.onCommitCustomColor,
       },
+    },
+    {
+      id: 'ifs',
+      type: 'ifs',
+      position: pendingLayoutPosition(),
+      data: {},
     },
     {
       id: 'projection',
@@ -828,6 +869,7 @@ export function ControlGraph(props: ControlGraphProps) {
       position: pendingLayoutPosition(),
       data: {
         tiles: props.tiles,
+        unit: props.renderUnit,
         loading: props.loading,
       },
     },
@@ -868,9 +910,14 @@ export function ControlGraph(props: ControlGraphProps) {
     { id: 'projection-palette', source: 'projection', sourceHandle: 'out', target: 'palette', targetHandle: 'in', animated: true },
     { id: 'palette-material', source: 'palette', sourceHandle: 'color', target: 'material', targetHandle: 'color' },
     { id: 'material-renderer', source: 'material', sourceHandle: 'surface', target: 'renderer', targetHandle: 'surface' },
+    { id: 'ifs-renderer-attractor', source: 'ifs', sourceHandle: 'points', target: 'renderer', targetHandle: 'attractor' },
     { id: 'material-postfx-relief', source: 'material', sourceHandle: 'relief', target: 'postfx', targetHandle: 'relief' },
     { id: 'material-postfx-color', source: 'material', sourceHandle: 'color', target: 'postfx', targetHandle: 'color' },
     { id: 'clock-postfx-phase', source: 'clock', sourceHandle: 'out', target: 'postfx', targetHandle: FIELD_SOURCE_PHASE_INLET.id, animated: true },
+    // Choreography is wire-driven: the default graph animates the lights from
+    // the clock, and rewiring (beat, operators) changes the source — there is
+    // no dropdown.
+    { id: 'clock-lighting-phase', source: 'clock', sourceHandle: 'out', target: 'lighting', targetHandle: LIGHT_CHOREO_PHASE_INLET.id, animated: true },
     { id: 'lighting-renderer', source: 'lighting', sourceHandle: 'out', target: 'renderer', targetHandle: 'lighting' },
     { id: 'postfx-renderer-displace', source: 'postfx', sourceHandle: 'displace', target: 'renderer', targetHandle: 'displace' },
     { id: 'postfx-renderer-relief', source: 'postfx', sourceHandle: 'relief', target: 'renderer', targetHandle: 'relief' },
@@ -1178,10 +1225,11 @@ export function ControlGraph(props: ControlGraphProps) {
             ...node.data,
             loading: props.loading,
             tiles: props.tiles,
+            unit: props.renderUnit,
           },
         }
       : node));
-  }, [props.loading, props.tiles, setNodes]);
+  }, [props.loading, props.renderUnit, props.tiles, setNodes]);
 
   useEffect(() => {
     if (editKeyIsIn(activeEditRef.current, CLOCK_SETTING_KEYS)) return;

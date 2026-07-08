@@ -239,6 +239,9 @@ void AudioAnalyzer::resetDspStateUnlocked() {
     rawBpm_       = 120.0f;
     beatPhase_    = 0.0f;
     beatConf_     = 0.0f;
+    beatStrength_ = 0.0f;
+    pulseLfo_ = 0.0f;
+    pulseConfidence_ = 0.0f;
     periodFrames_ = 60.0f * 60.0f / 120.0f;
     fpsEma_       = 60.0f;
     bass_         = 0.0f;
@@ -304,10 +307,19 @@ void AudioAnalyzer::snapshot(FeatureSnapshot& out) const {
     out.beat = beatSmoothed_;
     out.rms = rms_;
     out.spectralFlux = spectralFlux_;
-    out.onsetStrength = onsetStrength_;
+    // Web parity: the published onset is a consensus with the CWT transient
+    // (useWebAudioGraph onsetConsensus); the raw SuperFlux onset still feeds
+    // the beat tracker internally on both platforms.
+    out.onsetStrength = std::clamp(std::max(onsetStrength_, cwtTransient_ * 0.75f), 0.0f, 1.0f);
     out.cwtTransient = cwtTransient_;
     out.crestFactor = crestFactor_;
+    out.beatPhase = beatPhase_;
+    out.pulseLfo = pulseLfo_;
+    out.pulseConfidence = pulseConfidence_;
     out.beatConfidence = beatConf_;
+    out.tempoConfidence = beatConf_;
+    out.beatStrength = beatStrength_;
+    out.bpm = bpm_;
 }
 
 void AudioAnalyzer::snapshot(float (&outBands)[kBands], float& outBeat) const {
@@ -349,16 +361,27 @@ void AudioAnalyzer::fftRadix2(float* re, float* im) const {
     }
 }
 
-float AudioAnalyzer::peakLagParabolic(int lo, int hi, float& peakValOut) const {
+float AudioAnalyzer::peakLagParabolic(int lo, int hi, float& peakValOut, float& rawPeakOut) const {
     int   bestLag = lo;
     float bestVal = -1.0f;
+    float secondVal = -1.0f;
     for (int lag = lo; lag <= hi; ++lag) {
         if (acf_[lag] > bestVal) {
+            secondVal = bestVal;
             bestVal = acf_[lag];
             bestLag = lag;
+        } else if (std::abs(lag - bestLag) > 2 && acf_[lag] > secondVal) {
+            secondVal = acf_[lag];
         }
     }
-    peakValOut = bestVal;
+    const float peakHeight = std::clamp(bestVal, 0.0f, 1.0f);
+    const float dominance = bestVal > 0.0f
+        ? std::clamp((bestVal - std::max(0.0f, secondVal)) / bestVal, 0.0f, 1.0f)
+        : 0.0f;
+    peakValOut = std::sqrt(peakHeight * dominance);
+    // Raw ACF peak height, distinct from the dominance-weighted confidence:
+    // web publishes it as beatStrength (clamp01(peak.peak)).
+    rawPeakOut = peakHeight;
     // Parabolic interpolation around the peak for sub-frame BPM precision.
     // Skip if we hit the search-window edge (no neighbour on one side).
     if (bestLag > lo && bestLag < hi) {
@@ -395,7 +418,9 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
     // single-vsync hiccups without yanking the tempo estimate.
     if (dtSeconds > 1e-4f && dtSeconds < 0.1f) {
         const float instFps = 1.0f / dtSeconds;
-        fpsEma_ = fpsEma_ * 0.9f + instFps * 0.1f;
+        // 0.95/0.05 matches the web tracker's fps EMA so lag->BPM conversion
+        // responds to frame-rate jitter identically on both platforms.
+        fpsEma_ = fpsEma_ * 0.95f + instFps * 0.05f;
     }
 
     // Snapshot the most recent kFftSize samples. The audio thread writes the
@@ -528,7 +553,10 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
     // Z-score against an asymmetrically-tracked rolling mean+variance.
     // Result is ~0 on the typical loudness floor, ~1 on a clean transient.
     const float onsetZ = updateAndZ(superFlux, onsetAvg_, onsetVar_);
-    const float onsetStrength = std::min(2.0f, onsetZ);
+    // Cap at 1.0 to match the web tracker (updateZ clamps to 0..1): the ACF
+    // peak magnitude and PLL correction both scale with this, so a higher cap
+    // would let strong transients pull tempo/phase harder than on web.
+    const float onsetStrength = std::min(1.0f, onsetZ);
     const float rawRms = std::sqrt(rawSumSq / static_cast<float>(kFftSize));
     rms_ = std::clamp(rawRms * 3.0f, 0.0f, 1.0f);
     spectralFlux_ = std::clamp((spectralFlux / static_cast<float>(nMag)) * 8.0f, 0.0f, 1.0f);
@@ -579,7 +607,8 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
                 static_cast<int>(std::ceil (fps * 60.0f / kMinBpm)));
             if (minLag < maxLag) {
                 float peakVal = 0.0f;
-                const float lagF = peakLagParabolic(minLag, maxLag, peakVal);
+                float rawPeak = 0.0f;
+                const float lagF = peakLagParabolic(minLag, maxLag, peakVal, rawPeak);
                 if (lagF > 0.5f) {
                     rawBpm_ = fps * 60.0f / lagF;
                 }
@@ -587,6 +616,9 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
                 bpm_ = std::clamp(bpm_, kMinBpm, kMaxBpm);
                 periodFrames_ = fps * 60.0f / bpm_;
                 beatConf_ = std::clamp(peakVal, 0.0f, 1.0f);
+                // Web parity: beatStrength is the raw ACF peak height, a
+                // distinct quantity from the dominance-weighted confidence.
+                beatStrength_ = rawPeak;
             }
         }
     }
@@ -650,6 +682,8 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
     constexpr float kBandAttack  = 0.55f;
     constexpr float kBandRelease = 0.10f;
     const float dt60 = std::clamp(dtSeconds * 60.0f, 0.0f, 2.0f);
+    pulseLfo_ = std::clamp(0.5f - 0.5f * std::cos(2.0f * kPi * beatPhase_), 0.0f, 1.0f);
+    pulseConfidence_ = std::min(beatConf_, std::min(1.0f, pulseConfidence_ + 0.04f * dt60));
     for (int b = 0; b < kBands; ++b) {
         const float target = bandsRaw[b];
         const float current = bandsSmoothed_[b];

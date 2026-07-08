@@ -3,6 +3,8 @@
 
 layout(location = 0) in vec2  inPos;
 layout(location = 1) in vec2  inSourcePos;
+layout(location = 2) in float inRole;
+layout(location = 0) flat out float vRole;
 
 layout(push_constant) uniform PC {
     vec4 view0;
@@ -38,6 +40,7 @@ vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float symF) {
 }
 
 void main() {
+    vRole = inRole;
     vec2 source = inSourcePos;
     float amp = ubo.anim.y;
     int kind = int(ubo.effects.w + 0.5);

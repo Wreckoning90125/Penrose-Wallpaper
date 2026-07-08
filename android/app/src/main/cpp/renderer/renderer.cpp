@@ -306,7 +306,6 @@ void Renderer::onSettingsChanged(const Settings& s) {
     view_.panY = s.panY;
     if (genChanged || panModeChanged) {
         effectiveGeneration_ = settings_.generation;
-        panAccumPx_ = 0.0f;
     }
     if (deviceReady_ && swapchainReady_) {
         if (needFillGeometry) {
@@ -341,12 +340,10 @@ void Renderer::touchPinch(float scale, float rotDelta) {
 
 void Renderer::touchMove(float dx, float dy) {
     if (settings_.panMode == 1) {
-        // Generative mode: accumulate gesture distance and grow the
-        // tiling outward when cumulative travel crosses one screen
-        // width. The view stays centered; new tiles appear at the
-        // perimeter on each deflation pass.
-        panAccumPx_ += std::sqrt(dx * dx + dy * dy);
-        considerGrowth();
+        if (dx == 0.0f && dy == 0.0f) return;
+        view_.panX += dx;
+        view_.panY += dy;
+        requestGeometryWindowRebuildForPan();
     }
     // Locked mode (panMode == 0): touchMove is intentionally a no-op.
 }
@@ -355,11 +352,15 @@ void Renderer::resetView() {
     const bool resetGeneration = effectiveGeneration_ != settings_.generation;
     view_ = LiveView{};
     effectiveGeneration_ = settings_.generation;
-    panAccumPx_ = 0.0f;
-    if (resetGeneration && deviceReady_ && swapchainReady_) {
-        vkDeviceWaitIdle(device_);
-        if (!buildGeometry()) return;
-        updatePaletteUbo();
+    geometryPagePanValid_ = false;
+    if (deviceReady_ && swapchainReady_) {
+        if (resetGeneration) {
+            vkDeviceWaitIdle(device_);
+            if (!buildGeometry()) return;
+            updatePaletteUbo();
+        } else {
+            rebuildGeometryForPan();
+        }
     }
 }
 
@@ -381,8 +382,20 @@ void Renderer::surfaceGeometry(int surfW, int surfH, int screenW, int screenH) {
     screenH_ = screenH;
 }
 
-void Renderer::setPageOffset(float xOffset) {
+void Renderer::setPageOffset(float xOffset, int xPixelOffset) {
     pageOffset_ = std::clamp(xOffset, 0.0f, 1.0f);
+    const float nextPagePanX = static_cast<float>(xPixelOffset);
+    if (pagePanX_ == nextPagePanX) return;
+    pagePanX_ = nextPagePanX;
+    if (settings_.panMode == 2) {
+        const float visibleWidth = screenW_ > 0
+            ? static_cast<float>(screenW_)
+            : (swapchainExtent_.width > 0 ? static_cast<float>(swapchainExtent_.width) : 1080.0f);
+        const float rebuildThreshold = std::max(96.0f, visibleWidth * 0.35f);
+        if (!geometryPagePanValid_ || std::abs(pagePanX_ - geometryPagePanX_) >= rebuildThreshold) {
+            requestGeometryWindowRebuildForPan();
+        }
+    }
 }
 
 void Renderer::setUiDensity(float density) {
@@ -395,20 +408,32 @@ void Renderer::setSystemInsets(int topPx, int bottomPx, int leftPx, int rightPx)
     graphUi_.setSystemInsets(topPx, bottomPx, leftPx, rightPx);
 }
 
-void Renderer::considerGrowth() {
-    if (settings_.panMode != 1) return;
-    const float threshold = (surfW_ > 0) ? (float)surfW_ : 1080.0f;
-    const int maxGen = familyInfo(settings_.family).maxGen;
-    while (panAccumPx_ >= threshold && effectiveGeneration_ < maxGen) {
-        panAccumPx_ -= threshold;
-        effectiveGeneration_ += 1;
-        if (deviceReady_ && swapchainReady_) {
-            vkDeviceWaitIdle(device_);
-            if (!buildGeometry()) return;
-            updatePaletteUbo();
-        }
+void Renderer::requestGeometryWindowRebuildForPan() {
+    const float visibleWidth = screenW_ > 0
+        ? static_cast<float>(screenW_)
+        : (swapchainExtent_.width > 0 ? static_cast<float>(swapchainExtent_.width) : 1080.0f);
+    const float visibleHeight = screenH_ > 0
+        ? static_cast<float>(screenH_)
+        : (swapchainExtent_.height > 0 ? static_cast<float>(swapchainExtent_.height) : 1920.0f);
+    const float thresholdX = std::max(96.0f, visibleWidth * 0.35f);
+    const float thresholdY = std::max(96.0f, visibleHeight * 0.35f);
+    const bool staleWindow =
+        !geometryPagePanValid_
+        || std::abs(pagePanX_ - geometryPagePanX_) >= thresholdX
+        || std::abs(view_.panX - geometryViewPanX_) >= thresholdX
+        || std::abs(view_.panY - geometryViewPanY_) >= thresholdY;
+    if (staleWindow) rebuildGeometryForPan();
+}
+
+void Renderer::rebuildGeometryForPan() {
+    if (!deviceReady_ || !swapchainReady_) return;
+    vkDeviceWaitIdle(device_);
+    destroyRetiredBuffersNow();
+    if (!buildGeometry()) {
+        settingsDirty_ = true;
+        return;
     }
-    if (effectiveGeneration_ >= maxGen) panAccumPx_ = 0.0f;
+    updatePaletteUbo();
 }
 
 // =============================================================================
@@ -474,6 +499,7 @@ void Renderer::drawFrame() {
         gctx.cwtTransient = audio.cwtTransient;
         gctx.crestFactor = audio.crestFactor;
         gctx.beatConfidence = audio.beatConfidence;
+        gctx.bpm = audio.bpm;
         gctx.dtSeconds   = dt;
         gctx.timeSec    = time_;
         gctx.pageScroll = pageOffset_;
@@ -490,11 +516,35 @@ void Renderer::drawFrame() {
         gres.matIridescence = settings_.matIridescence;
         gres.matEmissive    = settings_.matEmissive;
         gres.matRelief      = settings_.matRelief;
+        gres.matRoughMod    = settings_.matRoughMod;
+        gres.matMetalMod    = settings_.matMetalMod;
         gres.lightAngle     = settings_.lightAngle;
         gres.lightElevation = settings_.lightElevation;
         gres.lightIntensity = settings_.lightIntensity;
         gres.lightWarmth    = settings_.lightWarmth;
         gres.lightAmbient   = settings_.lightAmbient;
+        gres.lightChoreoAmount = settings_.lightChoreoAmount;
+        gres.lightChoreoSpeed  = settings_.lightChoreoSpeed;
+        gres.lightChoreoSource = settings_.lightChoreoSource;
+        gres.ornamentAmount = settings_.ornamentAmount;
+        gres.ornamentWidth  = settings_.ornamentWidth;
+        gres.ornamentPhase  = settings_.ornamentPhase;
+        gres.ornamentStyle  = settings_.ornamentStyle;
+        gres.ornamentDensity = settings_.ornamentDensity;
+        gres.ornamentTwist  = settings_.ornamentTwist;
+        gres.surfaceContourAmount  = settings_.surfaceContourAmount;
+        gres.surfaceContourSpacing = settings_.surfaceContourSpacing;
+        gres.surfaceContourWidth   = settings_.surfaceContourWidth;
+        gres.surfaceContourPhase   = settings_.surfaceContourPhase;
+        gres.surfaceContourSource  = settings_.surfaceContourSource;
+        gres.surfaceContourLight   = settings_.surfaceContourColor.l;
+        gres.surfaceContourChroma  = settings_.surfaceContourColor.c;
+        gres.surfaceContourHue     = settings_.surfaceContourColor.h;
+        gres.edgeProfileWidth = settings_.edgeProfileWidth;
+        gres.edgeProfileGlow = settings_.edgeProfileGlow;
+        gres.edgeProfileLight = settings_.edgeProfileColor.l;
+        gres.edgeProfileChroma = settings_.edgeProfileColor.c;
+        gres.edgeProfileHue = settings_.edgeProfileColor.h;
         gres.hypBoostX      = settings_.hypBoostX;
         gres.hypBoostY      = settings_.hypBoostY;
         graph_.evaluate(gctx, gres);
@@ -510,11 +560,35 @@ void Renderer::drawFrame() {
         fxMatIridescence_ = gres.matIridescence;
         fxMatEmissive_    = gres.matEmissive;
         fxMatRelief_      = gres.matRelief;
+        fxMatRoughMod_    = gres.matRoughMod;
+        fxMatMetalMod_    = gres.matMetalMod;
         fxLightAngle_     = gres.lightAngle;
         fxLightElevation_ = gres.lightElevation;
         fxLightIntensity_ = gres.lightIntensity;
         fxLightWarmth_    = gres.lightWarmth;
         fxLightAmbient_   = gres.lightAmbient;
+        fxLightChoreoAmount_ = gres.lightChoreoAmount;
+        fxLightChoreoSpeed_  = gres.lightChoreoSpeed;
+        fxLightChoreoSource_ = gres.lightChoreoSource;
+        fxOrnamentAmount_ = gres.ornamentAmount;
+        fxOrnamentWidth_  = gres.ornamentWidth;
+        fxOrnamentPhase_  = gres.ornamentPhase;
+        fxOrnamentStyle_  = gres.ornamentStyle;
+        fxOrnamentDensity_ = gres.ornamentDensity;
+        fxOrnamentTwist_  = gres.ornamentTwist;
+        fxSurfaceContourAmount_  = gres.surfaceContourAmount;
+        fxSurfaceContourSpacing_ = gres.surfaceContourSpacing;
+        fxSurfaceContourWidth_   = gres.surfaceContourWidth;
+        fxSurfaceContourPhase_   = gres.surfaceContourPhase;
+        fxSurfaceContourSource_  = gres.surfaceContourSource;
+        fxSurfaceContourLight_   = gres.surfaceContourLight;
+        fxSurfaceContourChroma_  = gres.surfaceContourChroma;
+        fxSurfaceContourHue_     = gres.surfaceContourHue;
+        fxEdgeProfileWidth_ = gres.edgeProfileWidth;
+        fxEdgeProfileGlow_ = gres.edgeProfileGlow;
+        fxEdgeProfileLight_ = gres.edgeProfileLight;
+        fxEdgeProfileChroma_ = gres.edgeProfileChroma;
+        fxEdgeProfileHue_ = gres.edgeProfileHue;
         fxHypBoostX_      = gres.hypBoostX;
         fxHypBoostY_      = gres.hypBoostY;
         fxHypScale_       = settings_.hypScale;
@@ -548,10 +622,9 @@ void Renderer::drawFrame() {
     vkWaitForFences(device_, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
     collectRetiredBuffers();
 
-    // Per-frame UBO patch for the live block — anim, effects, audio bands,
-    // and beat/transient features. Palette / border / bg slots stay where
-    // updatePaletteUbo last wrote them and don't need rewriting every
-    // vsync.
+    // Per-frame UBO patch for the live block — anim, edge-profile geometry,
+    // effects, audio bands, and beat/transient features. Palette / border
+    // colour / bg slots stay where updatePaletteUbo last wrote them.
     if (paletteUboMapped_[currentFrame_]) {
         float anim[4] = {
             time_,
@@ -565,16 +638,100 @@ void Renderer::drawFrame() {
             fxRippleSpeed_,
             static_cast<float>(settings_.rippleKind),
         };
+        float borderGeomBlock[4] = {
+            fxEdgeProfileWidth_,
+            fxEdgeProfileGlow_,
+            0.0f,
+            0.0f,
+        };
         // Reuse the same snapshot taken above the graph eval.
         float bandsBlock[8];
         std::memcpy(bandsBlock, audio.bands, sizeof(bandsBlock));
         float beatBlock[4] = { audio.beat, audio.onsetStrength, audio.cwtTransient, audio.beatConfidence };
+        float ornamentBlock[4] = {
+            fxOrnamentStyle_,
+            fxOrnamentAmount_,
+            fxOrnamentWidth_,
+            fxOrnamentPhase_,
+        };
+        float ornamentExtraBlock[4] = {
+            fxOrnamentDensity_,
+            fxOrnamentTwist_,
+            0.0f,
+            static_cast<float>(static_cast<int>(settings_.family)),
+        };
+        float contourBlock[4] = {
+            fxSurfaceContourAmount_,
+            fxSurfaceContourSource_,
+            fxSurfaceContourSpacing_,
+            fxSurfaceContourWidth_,
+        };
+        const Oklch contourOklch{
+            fxSurfaceContourLight_,
+            fxSurfaceContourChroma_,
+            fxSurfaceContourHue_,
+        };
+        const ShaderColor contourColor = oklchToShaderColor(
+            contourOklch, 1.0f, wideGamut_, cpuLinearOutput_);
+        float contourColorBlock[4] = {
+            fxSurfaceContourPhase_,
+            contourColor.r,
+            contourColor.g,
+            contourColor.b,
+        };
+        const float markAlpha = sourceOverlayAlpha(fxOrnamentStyle_, fxOrnamentAmount_, fxOrnamentDensity_);
+        const ShaderColor sourceMarkA = oklchToShaderColor(
+            settings_.sourceMarkA, markAlpha, wideGamut_, cpuLinearOutput_);
+        const ShaderColor sourceMarkB = oklchToShaderColor(
+            settings_.sourceMarkB, markAlpha, wideGamut_, cpuLinearOutput_);
+        const ShaderColor sourceMarkC = oklchToShaderColor(
+            settings_.sourceMarkC, markAlpha, wideGamut_, cpuLinearOutput_);
+        const Oklch edgeProfileOklch{
+            fxEdgeProfileLight_,
+            fxEdgeProfileChroma_,
+            fxEdgeProfileHue_,
+        };
+        const ShaderColor edgeProfileColor = oklchToShaderColor(
+            edgeProfileOklch, 1.0f, wideGamut_, cpuLinearOutput_);
+        float sourceMarkABlock[4] = {
+            sourceMarkA.r,
+            sourceMarkA.g,
+            sourceMarkA.b,
+            sourceMarkA.a,
+        };
+        float sourceMarkBBlock[4] = {
+            sourceMarkB.r,
+            sourceMarkB.g,
+            sourceMarkB.b,
+            sourceMarkB.a,
+        };
+        float sourceMarkCBlock[4] = {
+            sourceMarkC.r,
+            sourceMarkC.g,
+            sourceMarkC.b,
+            sourceMarkC.a,
+        };
+        float edgeProfileColorBlock[4] = {
+            edgeProfileColor.r,
+            edgeProfileColor.g,
+            edgeProfileColor.b,
+            0.0f,
+        };
 
         auto* base = static_cast<uint8_t*>(paletteUboMapped_[currentFrame_]);
         std::memcpy(base + offsetof(PaletteUbo, anim),       anim,       sizeof(anim));
+        std::memcpy(base + offsetof(PaletteUbo, borderGeom), borderGeomBlock, sizeof(borderGeomBlock));
         std::memcpy(base + offsetof(PaletteUbo, effects),    effects,    sizeof(effects));
         std::memcpy(base + offsetof(PaletteUbo, audioBands), bandsBlock, sizeof(bandsBlock));
         std::memcpy(base + offsetof(PaletteUbo, audioBeat),  beatBlock,  sizeof(beatBlock));
+        std::memcpy(base + offsetof(PaletteUbo, ornament),   ornamentBlock, sizeof(ornamentBlock));
+        std::memcpy(base + offsetof(PaletteUbo, ornamentExtra), ornamentExtraBlock, sizeof(ornamentExtraBlock));
+        std::memcpy(base + offsetof(PaletteUbo, contour), contourBlock, sizeof(contourBlock));
+        std::memcpy(base + offsetof(PaletteUbo, contourColor), contourColorBlock, sizeof(contourColorBlock));
+        std::memcpy(base + offsetof(PaletteUbo, sourceMarkA), sourceMarkABlock, sizeof(sourceMarkABlock));
+        std::memcpy(base + offsetof(PaletteUbo, sourceMarkB), sourceMarkBBlock, sizeof(sourceMarkBBlock));
+        std::memcpy(base + offsetof(PaletteUbo, sourceMarkC), sourceMarkCBlock, sizeof(sourceMarkCBlock));
+        std::memcpy(base + offsetof(PaletteUbo, edgeProfileColor), edgeProfileColorBlock, sizeof(edgeProfileColorBlock));
 
         // Material rows — the eight graph-modulated controls over the
         // static MaterialParams defaults, rewritten every frame so audio /
@@ -594,17 +751,21 @@ void Renderer::drawFrame() {
         fxMat.emissive      = fxMatEmissive_;
         fxMat.bevelStrength = fxMatRelief_;
         // Direct-from-settings: per-preset characteristic colours
-        // (sheen tint + iridescent film range) and the seam / per-tile
-        // variation knobs. None are graph-modulated today.
+        // (sheen tint + iridescent film range). Seam and per-tile
+        // variation now come from graph-modulated outputs below.
         fxMat.sheenColor[0] = settings_.matSheenColorR;
         fxMat.sheenColor[1] = settings_.matSheenColorG;
         fxMat.sheenColor[2] = settings_.matSheenColorB;
         fxMat.iridThickMin  = settings_.matIridThickMin;
         fxMat.iridThickMax  = settings_.matIridThickMax;
-        fxMat.roughMod      = settings_.matRoughMod;
-        fxMat.metalMod      = settings_.matMetalMod;
-        applyLightControls(fxMat, fxLightAngle_, fxLightElevation_,
-                           fxLightIntensity_, fxLightWarmth_, fxLightAmbient_);
+        fxMat.roughMod      = fxMatRoughMod_;
+        fxMat.metalMod      = fxMatMetalMod_;
+        applyLightChoreography(fxMat, fxLightAngle_, fxLightElevation_,
+                               fxLightIntensity_, fxLightWarmth_, fxLightAmbient_,
+                               fxLightChoreoAmount_, fxLightChoreoSpeed_,
+                               fxLightChoreoSource_, time_, pageOffset_, audio.beat,
+                               audio.beatPhase, audio.cwtTransient,
+                               settings_.clockWaveform);
         writeMaterialRows(
             reinterpret_cast<float*>(base + offsetof(PaletteUbo, matNormal)),
             fxMat);
@@ -797,7 +958,7 @@ void Renderer::drawFrame() {
     // Clear uses the same colorspace-aware OKLCH converter as the palette
     // so the load-op clear lands in the same color space as the shader output.
     PresetResult ps = buildPreset(settings_.preset, settings_.colorCount,
-                                  settings_.customOklch);
+                                  settings_.customOklch, settings_.colorSpectral);
     Oklch bgOk = (settings_.bgMode == BackgroundMode::Match) ? ps.colors[0] : settings_.bgColor;
     ShaderColor bg = oklchToShaderColor(bgOk, 1.0f, wideGamut_, cpuLinearOutput_);
 
@@ -886,7 +1047,8 @@ void Renderer::drawFrame() {
     sY *= (screenH / surfH);
     const float cosR = std::cos(view_.rotation);
     const float sinR = std::sin(view_.rotation);
-    const float tX = (view_.panX / surfW) * 2.0f;
+    const float pagePanX = (settings_.panMode == 2) ? pagePanX_ : 0.0f;
+    const float tX = ((view_.panX + pagePanX) / surfW) * 2.0f;
     const float tY = (view_.panY / surfH) * 2.0f;
 
     // Affine model→clip. Model space is math-convention (y-up); Vulkan
@@ -920,7 +1082,12 @@ void Renderer::drawFrame() {
     }
 
     // ---- Borders ----
-    if (settings_.borderOn && borderIndexCount_ > 0 && settings_.borderWidth > 0.0f) {
+    const bool sourceOverlayOn = sourceOverlayAlpha(fxOrnamentStyle_, fxOrnamentAmount_, fxOrnamentDensity_) > 0.0f
+        && fxOrnamentWidth_ > 0.0f
+        && (settings_.family == Family::P3
+            || settings_.family == Family::P2
+            || settings_.family == Family::AmmannBeenker);
+    if (((settings_.borderOn && settings_.borderWidth > 0.0f) || sourceOverlayOn) && borderIndexCount_ > 0) {
         vkCmdBindPipeline(f.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, borderPipeline_);
         VkDeviceSize off = 0;
         vkCmdBindVertexBuffers(f.cmd, 0, 1, &borderVertBuf_, &off);

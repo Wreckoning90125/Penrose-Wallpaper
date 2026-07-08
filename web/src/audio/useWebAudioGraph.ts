@@ -10,11 +10,29 @@ const EMPTY_FEATURES: AudioFeatures = {
   onsetStrength: 0,
   cwtTransient: 0,
   crestFactor: 0,
+  beat: 0,
+  beatPhase: 0,
+  pulseLfo: 0,
+  pulseConfidence: 0,
+  beatConfidence: 0,
+  tempoConfidence: 0,
+  beatStrength: 0,
+  tempo: 0,
+  bpm: 120,
 };
 
 const DEFAULT_OUTPUT_VOLUME = 0.5;
 const UI_NOTIFY_INTERVAL_MS = 33;
 const FFT_SIZE = 2048;
+const BEAT_BPM_MIN = 60;
+const BEAT_BPM_MAX = 200;
+const BEAT_ONSET_BUFFER_LEN = 256;
+const BEAT_ACF_LEN = BEAT_ONSET_BUFFER_LEN / 2;
+const BEAT_ACF_INTERVAL = 8;
+const BEAT_PLL_GAIN = 0.05;
+const BEAT_BPM_SMOOTH = 0.95;
+const BEAT_ONSET_THRESHOLD = 0.5;
+const BEAT_CONF_THRESHOLD = 0.2;
 const BAND_EDGES_HZ = [30, 150, 1600, 16000] as const;
 const CWT_TARGET_HZ = [2000, 5000, 10000] as const;
 const CWT_OMEGA0 = 5;
@@ -40,6 +58,12 @@ const EMPTY_SNAPSHOT: AudioSnapshot = {
 type CwtKernel = {
   re: Float32Array;
   im: Float32Array;
+};
+
+type BeatPeak = {
+  lag: number;
+  peak: number;
+  confidence: number;
 };
 
 function bandRmsHz(data: Uint8Array, sampleRate: number, fftSize: number, loHz: number, hiHz: number): number {
@@ -122,6 +146,39 @@ function waveletTransient(samples: Uint8Array, kernels: readonly CwtKernel[]): n
   return peak;
 }
 
+function peakLagParabolic(acf: Float32Array, lo: number, hi: number): BeatPeak {
+  let bestLag = lo;
+  let bestVal = -1;
+  let secondVal = -1;
+  for (let lag = lo; lag <= hi; lag += 1) {
+    const value = acf[lag] ?? -1;
+    if (value > bestVal) {
+      secondVal = bestVal;
+      bestVal = value;
+      bestLag = lag;
+    } else if (Math.abs(lag - bestLag) > 2 && value > secondVal) {
+      secondVal = value;
+    }
+  }
+  const peakHeight = clamp01(bestVal);
+  const dominance = bestVal > 0 ? clamp01((bestVal - Math.max(0, secondVal)) / bestVal) : 0;
+  const confidence = Math.sqrt(peakHeight * dominance);
+  if (bestLag > lo && bestLag < hi) {
+    const y0 = acf[bestLag - 1] ?? 0;
+    const y1 = acf[bestLag] ?? 0;
+    const y2 = acf[bestLag + 1] ?? 0;
+    const denom = 2 * (2 * y1 - y0 - y2);
+    if (Math.abs(denom) > 1e-12) {
+      return {
+        lag: bestLag + (y0 - y2) / denom,
+        peak: bestVal,
+        confidence,
+      };
+    }
+  }
+  return { lag: bestLag, peak: bestVal, confidence };
+}
+
 export function useWebAudioGraph(): WebAudioGraph {
   const contextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -136,6 +193,18 @@ export function useWebAudioGraph(): WebAudioGraph {
   const cwtKernelsRef = useRef<{ sampleRate: number; kernels: CwtKernel[] } | null>(null);
   const onsetStatRef = useRef({ avg: 0, variance: 0 });
   const cwtStatRef = useRef({ avg: 0, variance: 0 });
+  const beatOnsetBufferRef = useRef(new Float32Array(BEAT_ONSET_BUFFER_LEN));
+  const beatOnsetIndexRef = useRef(0);
+  const beatAcfRef = useRef(new Float32Array(BEAT_ACF_LEN));
+  const beatLastTickMsRef = useRef(0);
+  const beatFpsEmaRef = useRef(60);
+  const beatRawBpmRef = useRef(120);
+  const beatBpmRef = useRef(120);
+  const beatConfidenceRef = useRef(0);
+  const beatStrengthRef = useRef(0);
+  const pulseConfidenceRef = useRef(0);
+  const beatPhaseRef = useRef(0);
+  const beatSmoothedRef = useRef(0);
   const snapshotRef = useRef<AudioSnapshot>(EMPTY_SNAPSHOT);
   const volumeRef = useRef(DEFAULT_OUTPUT_VOLUME);
   const listenersRef = useRef(new Set<() => void>());
@@ -229,6 +298,18 @@ export function useWebAudioGraph(): WebAudioGraph {
     prevFreqRef.current = null;
     onsetStatRef.current = { avg: 0, variance: 0 };
     cwtStatRef.current = { avg: 0, variance: 0 };
+    beatOnsetBufferRef.current.fill(0);
+    beatOnsetIndexRef.current = 0;
+    beatAcfRef.current.fill(0);
+    beatLastTickMsRef.current = 0;
+    beatFpsEmaRef.current = 60;
+    beatRawBpmRef.current = 120;
+    beatBpmRef.current = 120;
+    beatConfidenceRef.current = 0;
+    beatStrengthRef.current = 0;
+    pulseConfidenceRef.current = 0;
+    beatPhaseRef.current = 0;
+    beatSmoothedRef.current = 0;
     if (audioElRef.current) {
       audioElRef.current.pause();
       audioElRef.current.src = '';
@@ -256,6 +337,14 @@ export function useWebAudioGraph(): WebAudioGraph {
     }
 
     const tick = () => {
+      const nowMs = performance.now();
+      const previousTickMs = beatLastTickMsRef.current;
+      beatLastTickMsRef.current = nowMs;
+      if (previousTickMs > 0) {
+        const deltaSeconds = Math.max(1 / 240, Math.min(0.25, (nowMs - previousTickMs) / 1000));
+        const fps = 1 / deltaSeconds;
+        beatFpsEmaRef.current = beatFpsEmaRef.current * 0.95 + fps * 0.05;
+      }
       analyser.getByteFrequencyData(freq);
       transientAnalyser.getByteFrequencyData(transientFreq);
       transientAnalyser.getByteTimeDomainData(timeDomain);
@@ -284,15 +373,94 @@ export function useWebAudioGraph(): WebAudioGraph {
       const onsetStrength = updateZ(weightedFlux / Math.max(1, weightTotal), onsetStatRef.current);
       const cwtTransient = updateZ(waveletTransient(timeDomain, cwtKernelsRef.current?.kernels ?? []), cwtStatRef.current);
       const crestFactor = clamp01((timeStats.peak / Math.max(0.0001, timeStats.rms) - 1) / 8);
+      const onsetBuffer = beatOnsetBufferRef.current;
+      const onsetIndex = beatOnsetIndexRef.current;
+      onsetBuffer[onsetIndex] = onsetStrength;
+      beatOnsetIndexRef.current = (onsetIndex + 1) % BEAT_ONSET_BUFFER_LEN;
+      if ((beatOnsetIndexRef.current % BEAT_ACF_INTERVAL) === 0) {
+        const n = BEAT_ONSET_BUFFER_LEN;
+        let mean = 0;
+        for (let i = 0; i < n; i += 1) {
+          mean += onsetBuffer[i] ?? 0;
+        }
+        mean /= n;
+        let variance = 0;
+        for (let i = 0; i < n; i += 1) {
+          const delta = (onsetBuffer[i] ?? 0) - mean;
+          variance += delta * delta;
+        }
+        if (variance > 1e-12) {
+          const invVariance = 1 / variance;
+          const acf = beatAcfRef.current;
+          for (let lag = 0; lag < BEAT_ACF_LEN; lag += 1) {
+            let sum = 0;
+            const loop = n - lag;
+            for (let i = 0; i < loop; i += 1) {
+              const ia = (beatOnsetIndexRef.current + i) % n;
+              const ib = (beatOnsetIndexRef.current + i + lag) % n;
+              const a = (onsetBuffer[ia] ?? 0) - mean;
+              const b = (onsetBuffer[ib] ?? 0) - mean;
+              sum += a * b;
+            }
+            acf[lag] = sum * invVariance;
+          }
+          const fps = beatFpsEmaRef.current > 1 ? beatFpsEmaRef.current : 60;
+          const minLag = Math.max(1, Math.floor(fps * 60 / BEAT_BPM_MAX));
+          const maxLag = Math.min(BEAT_ACF_LEN - 1, Math.ceil(fps * 60 / BEAT_BPM_MIN));
+          if (minLag < maxLag) {
+            const peak = peakLagParabolic(acf, minLag, maxLag);
+            if (peak.lag > 0.5) {
+              beatRawBpmRef.current = fps * 60 / peak.lag;
+            }
+            beatBpmRef.current = Math.max(BEAT_BPM_MIN, Math.min(BEAT_BPM_MAX, BEAT_BPM_SMOOTH * beatBpmRef.current + (1 - BEAT_BPM_SMOOTH) * beatRawBpmRef.current));
+            beatConfidenceRef.current = peak.confidence;
+            beatStrengthRef.current = peak.peak;
+          }
+        }
+      }
+      let beatBoundary = false;
+      if (beatOnsetIndexRef.current > 0) {
+        const phaseInc = beatBpmRef.current / (60 * Math.max(1, beatFpsEmaRef.current));
+        beatPhaseRef.current += phaseInc;
+        if (onsetStrength > BEAT_ONSET_THRESHOLD && beatConfidenceRef.current > BEAT_CONF_THRESHOLD) {
+          const phaseErr = beatPhaseRef.current < 0.5 ? -beatPhaseRef.current : 1 - beatPhaseRef.current;
+          beatPhaseRef.current += phaseErr * BEAT_PLL_GAIN * onsetStrength;
+        }
+        if (beatPhaseRef.current >= 1) {
+          beatPhaseRef.current -= 1;
+          beatBoundary = true;
+        }
+        if (beatPhaseRef.current < 0) beatPhaseRef.current += 1;
+      }
+      const beatTarget = Math.max(beatBoundary ? 1 : 0, cwtTransient);
+      const beatRate = beatTarget > beatSmoothedRef.current ? 0.9 : 0.1;
+      const beatDeltaSeconds = previousTickMs > 0 ? Math.max(1 / 240, Math.min(0.25, (nowMs - previousTickMs) / 1000)) : 1 / 60;
+      const beatK = Math.max(0, Math.min(1, beatRate * beatDeltaSeconds * 60));
+      beatSmoothedRef.current += (beatTarget - beatSmoothedRef.current) * beatK;
+      pulseConfidenceRef.current = Math.min(beatConfidenceRef.current, Math.min(1, pulseConfidenceRef.current + 0.04 * beatDeltaSeconds * 60));
+      const beatPhase = clamp01(beatPhaseRef.current);
+      const pulseLfo = clamp01(0.5 - 0.5 * Math.cos(2 * Math.PI * beatPhase));
+      const pulseConfidence = clamp01(pulseConfidenceRef.current);
+      const tempoConfidence = clamp01(beatConfidenceRef.current);
+      const onsetConsensus = clamp01(Math.max(onsetStrength, cwtTransient * 0.75));
       const features: AudioFeatures = {
         bass,
         mid,
         high,
         rms: clamp01(timeStats.rms * 3),
         spectralFlux,
-        onsetStrength,
+        onsetStrength: onsetConsensus,
         cwtTransient,
         crestFactor,
+        beat: clamp01(beatSmoothedRef.current),
+        beatPhase,
+        pulseLfo,
+        pulseConfidence,
+        beatConfidence: beatConfidenceRef.current,
+        tempoConfidence,
+        beatStrength: clamp01(beatStrengthRef.current),
+        tempo: clamp01((beatBpmRef.current - BEAT_BPM_MIN) / (BEAT_BPM_MAX - BEAT_BPM_MIN)),
+        bpm: beatBpmRef.current,
       };
       const audio = audioElRef.current;
       publish(current => ({

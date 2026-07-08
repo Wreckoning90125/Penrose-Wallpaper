@@ -6,6 +6,7 @@ import { BaseEdge, getBezierPath, type Edge, type EdgeProps } from '@xyflow/reac
 const NODE_TYPE_COLORS: Record<string, string> = {
   atlas: '#b99228',
   tiling: '#b99228',
+  ifs: '#b99228',
   palette: '#c7682e',
   projection: '#3e83a8',
   material: '#a66f35',

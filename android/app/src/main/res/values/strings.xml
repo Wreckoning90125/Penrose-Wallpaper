@@ -50,6 +50,10 @@
     <string name="preset_deleted_user_toast">Deleted %1$s</string>
     <string name="reset_view_title">Reset view</string>
     <string name="reset_view_summary">Return zoom, rotation, and pan to the exact centered default.</string>
+    <string name="tiling_generation_title">Generation</string>
+    <string name="tiling_generation_summary">More generations = more tiles</string>
+    <string name="tiling_layer_title">Layer</string>
+    <string name="tiling_layer_summary">Monotile corona/supertile layer; raw seed systems are skipped.</string>
 
     <string name="apply_wallpaper_title">Apply as wallpaper…</string>
     <string name="apply_wallpaper_summary">Snapshots the current settings, then opens the system live-wallpaper preview.</string>

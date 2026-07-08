@@ -73,6 +73,151 @@
             android:summary="Depth of the beveled chamfer"
             android:min="0" android:max="200" android:defaultValue="105"
             app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="ornament_style"
+            android:title="Overlay type"
+            android:summary="0 off, 1 square arcs, 2 square diagonals, 3 square Truchet arcs, 4 source diagonals"
+            android:min="0" android:max="4" android:defaultValue="0"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="ornament_amount"
+            android:title="Overlay amount"
+            android:summary="Strength of the deterministic curve overlay and material response"
+            android:min="0" android:max="100" android:defaultValue="0"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="ornament_width"
+            android:title="Stroke width"
+            android:summary="Width of the overlay strokes"
+            android:min="0" android:max="100" android:defaultValue="45"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="ornament_density"
+            android:title="Stroke coverage"
+            android:summary="Continuous strength for the selected deterministic overlay"
+            android:min="0" android:max="100" android:defaultValue="100"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="ornament_phase"
+            android:title="Graph transform"
+            android:summary="Notebook-style none, inverse-reverse, and mirror-reverse transforms"
+            android:min="0" android:max="100" android:defaultValue="0"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="ornament_twist"
+            android:title="Axis swap"
+            android:summary="Switches the tile-local overlay frame without free rotation"
+            android:min="0" android:max="100" android:defaultValue="50"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Source mark colours">
+        <SeekBarPreference
+            android:key="source_mark_a_l"
+            android:title="Mark A lightness"
+            android:summary="OKLCH lightness for Robinson source-mark A"
+            android:min="0" android:max="100" android:defaultValue="62"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="source_mark_a_c"
+            android:title="Mark A chroma"
+            android:summary="OKLCH chroma for Robinson source-mark A"
+            android:min="0" android:max="40" android:defaultValue="28"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="source_mark_a_h"
+            android:title="Mark A hue"
+            android:summary="OKLCH hue for Robinson source-mark A"
+            android:min="0" android:max="360" android:defaultValue="30"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="source_mark_b_l"
+            android:title="Mark B lightness"
+            android:summary="OKLCH lightness for Robinson source-mark B"
+            android:min="0" android:max="100" android:defaultValue="58"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="source_mark_b_c"
+            android:title="Mark B chroma"
+            android:summary="OKLCH chroma for Robinson source-mark B"
+            android:min="0" android:max="40" android:defaultValue="24"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="source_mark_b_h"
+            android:title="Mark B hue"
+            android:summary="OKLCH hue for Robinson source-mark B"
+            android:min="0" android:max="360" android:defaultValue="265"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="source_mark_c_l"
+            android:title="Line lightness"
+            android:summary="OKLCH lightness for single-line source marks"
+            android:min="0" android:max="100" android:defaultValue="72"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="source_mark_c_c"
+            android:title="Line chroma"
+            android:summary="OKLCH chroma for single-line source marks"
+            android:min="0" android:max="40" android:defaultValue="4"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="source_mark_c_h"
+            android:title="Line hue"
+            android:summary="OKLCH hue for single-line source marks"
+            android:min="0" android:max="360" android:defaultValue="85"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Surface contours">
+        <SeekBarPreference
+            android:key="surface_contour_amount"
+            android:title="Contour amount"
+            android:summary="Independent surface contour line strength"
+            android:min="0" android:max="100" android:defaultValue="0"
+            app:showSeekBarValue="true" />
+        <ListPreference
+            android:key="surface_contour_source"
+            android:title="Contour source"
+            android:summary="Scalar field used for contour bands"
+            android:entries="@array/surface_contour_source_entries"
+            android:entryValues="@array/surface_contour_source_values"
+            android:defaultValue="0" />
+        <SeekBarPreference
+            android:key="surface_contour_spacing"
+            android:title="Contour spacing"
+            android:summary="Number of bands across the selected scalar field"
+            android:min="1" android:max="64" android:defaultValue="16"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="surface_contour_width"
+            android:title="Contour width"
+            android:summary="Line width within each contour band"
+            android:min="1" android:max="50" android:defaultValue="18"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="surface_contour_phase"
+            android:title="Contour phase"
+            android:summary="Slides contour bands through the selected scalar field"
+            android:min="0" android:max="100" android:defaultValue="0"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="surface_contour_l"
+            android:title="Contour lightness"
+            android:summary="OKLCH line lightness"
+            android:min="0" android:max="100" android:defaultValue="92"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="surface_contour_c"
+            android:title="Contour chroma"
+            android:summary="OKLCH line chroma"
+            android:min="0" android:max="40" android:defaultValue="6"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="surface_contour_h"
+            android:title="Contour hue"
+            android:summary="OKLCH line hue"
+            android:min="0" android:max="360" android:defaultValue="85"
+            app:showSeekBarValue="true" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Sheen tint">
@@ -142,5 +287,31 @@
             android:summary="Flat fill on the unlit side"
             android:min="0" android:max="100" android:defaultValue="22"
             app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="light_choreo_amount"
+            android:title="Light choreography"
+            android:summary="Amount of moving key/fill response"
+            android:min="0" android:max="100" android:defaultValue="18"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="light_choreo_speed"
+            android:title="Choreography speed"
+            android:summary="Clock/page/beat phase multiplier"
+            android:min="0" android:max="200" android:defaultValue="100"
+            app:showSeekBarValue="true" />
+        <ListPreference
+            android:key="light_choreo_source"
+            android:title="Choreography source"
+            android:summary="%s"
+            android:defaultValue="3"
+            android:entries="@array/light_choreo_source_entries"
+            android:entryValues="@array/light_choreo_source_values" />
+        <ListPreference
+            android:key="clock_waveform"
+            android:title="Clock waveform"
+            android:summary="%s"
+            android:defaultValue="0"
+            android:entries="@array/clock_waveform_entries"
+            android:entryValues="@array/clock_waveform_values" />
     </PreferenceCategory>
 </PreferenceScreen>

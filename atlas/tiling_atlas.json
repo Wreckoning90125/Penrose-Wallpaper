@@ -172,7 +172,7 @@
       "defaults": {
         "family": "5",
         "seed": "0",
-        "generation": 4,
+        "generation": 2,
         "preset": "9",
         "color_mode": "1",
         "color_count": 8,
@@ -200,7 +200,7 @@
             "seed": "0",
             "preset": "9",
             "color_mode": "1",
-            "generation": 4
+            "generation": 2
           }
         },
         {
@@ -212,7 +212,7 @@
             "preset": "7",
             "color_mode": "2",
             "color_count": 8,
-            "generation": 4
+            "generation": 2
           }
         },
         {
@@ -223,7 +223,7 @@
             "seed": "2",
             "preset": "8",
             "color_mode": "1",
-            "generation": 4
+            "generation": 2
           }
         },
         {
@@ -235,7 +235,7 @@
             "preset": "10",
             "color_mode": "0",
             "color_count": 3,
-            "generation": 4
+            "generation": 3
           }
         },
         {
@@ -247,7 +247,7 @@
             "preset": "4",
             "color_mode": "1",
             "color_count": 12,
-            "generation": 4
+            "generation": 3
           }
         },
         {
@@ -259,7 +259,7 @@
             "preset": "9",
             "color_mode": "2",
             "color_count": 10,
-            "generation": 4
+            "generation": 3
           }
         },
         {
@@ -297,7 +297,7 @@
             "mat_metalness": 92,
             "mat_anisotropy": 96,
             "mat_iridescence": 14,
-            "generation": 4
+            "generation": 2
           }
         },
         {
@@ -313,7 +313,7 @@
             "bg_h": 80,
             "mat_metalness": 0,
             "mat_roughness": 84,
-            "generation": 4
+            "generation": 2
           }
         }
       ]
@@ -409,6 +409,22 @@
           }
         },
         {
+          "id": "poly-d4-pinwheel-weave",
+          "name": "Experimental D4 square weave",
+          "settings": {
+            "family": "18",
+            "seed": "0",
+            "preset": "11",
+            "color_mode": "0",
+            "color_count": 8,
+            "ornament_style": 2,
+            "ornament_amount": 48,
+            "ornament_width": 42,
+            "ornament_density": 62,
+            "generation": 4
+          }
+        },
+        {
           "id": "poly-p3-block-compare",
           "name": "Robinson block comparison",
           "settings": {
@@ -441,7 +457,7 @@
             "preset": "10",
             "color_mode": "0",
             "color_count": 3,
-            "generation": 4
+            "generation": 3
           }
         },
         {
@@ -766,7 +782,7 @@
             "preset": "9",
             "color_mode": "2",
             "color_count": 8,
-            "generation": 4
+            "generation": 2
           }
         },
         {
@@ -778,7 +794,7 @@
             "preset": "4",
             "color_mode": "2",
             "color_count": 10,
-            "generation": 4
+            "generation": 3
           }
         },
         {
@@ -910,7 +926,7 @@
             "preset": "9",
             "color_mode": "1",
             "color_count": 12,
-            "generation": 4
+            "generation": 3
           }
         },
         {
@@ -979,7 +995,7 @@
       "defaults": {
         "family": "3",
         "seed": "0",
-        "generation": 4,
+        "generation": 3,
         "preset": "10",
         "color_mode": "0",
         "color_count": 3,
@@ -1007,7 +1023,7 @@
             "seed": "0",
             "preset": "10",
             "color_mode": "0",
-            "generation": 4
+            "generation": 3
           }
         },
         {
@@ -1019,7 +1035,7 @@
             "preset": "7",
             "color_mode": "1",
             "color_count": 12,
-            "generation": 4
+            "generation": 3
           }
         },
         {
@@ -1031,7 +1047,7 @@
             "preset": "9",
             "color_mode": "2",
             "color_count": 10,
-            "generation": 4
+            "generation": 3
           }
         },
         {
@@ -1043,7 +1059,7 @@
             "preset": "8",
             "color_mode": "1",
             "color_count": 8,
-            "generation": 4
+            "generation": 2
           }
         },
         {
@@ -1067,7 +1083,7 @@
             "preset": "10",
             "color_mode": "2",
             "color_count": 6,
-            "generation": 4
+            "generation": 3
           }
         },
         {
@@ -1081,7 +1097,7 @@
             "mat_metalness": 94,
             "mat_anisotropy": 100,
             "mat_iridescence": 16,
-            "generation": 4
+            "generation": 3
           }
         },
         {
@@ -1097,7 +1113,7 @@
             "bg_h": 80,
             "mat_metalness": 0,
             "mat_roughness": 86,
-            "generation": 4
+            "generation": 3
           }
         },
         {
@@ -1111,7 +1127,7 @@
             "field_relief": 46,
             "field_color": 46,
             "field_displace": 0,
-            "generation": 4
+            "generation": 3
           }
         },
         {
@@ -1124,7 +1140,7 @@
             "color_mode": "0",
             "field_relief": 40,
             "field_color": 40,
-            "generation": 4
+            "generation": 3
           }
         }
       ]
@@ -1227,7 +1243,7 @@
             "preset": "9",
             "color_mode": "2",
             "color_count": 8,
-            "generation": 4,
+            "generation": 2,
             "hyp_scale": 58
           }
         },
@@ -1240,7 +1256,7 @@
             "preset": "10",
             "color_mode": "1",
             "color_count": 12,
-            "generation": 4,
+            "generation": 3,
             "hyp_boost_x": 38
           }
         },
@@ -1473,7 +1489,7 @@
       "defaults": {
         "family": "12",
         "seed": "0",
-        "generation": 3,
+        "generation": 2,
         "preset": "9",
         "color_mode": "0",
         "color_count": 9,
@@ -1502,7 +1518,7 @@
             "seed": "0",
             "preset": "9",
             "color_mode": "0",
-            "generation": 3
+            "generation": 2
           }
         },
         {
@@ -1514,7 +1530,7 @@
             "preset": "7",
             "color_mode": "1",
             "color_count": 9,
-            "generation": 3
+            "generation": 2
           }
         },
         {
@@ -1526,7 +1542,7 @@
             "preset": "6",
             "color_mode": "2",
             "color_count": 8,
-            "generation": 3
+            "generation": 2
           }
         },
         {
@@ -1537,7 +1553,7 @@
             "seed": "3",
             "preset": "8",
             "color_mode": "0",
-            "generation": 3
+            "generation": 2
           }
         },
         {
@@ -1549,7 +1565,7 @@
             "preset": "5",
             "color_mode": "1",
             "color_count": 9,
-            "generation": 3
+            "generation": 2
           }
         },
         {
@@ -1561,7 +1577,7 @@
             "preset": "9",
             "color_mode": "0",
             "color_count": 5,
-            "generation": 2
+            "generation": 1
           }
         },
         {
@@ -1573,7 +1589,7 @@
             "preset": "10",
             "color_mode": "2",
             "color_count": 6,
-            "generation": 3
+            "generation": 2
           }
         },
         {
@@ -1585,7 +1601,7 @@
             "preset": "7",
             "color_mode": "1",
             "color_count": 8,
-            "generation": 2
+            "generation": 1
           }
         },
         {
@@ -1597,7 +1613,7 @@
             "preset": "6",
             "color_mode": "2",
             "color_count": 7,
-            "generation": 2
+            "generation": 1
           }
         },
         {
@@ -1608,7 +1624,7 @@
             "seed": "8",
             "preset": "9",
             "color_mode": "0",
-            "generation": 3,
+            "generation": 2,
             "projection": "1",
             "hyp_scale": 58,
             "hyp_border_subdiv": 10,

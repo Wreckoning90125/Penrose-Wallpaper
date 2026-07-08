@@ -330,6 +330,7 @@ export function NodeFrame({
 // nodes — referenced by both those node components and the layout port counter.
 export const SCENE_PASS_INLETS: PortSpec[] = [
   { id: 'surface', label: 'Surface' },
+  { id: 'attractor', label: 'IFS' },
   { id: 'lighting', label: 'Lighting' },
   { id: 'displace', label: 'Displace' },
   { id: 'relief', label: 'Relief' },

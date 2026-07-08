@@ -53,8 +53,10 @@ version answered by the Spectre.
 ### Renderer mapping
 Implemented as `Family::Hat` (enum index 11). Seeds are H, T, P, and F
 metatiles. `generateHat` ports Craig S. Kaplan's Hat visualizer generator,
-normalizes the emitted patch to the unit disk, and caps at generation 5
-(54,289 Hat tiles for the H seed).
+normalizes the emitted patch to the unit disk, and caps at displayed generation
+4. Displayed generation 0 skips the raw starter metatile and emits the first
+completed supertile expansion, so the slider tracks patch layers rather than
+the 1-4 leaf starter cases.
 
 ### References
 Smith, Myers, Kaplan, and Goodman-Strauss, "An aperiodic monotile,"
@@ -72,15 +74,15 @@ permitted its tilings remain homochiral.
 | Symmetry order   | none |
 | Symmetry type    | none |
 | Aperiodic        | yes |
-| Prototiles       | 1 - the 14-vertex straight-edged Spectre / Tile(1,1) |
+| Prototiles       | 1 - the curved Spectre, stored as 14 Bezier anchors |
 | Construction     | substitution (nine labelled supertiles) |
 | Inflation factor | supertile hierarchy; renderer uses generation-normalized patches |
 | Attribution      | David Smith, Joseph Samuel Myers, Craig S. Kaplan, Chaim Goodman-Strauss |
 
 ### Prototiles
-One 14-vertex equilateral polygon in the straight-edged `spectre.js` generator
-coordinates. The paper also defines curved-edge Spectres; the renderer uses the
-straight polygonal Tile(1,1)/Spectre form because the tiling core is polygonal.
+One curved Spectre in the public `spectre.js` generator coordinates. The tiling
+record stores Kaplan's 14 anchor points; the web and native renderers flatten
+the cubic `CurvyShape` outline only for fill and border mesh emission.
 
 ### Construction
 Kaplan's generator has nine labelled supertile states: Gamma, Delta, Theta,
@@ -100,8 +102,8 @@ does not satisfy.
 
 ### Variants & relations
 The generator also exposes hat-dominant and turtle-dominant equivalent shapes,
-plus curved Spectre variants. The renderer currently implements the straight
-Spectre polygon only.
+plus the straight Tile(1,1) polygon. The renderer implements the curved Spectre
+variant.
 
 ### History & decoration
 Published as the follow-up to the Hat result. The Spectre resolves the practical
@@ -111,8 +113,11 @@ and mathematical concern that the Hat requires reflected copies.
 Implemented as `Family::Spectre` (enum index 12). Seeds are the nine generator
 labels Gamma, Delta, Theta, Lambda, Xi, Pi, Sigma, Phi, and Psi.
 `generateSpectre` ports Kaplan's public Spectre generator, normalizes the
-emitted patch to the unit disk, and caps at generation 5 (about 30k-35k tiles,
-depending on seed).
+emitted patch to the unit disk, and caps the exposed curved-render path at
+displayed generation 3 while denser viewport/LOD generation is implemented.
+Displayed generation 0 skips the raw base system where Gamma is a two-Spectre
+meta and the other labels are one Spectre, then emits the first completed
+supertile expansion.
 
 ### References
 Smith, Myers, Kaplan, and Goodman-Strauss, "A chiral aperiodic monotile,"

@@ -28,6 +28,18 @@
             android:min="2" android:max="18" android:defaultValue="2"
             app:showSeekBarValue="true" />
         <SeekBarPreference
+            android:key="color_spread"
+            android:title="Spread"
+            android:summary="How far classification reaches across the palette slots"
+            android:min="0" android:max="100" android:defaultValue="100"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
+            android:key="color_spectral"
+            android:title="Spectral mix"
+            android:summary="Blend the selected palette toward a hue-wheel spectrum"
+            android:min="0" android:max="100" android:defaultValue="0"
+            app:showSeekBarValue="true" />
+        <SeekBarPreference
             android:key="brightness"
             android:title="@string/brightness_title"
             android:min="0" android:max="100" android:defaultValue="100"

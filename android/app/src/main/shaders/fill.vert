@@ -2,11 +2,13 @@
 #extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 inPos;
-layout(location = 1) in uint inColorIdx;
+layout(location = 1) in float inColorSlot;
 layout(location = 2) in vec2 inCenter;
 layout(location = 3) in vec2 inBulge;
 layout(location = 4) in vec3 inBary;
 layout(location = 5) in vec4 inTileMat;
+layout(location = 6) in vec4 inTopology;
+layout(location = 7) in vec3 inEdgeDist;
 
 layout(push_constant) uniform PC {
     vec4 view0;
@@ -17,12 +19,19 @@ layout(push_constant) uniform PC {
 #include "uniforms.glsl"
 #include "hyperbolic.glsl"
 
-layout(location = 0) flat out uint vColorIdx;
+layout(location = 0) flat out float vColorSlot;
 layout(location = 1) flat out float vRipple;
 layout(location = 2) flat out vec2 vBulgeGrad;
+// Interpolated: the fragment needs a per-pixel barycentric coordinate to
+// recover a varying edge distance (vBary * vEdgeDist); vEdgeDist alone is a
+// per-triangle constant and would flatten the bevel/seam/edge-profile band.
 layout(location = 3)      out vec3 vBary;
 layout(location = 4)      out vec2 vWaveGrad;
 layout(location = 5) flat out vec4 vTileMat;
+layout(location = 6)      out vec2 vModelPos;
+layout(location = 7) flat out vec2 vCenter;
+layout(location = 8) flat out vec4 vTopology;
+layout(location = 9) flat out vec3 vEdgeDist;
 
 const float TWO_PI = 6.2831853072;
 
@@ -66,10 +75,14 @@ vec2 waveGradient(vec2 p, float omegaT, float pagePhase, float symF) {
 }
 
 void main() {
-    vColorIdx = inColorIdx;
+    vColorSlot = inColorSlot;
     vBulgeGrad = inBulge;
-    vBary = inBary;
     vTileMat = inTileMat;
+    vModelPos = inPos;
+    vCenter = inCenter;
+    vTopology = inTopology;
+    vEdgeDist = inEdgeDist;
+    vBary = inBary;
 
     float amp = ubo.anim.y;
     float waveSym = ubo.anim.z;
@@ -84,9 +97,9 @@ void main() {
         float omegaT    = ubo.anim.x * 0.4 * speed;
         float pagePhase = (ubo.anim.w - 0.5) * TWO_PI;
 
-        // Color modulation samples at the tile centroid so all three
-        // vertices of a triangle see the same value and the tile shades
-        // uniformly. Displacement samples at the vertex's own position so
+    // Color modulation samples at the tile center (Spectre uses its canonical
+    // key-frame center) so all three vertices of a triangle see the same value
+    // and the tile shades uniformly. Displacement samples at the vertex so
         // shared corners between neighbouring tiles displace by the same
         // amount and the tiling stays seam-free.
         if (kind != 1) phiCenter = wavePhi(inCenter, omegaT, pagePhase, waveSym);

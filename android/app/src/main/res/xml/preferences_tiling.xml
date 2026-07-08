@@ -34,8 +34,8 @@
             android:defaultValue="0" />
         <SeekBarPreference
             android:key="generation"
-            android:title="Generation"
-            android:summary="More generations = more tiles"
+            android:title="@string/tiling_generation_title"
+            android:summary="@string/tiling_generation_summary"
             android:min="0" android:max="8" android:defaultValue="4"
             app:showSeekBarValue="true" />
         <ListPreference

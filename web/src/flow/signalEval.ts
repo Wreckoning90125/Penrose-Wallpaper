@@ -12,6 +12,8 @@ import { fxDescriptor } from '../render/postFxCatalog';
 import { FIELD_SOURCE_PARAMS } from './fieldSourceSpec';
 import { applyModulationTargetRange, editHoldsActiveTarget, finiteModulation } from './modulationTargetRuntime';
 
+const TAU = Math.PI * 2;
+
 export type AudioOperatorRuntimeState = {
   gateChangedAt: Record<string, number | undefined>;
   gateOpen: Record<string, boolean | undefined>;
@@ -59,6 +61,15 @@ function smoothingAlpha(seconds: number, dtSeconds: number): number {
   return Math.max(0, Math.min(1, 1 - Math.exp(-dtSeconds / seconds)));
 }
 
+function boundedSignal(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(-4, Math.min(4, value));
+}
+
+function finiteSignal(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
 function evaluateOperatorSignal(
   node: Node,
   edges: readonly Edge[],
@@ -91,6 +102,7 @@ function evaluateOperatorSignal(
   let output = 0;
   let nextPrevious: number | null = null;
   let gateOutput: number | null = null;
+  let envelopeOutput: number | null = null;
 
   if (spec.kind === 'gain') output = input('signal') * operatorControl(values, 'gain', 1);
   if (spec.kind === 'bias') output = input('signal') + operatorControl(values, 'bias', 0);
@@ -187,10 +199,37 @@ function evaluateOperatorSignal(
     state.triggerHigh[triggerKey] = trigger;
     output = state.held[heldKey] ?? input('signal');
   }
+  if (spec.kind === 'am') {
+    const depth = Math.max(0, Math.min(2, operatorControl(values, 'depth', operatorDefault(spec, 'depth', 1))));
+    const bias = clampSignal(operatorControl(values, 'bias', operatorDefault(spec, 'bias', 0.5)));
+    output = boundedSignal(input('carrier') * (1 + depth * (input('modulator', bias) - bias)));
+  }
+  if (spec.kind === 'pm') {
+    const depth = Math.max(0, Math.min(4, operatorControl(values, 'depth', operatorDefault(spec, 'depth', 1))));
+    const cycles = Math.max(0, Math.min(16, operatorControl(values, 'cycles', operatorDefault(spec, 'cycles', 1))));
+    const offset = clampSignal(operatorControl(values, 'offset', operatorDefault(spec, 'offset', 0)));
+    const phase = finiteSignal(input('phase') * cycles + input('modulator') * depth + offset);
+    output = 0.5 + 0.5 * Math.sin(TAU * phase);
+  }
+  if (spec.kind === 'beat') {
+    const cyclesA = Math.max(0, Math.min(32, operatorControl(values, 'cyclesA', operatorDefault(spec, 'cyclesA', 4))));
+    const cyclesB = Math.max(0, Math.min(32, operatorControl(values, 'cyclesB', operatorDefault(spec, 'cyclesB', 4.25))));
+    const offset = clampSignal(operatorControl(values, 'offset', operatorDefault(spec, 'offset', 0)));
+    const phase = finiteSignal(input('phase') + offset);
+    const a = Math.sin(TAU * phase * cyclesA);
+    const b = Math.sin(TAU * phase * cyclesB);
+    output = clampSignal(0.5 + 0.25 * (a + b));
+    envelopeOutput = clampSignal(Math.abs(Math.cos(Math.PI * phase * (cyclesA - cyclesB))));
+  }
 
   state.previous[previousKey] = nextPrevious ?? output;
   for (const handle of spec.outputs) {
-    signals.set(signalKey(node.id, handle), handle === 'gate' && gateOutput !== null ? gateOutput : output);
+    const handleOutput = handle === 'gate' && gateOutput !== null
+      ? gateOutput
+      : handle === 'envelope' && envelopeOutput !== null
+        ? envelopeOutput
+        : output;
+    signals.set(signalKey(node.id, handle), handleOutput);
   }
 }
 

@@ -425,13 +425,13 @@ bool Renderer::buildPipelines() {
     fillBinding.binding = 0;
     fillBinding.stride = sizeof(FillVertex);
     fillBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    VkVertexInputAttributeDescription fillAttrs[6]{};
+    VkVertexInputAttributeDescription fillAttrs[8]{};
     fillAttrs[0].location = 0; fillAttrs[0].binding = 0;
     fillAttrs[0].format   = VK_FORMAT_R32G32_SFLOAT;
     fillAttrs[0].offset   = offsetof(FillVertex, x);
     fillAttrs[1].location = 1; fillAttrs[1].binding = 0;
-    fillAttrs[1].format   = VK_FORMAT_R32_UINT;
-    fillAttrs[1].offset   = offsetof(FillVertex, colorIdx);
+    fillAttrs[1].format   = VK_FORMAT_R32_SFLOAT;
+    fillAttrs[1].offset   = offsetof(FillVertex, colorSlot);
     fillAttrs[2].location = 2; fillAttrs[2].binding = 0;
     fillAttrs[2].format   = VK_FORMAT_R32G32_SFLOAT;
     fillAttrs[2].offset   = offsetof(FillVertex, cx);
@@ -444,12 +444,18 @@ bool Renderer::buildPipelines() {
     fillAttrs[5].location = 5; fillAttrs[5].binding = 0;
     fillAttrs[5].format   = VK_FORMAT_R32G32B32A32_SFLOAT;
     fillAttrs[5].offset   = offsetof(FillVertex, mtype);
+    fillAttrs[6].location = 6; fillAttrs[6].binding = 0;
+    fillAttrs[6].format   = VK_FORMAT_R32G32B32A32_SFLOAT;
+    fillAttrs[6].offset   = offsetof(FillVertex, tdegree);
+    fillAttrs[7].location = 7; fillAttrs[7].binding = 0;
+    fillAttrs[7].format   = VK_FORMAT_R32G32B32_SFLOAT;
+    fillAttrs[7].offset   = offsetof(FillVertex, edgeDistX);
 
     VkPipelineVertexInputStateCreateInfo fillVi{};
     fillVi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     fillVi.vertexBindingDescriptionCount = 1;
     fillVi.pVertexBindingDescriptions = &fillBinding;
-    fillVi.vertexAttributeDescriptionCount = 6;
+    fillVi.vertexAttributeDescriptionCount = 8;
     fillVi.pVertexAttributeDescriptions = fillAttrs;
 
     VkPipelineInputAssemblyStateCreateInfo triIA{};
@@ -490,19 +496,22 @@ bool Renderer::buildPipelines() {
     borderBinding.binding = 0;
     borderBinding.stride = sizeof(BorderVertex);
     borderBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    VkVertexInputAttributeDescription borderAttrs[2]{};
+    VkVertexInputAttributeDescription borderAttrs[3]{};
     borderAttrs[0].location = 0; borderAttrs[0].binding = 0;
     borderAttrs[0].format   = VK_FORMAT_R32G32_SFLOAT;
     borderAttrs[0].offset   = offsetof(BorderVertex, x);
     borderAttrs[1].location = 1; borderAttrs[1].binding = 0;
     borderAttrs[1].format   = VK_FORMAT_R32G32_SFLOAT;
     borderAttrs[1].offset   = offsetof(BorderVertex, sx);
+    borderAttrs[2].location = 2; borderAttrs[2].binding = 0;
+    borderAttrs[2].format   = VK_FORMAT_R32_SFLOAT;
+    borderAttrs[2].offset   = offsetof(BorderVertex, role);
 
     VkPipelineVertexInputStateCreateInfo borderVi{};
     borderVi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     borderVi.vertexBindingDescriptionCount = 1;
     borderVi.pVertexBindingDescriptions = &borderBinding;
-    borderVi.vertexAttributeDescriptionCount = 2;
+    borderVi.vertexAttributeDescriptionCount = 3;
     borderVi.pVertexAttributeDescriptions = borderAttrs;
 
     VkGraphicsPipelineCreateInfo borderGpi = fillGpi;

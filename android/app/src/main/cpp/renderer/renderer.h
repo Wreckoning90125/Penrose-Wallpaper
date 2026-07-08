@@ -76,8 +76,8 @@ public:
     void onSettingsChanged(const Settings& s);
 
     // Pinch gestures update zoom + rotation immediately; the Kotlin layer
-    // calls Settings::saveView on touch-end to commit them. touchMove only
-    // accumulates pan in Generative mode and is otherwise a no-op.
+    // calls Settings::saveView on touch-end to commit them. touchMove
+    // translates panX/panY in Free pan mode and is otherwise a no-op.
     void touchPinch(float scale, float rotDelta);
     void touchMove(float dx, float dy);
     void resetView();
@@ -90,9 +90,10 @@ public:
     // correction when the wallpaper surface is wider than the visible window.
     void surfaceGeometry(int surfW, int surfH, int screenW, int screenH);
 
-    // Home-screen horizontal scroll offset (0..1) — phase-shifts the ripple
-    // in modes that include the page-scroll term.
-    void setPageOffset(float xOffset);
+    // Home-screen horizontal scroll offset. xOffset phase-shifts ripple/graph
+    // page sources; xPixelOffset is the launcher window pan in surface pixels
+    // for Endless pan mode.
+    void setPageOffset(float xOffset, int xPixelOffset);
 
     // Device px-per-dp, supplied by Kotlin from DisplayMetrics. Used by
     // ImGuiHost to scale touch-target sizes against the actual surface
@@ -124,6 +125,8 @@ private:
     bool initPipeline();
     bool buildGeometry();
     bool buildBorderGeometry();
+    void requestGeometryWindowRebuildForPan();
+    void rebuildGeometryForPan();
     void updatePaletteUbo();
     void initImGuiIfNeeded();
     void handleDeviceLost(const char* operation);
@@ -163,12 +166,6 @@ private:
     void collectRetiredBuffers();
     void destroyRetiredBuffersNow();
     bool loadShader(const char* assetPath, VkShaderModule& outModule);
-
-    // Generative-pan: bump effectiveGeneration_ when the gesture has
-    // accumulated enough pixels to warrant another deflation pass, and
-    // rebuild geometry. No-op when panMode != Generative or already at the
-    // family's generation cap.
-    void considerGrowth();
 
     AAssetManager* assets_ = nullptr;
 
@@ -264,11 +261,35 @@ private:
     float fxMatIridescence_ = 0.45f;
     float fxMatEmissive_    = 0.60f;
     float fxMatRelief_      = 1.05f;
+    float fxMatRoughMod_    = 0.0f;
+    float fxMatMetalMod_    = 0.0f;
     float fxLightAngle_     = 230.0f;
     float fxLightElevation_ = 55.0f;
     float fxLightIntensity_ = 1.00f;
     float fxLightWarmth_    = 0.50f;
     float fxLightAmbient_   = 0.22f;
+    float fxLightChoreoAmount_ = 0.18f;
+    float fxLightChoreoSpeed_  = 1.00f;
+    float fxLightChoreoSource_ = 3.0f;
+    float fxOrnamentAmount_ = 0.0f;
+    float fxOrnamentWidth_  = 0.45f;
+    float fxOrnamentPhase_  = 0.0f;
+    float fxOrnamentStyle_  = 0.0f;
+    float fxOrnamentDensity_ = 1.0f;
+    float fxOrnamentTwist_  = 0.5f;
+    float fxSurfaceContourAmount_  = 0.0f;
+    float fxSurfaceContourSpacing_ = 16.0f;
+    float fxSurfaceContourWidth_   = 0.18f;
+    float fxSurfaceContourPhase_   = 0.0f;
+    float fxSurfaceContourSource_  = 0.0f;
+    float fxSurfaceContourLight_   = 0.92f;
+    float fxSurfaceContourChroma_  = 0.06f;
+    float fxSurfaceContourHue_     = 85.0f;
+    float fxEdgeProfileWidth_ = 0.0f;
+    float fxEdgeProfileGlow_  = 0.0f;
+    float fxEdgeProfileLight_ = 1.0f;
+    float fxEdgeProfileChroma_ = 0.0f;
+    float fxEdgeProfileHue_ = 0.0f;
     // Hyperbolic-projection targets — slider/setting baseline plus the
     // sum of any connected OutHypBoost{X,Y} Target nodes. hypScale stays
     // static because Android border geometry is baked in projected disk space.
@@ -278,20 +299,22 @@ private:
     float fxHypBoostY_      = 0.0f;
     float fxHypScale_       = 1.5f;
 
-    // Effective generation for the currently-built geometry. Equal to
-    // settings_.generation in Locked pan mode; grows past it in Generative
-    // mode as the user drags.
+    // Effective generation for the currently-built geometry. Kept separate
+    // from settings_.generation so future windowed rebuilds can preserve a
+    // stable generation baseline without tying it to gesture distance.
     int effectiveGeneration_ = 0;
     // Current generated tile topology. Full geometry rebuilds refresh it;
     // border-only rebuilds reuse it so border sliders do not regenerate
     // substitution geometry or drift from the fill mesh being drawn.
     std::vector<Tile> currentTiles_;
-    // Cumulative pan delta in pixels since the last growth trigger.
-    float panAccumPx_ = 0.0f;
-
     // Ripple state.
     float time_ = 0.0f;
     float pageOffset_ = 0.5f;
+    float pagePanX_ = 0.0f;
+    float geometryViewPanX_ = 0.0f;
+    float geometryViewPanY_ = 0.0f;
+    float geometryPagePanX_ = 0.0f;
+    bool geometryPagePanValid_ = false;
     float lastFrameSec_ = 0.0f;
 
     int surfW_ = 0, surfH_ = 0;

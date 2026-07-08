@@ -20,7 +20,9 @@ internal object StaticSettingsParser {
                 PrefType.Int -> (value as? Number)?.toInt()
                     ?.takeIf { expected.intRange?.contains(it) ?: true }
                     ?.let { StaticValue.IntValue(it) }
-                PrefType.String -> (value as? String)
+                // Web presets serialize enum-ish settings as JSON numbers while the
+                // Android ListPreference stores them as strings; accept both spellings.
+                PrefType.String -> ((value as? String) ?: (value as? Number)?.toInt()?.toString())
                     ?.takeIf { expected.allowedStrings?.contains(it) ?: true }
                     ?.let { StaticValue.StringValue(it) }
                 PrefType.Bool -> (value as? Boolean)?.let { StaticValue.BoolValue(it) }
@@ -54,12 +56,14 @@ internal object StaticSettingsParser {
     private val float = PrefSpec(PrefType.Float)
 
     private val prefSchema = mapOf(
-        Settings.KEY_FAMILY to stringRange(0, 16),
+        Settings.KEY_FAMILY to stringRange(0, 18),
         Settings.KEY_SEED to stringRange(0, 51),
         Settings.KEY_GENERATION to intRange(0, 8),
         Settings.KEY_PRESET to stringSet("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"),
         Settings.KEY_COLOR_COUNT to intRange(2, 18),
-        Settings.KEY_COLOR_MODE to stringSet("0", "1", "2"),
+        Settings.KEY_COLOR_MODE to stringSet("0", "1", "2", "3"),
+        Settings.KEY_COLOR_SPREAD to intRange(0, 100),
+        Settings.KEY_COLOR_SPECTRAL to intRange(0, 100),
         Settings.KEY_BORDER_ON to bool,
         Settings.KEY_BORDER_W to intRange(0, 600),
         Settings.KEY_BORDER_JOIN to stringSet("0", "1", "2"),
@@ -78,7 +82,7 @@ internal object StaticSettingsParser {
         Settings.KEY_RIPPLE_MODE to stringSet("0", "1", "2"),
         Settings.KEY_RIPPLE_SPEED to intRange(10, 300),
         Settings.KEY_RIPPLE_KIND to stringSet("0", "1", "2"),
-        Settings.KEY_PAN_MODE to stringSet("0", "1"),
+        Settings.KEY_PAN_MODE to stringSet("0", "1", "2"),
         Settings.KEY_ZOOM to float,
         Settings.KEY_ROTATION to float,
         Settings.KEY_PAN_X to float,
@@ -93,11 +97,44 @@ internal object StaticSettingsParser {
         Settings.KEY_MAT_IRIDESCENCE to intRange(0, 100),
         Settings.KEY_MAT_EMISSIVE to intRange(0, 100),
         Settings.KEY_MAT_RELIEF to intRange(0, 200),
+        Settings.KEY_ORNAMENT_STYLE to intRange(0, 4),
+        Settings.KEY_ORNAMENT_AMOUNT to intRange(0, 100),
+        Settings.KEY_ORNAMENT_WIDTH to intRange(0, 100),
+        Settings.KEY_ORNAMENT_DENSITY to intRange(0, 100),
+        Settings.KEY_ORNAMENT_PHASE to intRange(0, 100),
+        Settings.KEY_ORNAMENT_TWIST to intRange(0, 100),
+        Settings.KEY_ORNAMENT_SEED to intRange(0, 999),
+        Settings.KEY_SURFACE_CONTOUR_AMOUNT to intRange(0, 100),
+        Settings.KEY_SURFACE_CONTOUR_SOURCE to stringRange(0, 7),
+        Settings.KEY_SURFACE_CONTOUR_SPACING to intRange(1, 64),
+        Settings.KEY_SURFACE_CONTOUR_WIDTH to intRange(1, 50),
+        Settings.KEY_SURFACE_CONTOUR_PHASE to intRange(0, 100),
+        Settings.KEY_SURFACE_CONTOUR_L to intRange(0, 100),
+        Settings.KEY_SURFACE_CONTOUR_C to intRange(0, 40),
+        Settings.KEY_SURFACE_CONTOUR_H to intRange(0, 360),
+        Settings.KEY_SOURCE_MARK_A_L to intRange(0, 100),
+        Settings.KEY_SOURCE_MARK_A_C to intRange(0, 40),
+        Settings.KEY_SOURCE_MARK_A_H to intRange(0, 360),
+        Settings.KEY_SOURCE_MARK_B_L to intRange(0, 100),
+        Settings.KEY_SOURCE_MARK_B_C to intRange(0, 40),
+        Settings.KEY_SOURCE_MARK_B_H to intRange(0, 360),
+        Settings.KEY_SOURCE_MARK_C_L to intRange(0, 100),
+        Settings.KEY_SOURCE_MARK_C_C to intRange(0, 40),
+        Settings.KEY_SOURCE_MARK_C_H to intRange(0, 360),
+        Settings.KEY_EDGE_PROFILE_WIDTH to intRange(0, 100),
+        Settings.KEY_EDGE_PROFILE_GLOW to intRange(0, 100),
+        Settings.KEY_EDGE_PROFILE_L to intRange(0, 100),
+        Settings.KEY_EDGE_PROFILE_C to intRange(0, 37),
+        Settings.KEY_EDGE_PROFILE_H to intRange(0, 359),
         Settings.KEY_LIGHT_ANGLE to intRange(0, 360),
         Settings.KEY_LIGHT_ELEVATION to intRange(0, 90),
         Settings.KEY_LIGHT_INTENSITY to intRange(0, 200),
         Settings.KEY_LIGHT_WARMTH to intRange(0, 100),
         Settings.KEY_LIGHT_AMBIENT to intRange(0, 100),
+        Settings.KEY_LIGHT_CHOREO_AMOUNT to intRange(0, 100),
+        Settings.KEY_LIGHT_CHOREO_SPEED to intRange(0, 200),
+        Settings.KEY_LIGHT_CHOREO_SOURCE to stringRange(0, 3),
+        Settings.KEY_CLOCK_WAVEFORM to stringRange(0, 3),
         Settings.KEY_MAT_SHEEN_COLOR_R to intRange(0, 100),
         Settings.KEY_MAT_SHEEN_COLOR_G to intRange(0, 100),
         Settings.KEY_MAT_SHEEN_COLOR_B to intRange(0, 100),

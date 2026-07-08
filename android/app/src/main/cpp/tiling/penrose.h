@@ -28,9 +28,9 @@ namespace penrose {
 //   Hat          — 13-vertex hat monotiles generated from the H/T/P/F
 //                  metatile hierarchy in Kaplan's `hatviz`; type identifies
 //                  the leaf role (H, H1, T, P, F).
-//   Spectre      — 14-vertex straight-edged Spectre / Tile(1,1) monotiles
-//                  generated from Kaplan's nine-supertile generator; type
-//                  identifies the substitution label.
+//   Spectre      — 14 Bezier-anchor curved Spectre monotiles generated from
+//                  Kaplan's nine-supertile generator; type identifies the
+//                  substitution label. Renderers flatten the cubic sides.
 //   Equithirds   — Kalahurka's two-triangle Bielefeld substitution. type 0 =
 //                  equilateral triangle; type 1 = 30-30-120 wide triangle.
 //   CromwellKRT  — Peter Cromwell's kite/rhombus/trapezium tiling, built as
@@ -48,11 +48,14 @@ namespace penrose {
 //                  generating triad and a single A full-hex supertile; type =
 //                  letter/bar/side role and orientation is classified
 //                  geometrically.
+//   D4Substitution — experimental bounded 2x2 square subdivision driven by
+//                  dihedral D4 state composition. The tile geometry stays
+//                  square while type stores the local symmetry state.
 // We pack every shape into the same struct so the renderer can iterate
-// uniformly. `vcount` ranges 3..26.
+// uniformly. `vcount` is bounded by kMaxTileVerts.
 // =============================================================================
 
-constexpr int kMaxTileVerts = 32;
+constexpr int kMaxTileVerts = 128;
 
 struct Tile {
     float x[kMaxTileVerts];
@@ -66,6 +69,13 @@ struct TilePoint {
     double y;
 };
 
+struct WindowBounds {
+    float minX;
+    float maxX;
+    float minY;
+    float maxY;
+};
+
 double tileSignedArea(const Tile& tile);
 TilePoint tileAreaCentroid(const Tile& tile);
 
@@ -74,13 +84,13 @@ enum class Family : int {
     AmmannBeenker = 5, Heptagonal = 6, Binary = 7, Tuebingen = 8,
     P1 = 9, Danzer = 10, Hat = 11, Spectre = 12, Equithirds = 13,
     CromwellKRT = 14, GailiunasSpiral = 15, Cairo = 16,
-    SocolarTaylor = 17,
+    SocolarTaylor = 17, D4Substitution = 18,
 };
 
 // Number of Family enumerators. The JNI layer validates the incoming family
 // index against this; keep it in step with the enum above and with the
 // kFamilyInfo[] table in penrose.cpp.
-constexpr int kFamilyCount = 18;
+constexpr int kFamilyCount = 19;
 
 // Per-family edge classification used by the border seam-hiding rule.
 //   For Penrose: Leg = the two equal-length sides, Base = the third.
@@ -129,6 +139,7 @@ std::vector<Tile> generateCromwellKRT(int seedIdx, int generations);
 std::vector<Tile> generateGailiunasSpiral(int seedIdx, int generations);
 std::vector<Tile> generateCairo(int seedIdx, int generations);
 std::vector<Tile> generateSocolarTaylor(int seedIdx, int generations);
+std::vector<Tile> generateD4Substitution(int seedIdx, int generations);
 
 // =============================================================================
 // Substitutions
@@ -248,6 +259,14 @@ inline const FamilyInfo& familyInfo(Family f) {
 // Generate a full tiling: seed + N deflations, or N-grid dualization.
 // Family-erased entry point.
 std::vector<Tile> generate(Family family, int seedIdx, int generations);
+
+// Direct substitution families can be pruned between deflation generations:
+// every child lies inside its parent, so a parent outside an expanded view
+// window cannot later produce visible descendants. Other family generators stay
+// on the full path until their own canonical generation stages expose the same
+// containment guarantee.
+bool supportsWindowedGeneration(Family family);
+std::vector<Tile> generateWindowed(Family family, int seedIdx, int generations, const WindowBounds& window);
 
 // Linear deflation rate — the renderer scales border width by it per
 // generation and skips borders once edges shrink below sub-pixel.

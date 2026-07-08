@@ -4,7 +4,7 @@
 // `spec.kind` out of its loosely-typed data.
 import { dataObject, dataString } from './nodeData';
 
-export type OperatorKind = 'gain' | 'bias' | 'clamp' | 'smooth' | 'mix' | 'multiply' | 'add' | 'map' | 'envelope' | 'lag' | 'threshold' | 'gate' | 'invert' | 'math' | 'sh';
+export type OperatorKind = 'gain' | 'bias' | 'clamp' | 'smooth' | 'mix' | 'multiply' | 'add' | 'map' | 'envelope' | 'lag' | 'threshold' | 'gate' | 'invert' | 'math' | 'sh' | 'am' | 'pm' | 'beat';
 
 export type OperatorSelectSpec = {
   key: string;
@@ -91,6 +91,30 @@ export const OPERATOR_LIBRARY: OperatorSpec[] = [
     }],
   },
   { kind: 'sh', label: 'Sample & hold', inputs: ['signal', 'trigger'], outputs: ['signal'], controls: [['threshold', 'Threshold', 0, 1, 0.01, 2]], defaults: { threshold: 0.5 } },
+  {
+    kind: 'am',
+    label: 'AM',
+    inputs: ['carrier', 'modulator'],
+    outputs: ['signal'],
+    controls: [['depth', 'Depth', 0, 2, 0.01, 2], ['bias', 'Bias', 0, 1, 0.01, 2]],
+    defaults: { depth: 1, bias: 0.5 },
+  },
+  {
+    kind: 'pm',
+    label: 'PM Osc',
+    inputs: ['phase', 'modulator'],
+    outputs: ['signal'],
+    controls: [['depth', 'Depth', 0, 4, 0.01, 2], ['cycles', 'Cycles', 0, 16, 0.01, 2], ['offset', 'Offset', 0, 1, 0.01, 2]],
+    defaults: { depth: 1, cycles: 1, offset: 0 },
+  },
+  {
+    kind: 'beat',
+    label: 'Beat Osc',
+    inputs: ['phase'],
+    outputs: ['signal', 'envelope'],
+    controls: [['cyclesA', 'Cycles A', 0, 32, 0.01, 2], ['cyclesB', 'Cycles B', 0, 32, 0.01, 2], ['offset', 'Offset', 0, 1, 0.01, 2]],
+    defaults: { cyclesA: 4, cyclesB: 4.25, offset: 0 },
+  },
 ];
 
 export function isOperatorKind(value: string): value is OperatorKind {

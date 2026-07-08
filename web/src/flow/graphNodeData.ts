@@ -36,6 +36,10 @@ export type TilingNodeData = {
   onPreviewSetting: (key: SettingKey, value: SettingValue) => void;
 } & EditCallbacks;
 
+export type IfsAttractorNodeData = {
+  activeOutputs?: string[];
+};
+
 export type PaletteNodeData = {
   activeInputs?: string[];
   activeOutputs?: string[];
@@ -103,6 +107,7 @@ export type RendererNodeData = {
   activeInputs?: string[];
   activeOutputs?: string[];
   tiles: number;
+  unit: string;
   loading: string;
 };
 

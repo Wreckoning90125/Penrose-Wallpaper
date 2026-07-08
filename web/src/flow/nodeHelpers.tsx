@@ -50,6 +50,10 @@ function settingHasLivePreview(key: SettingKey): boolean {
     || key === 'hyp_scale'
     || key === 'hyp_boost_x'
     || key === 'hyp_boost_y'
+    // proj_blend is a pure shader uniform (projBlend) like hyp_scale/boost — it
+    // must ride the drag live and modulate, not commit-only (which left it stale
+    // until another setting forced a setSettings pass).
+    || key === 'proj_blend'
     || key === 'clock_rate';
 }
 

@@ -217,6 +217,66 @@ bool equithirdsShapeOk(const Tile& t) {
     return false;
 }
 
+bool d4SquareOk(const Tile& t) {
+    if (t.vcount != 4 || t.type > 7) return false;
+    std::array<double, 4> side = {};
+    std::array<double, 4> dx = {};
+    std::array<double, 4> dy = {};
+    for (int i = 0; i < 4; ++i) {
+        const int j = (i + 1) % 4;
+        dx[i] = static_cast<double>(t.x[j]) - t.x[i];
+        dy[i] = static_cast<double>(t.y[j]) - t.y[i];
+        side[i] = std::hypot(dx[i], dy[i]);
+    }
+    const double minSide = *std::min_element(side.begin(), side.end());
+    const double maxSide = *std::max_element(side.begin(), side.end());
+    if (minSide <= 1e-12) return false;
+    if (std::fabs(maxSide / minSide - 1.0) > 1e-4) return false;
+    for (int i = 0; i < 4; ++i) {
+        const int j = (i + 1) % 4;
+        const double dot = dx[i] * dx[j] + dy[i] * dy[j];
+        if (std::fabs(dot) / (side[i] * side[j]) > 1e-4) return false;
+    }
+    return true;
+}
+
+int expectedExactTileCount(Family fam, int seed, int generation) {
+    if (fam == Family::Hat) {
+        constexpr std::array<std::array<int, 5>, 4> counts = {{
+            {{25, 169, 1156, 7921, 54289}},
+            {{4, 25, 169, 1156, 7921}},
+            {{14, 96, 658, 4510, 30912}},
+            {{16, 112, 770, 5280, 36192}},
+        }};
+        if (seed < 0 || seed >= static_cast<int>(counts.size())) return -1;
+        if (generation < 0 || generation >= static_cast<int>(counts[0].size())) return -1;
+        return counts[seed][generation];
+    }
+    if (fam == Family::Spectre) {
+        constexpr std::array<int, 4> gamma = {{8, 62, 488, 3842}};
+        constexpr std::array<int, 4> other = {{9, 71, 559, 4401}};
+        if (seed < 0 || seed > 8) return -1;
+        if (generation < 0 || generation >= static_cast<int>(gamma.size())) return -1;
+        return seed == 0 ? gamma[generation] : other[generation];
+    }
+    if (fam == Family::D4Substitution) {
+        if (seed < 0 || seed > 5 || generation < 0 || generation > 8) return -1;
+        int count = 1;
+        for (int g = 0; g < generation; ++g) count *= 4;
+        return count;
+    }
+    return -1;
+}
+
+bool spectreTypeHistogramOk(const std::vector<Tile>& tiles) {
+    std::array<int, 10> seen = {};
+    for (const Tile& t : tiles) {
+        if (t.type > 9) return false;
+        seen[t.type] += 1;
+    }
+    return std::all_of(seen.begin(), seen.end(), [](int count) { return count > 0; });
+}
+
 struct FamilyCase {
     Family fam;
     const char* name;
@@ -247,6 +307,7 @@ int main() {
         { Family::P1,            "P1",            1, false, false },
         { Family::Hat,           "Hat",           4, false, false },
         { Family::Spectre,       "Spectre",       9, false, false },
+        { Family::D4Substitution, "D4Substitution", 6, true, true  },
     };
 
     constexpr int kSamples = 20000;
@@ -265,6 +326,20 @@ int main() {
             const std::vector<Tile> g0 = generate(fc.fam, seed, 0);
             double a0 = 0.0;
             for (const Tile& t : g0) a0 += tileArea(t);
+
+            // ---- 0. exact substitution/layer counts -----------------------
+            if (fc.fam == Family::Hat || fc.fam == Family::Spectre || fc.fam == Family::D4Substitution) {
+                for (int g = 0; g <= maxGen; ++g) {
+                    const int expected = expectedExactTileCount(fc.fam, seed, g);
+                    const std::vector<Tile> tg = generate(fc.fam, seed, g);
+                    if (expected < 0 || static_cast<int>(tg.size()) != expected) {
+                        std::printf("  FAIL %s seed %d: generation/layer %d tile count %zu "
+                                    "!= expected %d\n",
+                                    fc.name, seed, g, tg.size(), expected);
+                        ok = false;
+                    }
+                }
+            }
 
             // ---- 1. area conservation across generations -------------------
             if (fc.areaConserved) {
@@ -298,6 +373,19 @@ int main() {
                 for (const Tile& t : gN)
                     if (t.vcount != 4 || t.type > 2) ++badShape;
             }
+            if (fc.fam == Family::Hat) {
+                for (const Tile& t : gN)
+                    if (t.vcount != 13 || t.type > 4) ++badShape;
+            }
+            if (fc.fam == Family::Spectre) {
+                for (const Tile& t : gN)
+                    if (t.vcount != 14 || t.type > 9) ++badShape;
+                if (!spectreTypeHistogramOk(gN)) ++badShape;
+            }
+            if (fc.fam == Family::D4Substitution) {
+                for (const Tile& t : gN)
+                    if (!d4SquareOk(t)) ++badShape;
+            }
             if (degen) {
                 std::printf("  FAIL %s seed %d: %d degenerate tiles\n",
                             fc.name, seed, degen);
@@ -312,6 +400,18 @@ int main() {
                 if (fc.fam == Family::CromwellKRT) {
                     std::printf("  FAIL %s seed %d: %d tiles fail KRT "
                                 "quadrilateral/type checks\n",
+                                fc.name, seed, badShape);
+                } else if (fc.fam == Family::Spectre) {
+                    std::printf("  FAIL %s seed %d: %d tiles fail Spectre "
+                                "14-anchor/type/histogram checks\n",
+                                fc.name, seed, badShape);
+                } else if (fc.fam == Family::Hat) {
+                    std::printf("  FAIL %s seed %d: %d tiles fail Hat "
+                                "13-anchor/type checks\n",
+                                fc.name, seed, badShape);
+                } else if (fc.fam == Family::D4Substitution) {
+                    std::printf("  FAIL %s seed %d: %d tiles fail D4 "
+                                "square/type checks\n",
                                 fc.name, seed, badShape);
                 } else {
                     std::printf("  FAIL %s seed %d: %d tiles fail equilateral / "

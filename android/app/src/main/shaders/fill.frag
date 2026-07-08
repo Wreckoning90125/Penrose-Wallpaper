@@ -3,12 +3,16 @@
 
 #include "uniforms.glsl"
 
-layout(location = 0) flat in uint vColorIdx;
+layout(location = 0) flat in float vColorSlot;
 layout(location = 1) flat in float vRipple;
 layout(location = 2) flat in vec2 vBulgeGrad;
 layout(location = 3)      in vec3 vBary;
 layout(location = 4)      in vec2 vWaveGrad;
 layout(location = 5) flat in vec4 vTileMat;
+layout(location = 6)      in vec2 vModelPos;
+layout(location = 7) flat in vec2 vCenter;
+layout(location = 8) flat in vec4 vTopology;
+layout(location = 9) flat in vec3 vEdgeDist;
 layout(location = 0) out vec4 outColor;
 
 const float PI = 3.14159265359;
@@ -29,6 +33,160 @@ struct Material {
     float clearcoat, coatRough;
     float anisotropy, iridescence;
 };
+
+float ornamentLine(float distanceToCenter, float width, float aa) {
+    return 1.0 - smoothstep(width, width + aa, distanceToCenter);
+}
+
+float truchetQuarterArc(vec2 uv, vec2 center, float radius, vec2 quadrant, float width, float aa) {
+    vec2 d = uv - center;
+    if (d.x * quadrant.x < -0.001 || d.y * quadrant.y < -0.001) return 0.0;
+    return ornamentLine(abs(length(d) - radius), width, aa);
+}
+
+float truchetArcs(vec2 uv, float bit, float width, float aa) {
+    float arc0 = max(
+        truchetQuarterArc(uv, vec2(0.5, 0.5), 0.5, vec2(-1.0, -1.0), width, aa),
+        truchetQuarterArc(uv, vec2(-0.5, -0.5), 0.5, vec2(1.0, 1.0), width, aa));
+    float arc1 = max(
+        truchetQuarterArc(uv, vec2(-0.5, 0.5), 0.5, vec2(1.0, -1.0), width, aa),
+        truchetQuarterArc(uv, vec2(0.5, -0.5), 0.5, vec2(-1.0, 1.0), width, aa));
+    return (bit < 0.5) ? arc0 : arc1;
+}
+
+float truchetLines(vec2 uv, float bit, float width, float aa) {
+    float line0 = ornamentLine(abs(uv.x - uv.y) * 0.70710678, width, aa);
+    float line1 = ornamentLine(abs(uv.x + uv.y) * 0.70710678, width, aa);
+    return (bit < 0.5) ? line0 : line1;
+}
+
+float ornamentMask(vec2 p, vec2 center, vec4 tileMat) {
+    float amount = clamp(ubo.ornament.y, 0.0, 1.0);
+    if (amount <= 0.0) return 0.0;
+    float scale = max(abs(tileMat.w), 1e-4);
+    vec2 orient = tileMat.yz;
+    float orientLen = length(orient);
+    orient = (orientLen > 1e-4) ? orient / orientLen : vec2(1.0, 0.0);
+    vec2 d = p - center;
+    float transformChoice = round(clamp(ubo.ornament.w, 0.0, 1.0) * 2.0);
+    float squareCellSize = max(scale * 1.41421356237, 1e-4);
+    float cellX = floor(dot(center, orient) / squareCellSize);
+    float cellY = floor(dot(center, vec2(-orient.y, orient.x)) / squareCellSize);
+    float parityX = cellX - floor(cellX * 0.5) * 2.0;
+    float parityY = cellY - floor(cellY * 0.5) * 2.0;
+    float latticeBit = abs(parityX - parityY) < 0.5 ? 0.0 : 1.0;
+    float baseU0 = dot(d, orient) / scale;
+    float baseV0 = dot(d, vec2(-orient.y, orient.x)) / scale;
+    float d4State = round(clamp(tileMat.x, 0.0, 1.0) * 7.0);
+    bool useD4 = abs(ubo.ornamentExtra.w - 18.0) < 0.5;
+    float baseU = baseU0;
+    float baseV = baseV0;
+    bool flipUv = round(clamp(ubo.ornamentExtra.y, 0.0, 1.0) * 3.0) > 1.5;
+    float rawU = flipUv ? baseV : baseU;
+    float rawV = flipUv ? baseU : baseV;
+    bool inverseReverse = transformChoice > 0.5 && transformChoice < 1.5;
+    bool mirrorReverse = transformChoice >= 1.5;
+    float u = inverseReverse ? -rawU : (mirrorReverse ? -rawU : rawU);
+    float v = mirrorReverse ? -rawV : rawV;
+    float d4StateBit = (d4State > 0.5 && d4State < 1.5)
+        || (d4State > 2.5 && d4State < 3.5)
+        || (d4State > 3.5 && d4State < 4.5)
+        || (d4State > 4.5 && d4State < 5.5)
+        ? 1.0
+        : 0.0;
+    float classBit = useD4 ? d4StateBit : (tileMat.x < 0.5 ? 0.0 : 1.0);
+    float bit = inverseReverse ? 1.0 - classBit : classBit;
+    vec2 uv = vec2(u, v);
+    float width = mix(0.018, 0.15, clamp(ubo.ornament.z, 0.0, 1.0));
+    float aa = max((fwidth(u) + fwidth(v)) * 0.75, 0.0025);
+    float singleArcs = truchetArcs(uv, bit, width, aa);
+    float singleLines = truchetLines(uv, bit, width, aa);
+    float d4ConnectedBit = abs(d4StateBit - latticeBit) > 0.5 ? 1.0 : 0.0;
+    float connectedBit = useD4 ? d4ConnectedBit : (abs(classBit - latticeBit) > 0.5 ? 1.0 : 0.0);
+    float connectedArcs = truchetArcs(uv, connectedBit, width, aa);
+    float connectedLines = truchetLines(uv, connectedBit, width, aa);
+    float style = clamp(ubo.ornament.x, 0.0, 4.0);
+    float truchet = 0.0;
+    if (style < 0.5) truchet = 0.0;
+    else if (style < 1.5) truchet = singleArcs;
+    else if (style < 2.5) truchet = singleLines;
+    else if (style < 3.5) truchet = connectedArcs;
+    else if (style < 4.5) truchet = 0.0;
+    else truchet = connectedLines;
+    float density = clamp(ubo.ornamentExtra.x, 0.0, 1.0);
+    float motifActive = density;
+    return clamp(truchet * amount * motifActive, 0.0, 1.0);
+}
+
+vec2 tileLocalUv(vec2 p, vec2 center, vec4 tileMat) {
+    vec2 orient = tileMat.yz;
+    float orientLen = length(orient);
+    orient = (orientLen > 1e-4) ? orient / orientLen : vec2(1.0, 0.0);
+    float scale = max(abs(tileMat.w), 1e-4);
+    vec2 d = p - center;
+    return vec2(dot(d, orient), dot(d, vec2(-orient.y, orient.x))) / scale;
+}
+
+float hashNoise(vec2 p) {
+    float h = sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123;
+    return fract(h);
+}
+
+float valueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = hashNoise(i);
+    float b = hashNoise(i + vec2(1.0, 0.0));
+    float c = hashNoise(i + vec2(0.0, 1.0));
+    float d = hashNoise(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+float tileMicroGrain(vec2 uv, float seed) {
+    float coarse = valueNoise(vec2(uv.x * 31.0 + seed * 0.37, uv.y * 31.0 - seed * 0.19));
+    float fine = valueNoise(vec2(
+        uv.x * 83.0 + uv.y * 7.0 + seed * 2.7,
+        uv.y * 83.0 - uv.x * 5.0 - seed * 1.3));
+    float pore = valueNoise(vec2(
+        (uv.x + uv.y) * 151.0 + seed * 3.1,
+        (uv.x - uv.y) * 37.0 - seed * 2.3));
+    float crossHatch = sin((uv.x + uv.y) * 211.0 + seed * 5.29)
+        * sin((uv.x - uv.y) * 173.0 - seed * 3.41);
+    return clamp(
+        0.5 + (coarse - 0.5) * 0.42
+            + (fine - 0.5) * 0.28
+            + (pore - 0.5) * 0.16
+            + crossHatch * 0.045,
+        0.0,
+        1.0);
+}
+
+float brushedStreak(vec2 uv, float seed) {
+    float warp = (valueNoise(vec2(uv.y * 18.0 + seed, seed * 0.23)) - 0.5) * 4.0;
+    float longScratch = valueNoise(vec2(uv.x * 88.0 + warp + seed, uv.y * 2.5 + seed * 0.19));
+    float hairScratch = valueNoise(vec2(uv.x * 330.0 + seed * 3.7, uv.y * 11.0 - seed * 0.31));
+    float softBands = valueNoise(vec2(uv.y * 18.0 + seed * 1.9, uv.x * 0.35 + seed * 0.11));
+    return clamp(
+        0.5 + (longScratch - 0.5) * 0.46
+            + (hairScratch - 0.5) * 0.30
+            + (softBands - 0.5) * 0.18,
+        0.0,
+        1.0);
+}
+
+float topologyField(vec2 center, vec4 tileMat) {
+    vec2 orient = tileMat.yz;
+    float orientLen = length(orient);
+    orient = (orientLen > 1e-4) ? orient / orientLen : vec2(1.0, 0.0);
+    float axial = dot(center, orient);
+    float lateral = dot(center, vec2(-orient.y, orient.x));
+    float ring = fract(length(center) * 0.12);
+    float phase = ubo.anim.x * 0.23 + (ubo.anim.w - 0.5) * (2.0 * PI);
+    float ringWave = sin(ring * (2.0 * PI) + tileMat.x * 4.713 + axial * 0.31 + phase);
+    float crossWave = sin(lateral * 0.27 - ring * 3.883 + tileMat.x * 2.17 - phase * 0.37);
+    return clamp(0.5 + 0.25 * (ringWave + crossWave), 0.0, 1.0);
+}
 
 float ggxDistribution(float NdotH, float a2) {
     float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
@@ -196,11 +354,40 @@ vec3 shadeLight(vec3 N, vec3 L, vec3 V, vec3 T, vec3 B,
     return (diffuse + spec + sheen) * baseAtten + vec3(coatLobe);
 }
 
-void main() {
-    uint idx = vColorIdx;
-    if (idx >= 18u) idx = 17u;
-    vec4 c = ubo.palette[idx];
+vec4 paletteAt(float slot) {
+    float x = clamp(slot, 0.0, 17.0);
+    int lo = int(floor(x));
+    int hi = min(17, lo + 1);
+    return mix(ubo.palette[lo], ubo.palette[hi], fract(x));
+}
 
+float topologyPaletteSlot(float baseSlot, float degree, float motif, float relaxed, float biharmonic, float ring) {
+    int activeCount = int(clamp(float(ubo.flags.y), 1.0, 18.0));
+    if (activeCount <= 1) return 0.0;
+    float structural = clamp(
+        clamp(degree, 0.0, 1.0) * 0.24
+        + clamp(motif, 0.0, 1.0) * 0.22
+        + clamp(relaxed, 0.0, 1.0) * 0.31
+        + clamp(biharmonic, 0.0, 1.0) * 0.23,
+        0.0,
+        1.0);
+    float signedField = structural - 0.5;
+    int direction = signedField < 0.0 ? -1 : 1;
+    int maxHop = max(1, activeCount - 1);
+    int structuralHop = 1 + int(floor(clamp(abs(signedField) * 2.0, 0.0, 1.0) * float(min(2, maxHop - 1))));
+    int ringHop = int(floor(clamp(ring, 0.0, 1.0) * float(min(2, maxHop))));
+    int motifHop = int(floor(clamp(motif, 0.0, 1.0) * float(min(2, maxHop))));
+    int hop = clamp(structuralHop + ringHop + motifHop, 1, maxHop);
+    int baseWhole = int(floor(clamp(baseSlot, 0.0, float(activeCount - 1))));
+    float baseFrac = clamp(baseSlot - floor(baseSlot), 0.0, 1.0);
+    int wrapped = (baseWhole + direction * hop + activeCount * 4) % activeCount;
+    float neighbor = direction < 0
+        ? max(0.0, float(wrapped) - baseFrac)
+        : min(float(activeCount - 1), float(wrapped) + baseFrac);
+    return clamp(neighbor, 0.0, float(activeCount - 1));
+}
+
+void main() {
     // Unpack the material + lighting parameters from the UBO.
     float bevelWidth    = ubo.matNormal.x;
     float bevelStrength = ubo.matNormal.y;
@@ -221,34 +408,102 @@ void main() {
     mat.anisotropy  = ubo.matLobeB.y;
     mat.iridescence = ubo.matLobeB.z;
 
-    // Albedo: palette RGB with master brightness only. The bulge and ripple
-    // are carried by the shading normal (the ripple also by the emissive).
-    vec3 albedo = clamp(c.rgb * ubo.effects.x, 0.0, 1.0);
+    float ornament = ornamentMask(vModelPos, vCenter, vTileMat);
+    vec2 tileUv = tileLocalUv(vModelPos, vCenter, vTileMat);
+    float tileSeed = vTileMat.x * 17.13 + length(vCenter) * 0.37;
+    float topology = topologyField(vCenter, vTileMat);
+    float structural = clamp(topology * 0.52 + vTopology.x * 0.18 + vTopology.y * 0.14 + vTopology.z * 0.16, 0.0, 1.0);
+    float biharmonic = clamp(vTopology.w, 0.0, 1.0);
+    float topologySigned = structural - 0.5;
+    float rippleKind = floor(ubo.effects.w + 0.5);
+    float colorRippleAmount = (rippleKind != 1.0) ? ubo.anim.y : 0.0;
+    float topologyMotion = clamp(colorRippleAmount * 4.5, 0.0, 1.0);
+    float topologyPaletteBlend = clamp(abs(topologySigned) * topologyMotion * 1.35, 0.0, 0.82);
+    float topologySlot = topologyPaletteSlot(vColorSlot, vTopology.x, vTopology.y, vTopology.z, vTopology.w, vTopology.z);
+    vec4 c = mix(paletteAt(vColorSlot), paletteAt(topologySlot), topologyPaletteBlend);
+
+    // Albedo: palette RGB with master brightness, plus the tile-local
+    // ornament tint. Source markings render as their own sampled strips;
+    // the base surface normal stays tied to tile relief, ripple and bevel.
+    vec3 baseAlbedo = c.rgb * ubo.effects.x;
+    vec3 albedo = clamp(mix(baseAlbedo, vec3(1.0, 0.78, 0.42), ornament * 0.48), 0.0, 1.0);
 
     // Edge distance: 0 on every tile boundary edge, rising toward the tile
     // interior. Drives both the bevel normal and the seam roughness.
-    float edgeDist = min(min(vBary.x, vBary.y), vBary.z);
+    // vBary_c * vEdgeDist_c = normalized distance to true tile edge c; pinned
+    // interior-cut components are 1*1 so subdivision seams never read as edges.
+    float edgeDist = clamp(min(min(vBary.x * vEdgeDist.x, vBary.y * vEdgeDist.y), vBary.z * vEdgeDist.z), 0.0, 1.0);
+    float safeBevelWidth = max(bevelWidth, 1e-4);
 
     // Shading normal. `slope` accumulates -dH/d(x,y) for a height field that
     // sums the ripple, the parallax bulge, and the bevel: the ripple and
     // bulge apply everywhere; the bevel tilts the chamfer away from the
     // inward edge-distance gradient, fading from edge to plateau.
-    vec2 slope = -vWaveGrad * waveHeight
-               - vBulgeGrad * (ubo.effects.y * bulgeTilt);
+    vec2 slope = -vWaveGrad * waveHeight;
+    slope += -vBulgeGrad * (ubo.effects.y * bulgeTilt);
     vec2  g    = vec2(dFdx(edgeDist), dFdy(edgeDist));
     float gLen = length(g);
     if (gLen > 1e-7) {
         vec2  inward = g / gLen;
-        float e      = clamp(edgeDist / bevelWidth, 0.0, 1.0);
+        float e      = clamp(edgeDist / safeBevelWidth, 0.0, 1.0);
         slope += -inward * (bevelStrength * cos(e * (PI * 0.5)));
     }
     vec3 N = normalize(vec3(slope, 1.0));
+    float normalFlux = length(dFdx(N.xy)) + length(dFdy(N.xy));
 
     // Physical channels keyed to the tiling's own fields: roughness rises in
     // the seam valleys (a worn-edge read), metalness comes from the tile type.
-    float seam      = 1.0 - smoothstep(0.0, bevelWidth, edgeDist);
-    float roughness = clamp(roughBase + roughMod * seam, 0.045, 1.0);
-    float metalness = clamp(metalBase + metalMod * vTileMat.x, 0.0, 1.0);
+    float seam      = 1.0 - smoothstep(0.0, safeBevelWidth, edgeDist);
+    float contactShadow = clamp(seam * bevelStrength * 0.18, 0.0, 0.28);
+    float ridgeHighlight = clamp(normalFlux * bevelStrength * 1.6, 0.0, 0.18);
+    float reliefScalar = 1.0 - cos(clamp(edgeDist / safeBevelWidth, 0.0, 1.0) * (PI * 0.5));
+    float centerRing = fract(length(vCenter) * 0.12);
+    float contourSource = clamp(ubo.contour.y, 0.0, 7.0);
+    float luminanceScalar = clamp(dot(albedo, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+    float curvatureScalar = clamp(normalFlux * 7.0, 0.0, 1.0);
+    float contourScalar = edgeDist;
+    if (contourSource >= 6.5) {
+        contourScalar = clamp(vTopology.w, 0.0, 1.0);
+    } else if (contourSource >= 5.5) {
+        contourScalar = clamp(vTopology.z, 0.0, 1.0);
+    } else if (contourSource >= 4.5) {
+        contourScalar = clamp(vTopology.y, 0.0, 1.0);
+    } else if (contourSource >= 3.5) {
+        contourScalar = clamp(vTopology.x, 0.0, 1.0);
+    } else if (contourSource >= 2.5) {
+        contourScalar = curvatureScalar;
+    } else if (contourSource >= 1.5) {
+        contourScalar = luminanceScalar;
+    } else if (contourSource >= 0.5) {
+        contourScalar = reliefScalar;
+    }
+    float contourBanded = contourScalar * clamp(ubo.contour.z, 1.0, 64.0) + ubo.contourColor.x;
+    float contourCell = abs(fract(contourBanded) - 0.5);
+    float contourAa = max(fwidth(contourBanded), 0.003);
+    float contourWidth = clamp(ubo.contour.w, 0.01, 0.49);
+    float contourMask = (1.0 - smoothstep(contourWidth, contourWidth + contourAa, contourCell))
+        * clamp(ubo.contour.x, 0.0, 1.0);
+    albedo = clamp(mix(albedo, ubo.contourColor.yzw, contourMask), 0.0, 1.0);
+    float edgeProfileWidth = clamp(ubo.borderGeom.x, 0.0, 1.0);
+    float edgeProfileGlow = clamp(ubo.borderGeom.y, 0.0, 1.0);
+    float edgeProfileSpan = max(edgeProfileWidth * 0.18, 0.001);
+    float edgeProfileMask = (1.0 - smoothstep(edgeProfileSpan, edgeProfileSpan + 0.035, edgeDist)) * edgeProfileWidth;
+    albedo = clamp(mix(albedo, ubo.edgeProfileColor.rgb, clamp(edgeProfileMask * 0.82, 0.0, 0.88))
+        + ubo.edgeProfileColor.rgb * edgeProfileMask * edgeProfileGlow * 0.26, 0.0, 1.0);
+    float grain = tileMicroGrain(tileUv, tileSeed);
+    float brushed = brushedStreak(tileUv, tileSeed);
+    float brushedSigned = (brushed - 0.5) * clamp(mat.anisotropy, 0.0, 1.0);
+    float topologyColorGain = topologySigned * topologyMotion;
+    vec3 topologyTint = mix(vec3(0.78, 0.90, 1.0), vec3(1.0, 0.82, 0.56), structural);
+    float radialPatina = 0.5 + 0.5 * sin(length(vCenter) * 0.55 + vTileMat.x * 5.1);
+    float patina = clamp(mix(grain, radialPatina, 0.55) * max(roughMod, metalMod), 0.0, 1.0);
+    albedo = clamp(albedo * (1.0 + brushedSigned * 0.10 - patina * 0.08 - contactShadow + topologyColorGain * 0.10)
+        + topologyTint * abs(topologyColorGain) * 0.045
+        + vec3(1.0, 0.92, 0.72) * ridgeHighlight, 0.0, 1.0);
+    float roughness = clamp(roughBase + roughMod * seam + patina * 0.14 + abs(brushedSigned) * 0.16
+        + abs(topologySigned) * topologyMotion * 0.08
+        + abs(biharmonic - 0.5) * topologyMotion * 0.06 - ornament * 0.18, 0.045, 1.0);
+    float metalness = clamp(metalBase + metalMod * vTileMat.x + seam * metalMod * 0.12 + ornament * 0.22 - patina * metalMod * 0.08, 0.0, 1.0);
     float a  = roughness * roughness;
     vec3  F0 = mix(vec3(0.04), albedo, metalness);
 
@@ -258,7 +513,7 @@ void main() {
     // oil-slick.
     vec3  V = vec3(0.0, 0.0, 1.0);
     float filmThick = mix(ubo.matIrid.x, ubo.matIrid.y,
-                          0.5 + 0.5 * sin(vTileMat.w * 6.0 + vRipple * 3.0));
+                          clamp(0.28 + structural * 0.24 + biharmonic * 0.18 + 0.30 * sin(length(vCenter) * 6.0 + vRipple * 3.0), 0.0, 1.0));
     vec3  iridF = evalIridescence(1.0, iridIOR, max(N.z, 1e-4), filmThick, F0);
 
     // Anisotropy tangent frame: the tile orientation re-orthogonalised against
@@ -281,7 +536,7 @@ void main() {
     // 0.25 base term keeps the glow visible while the ripple amplitude
     // still adds the per-crest accent the wave-driven look depends on.
     vec3 ambient  = albedo * ubo.ambient.rgb * ubo.ambient.w;
-    vec3 emissive = albedo * emissiveGain * (0.25 + max(vRipple, 0.0));
+    vec3 emissive = albedo * (emissiveGain * (0.25 + max(vRipple, 0.0)) + ornament * 0.14 + structural * topologyMotion * 0.08);
 
     outColor = vec4(clamp(ambient + key + fill + emissive, 0.0, 1.0), c.a);
 }

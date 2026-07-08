@@ -141,7 +141,12 @@ class TrailsNode extends TempNode {
     this._textureNodeOld.value = this._oldRT.texture;
 
     const material = this._material;
-    if (material === null) return undefined;
+    if (material === null) {
+      // Mirror anamorphicNode: never leave renderer state clobbered on the
+      // no-material early-out.
+      RendererUtils.restoreRendererState(renderer, _rendererState);
+      return undefined;
+    }
     _quadMesh.material = material;
     _quadMesh.name = 'Trails';
 

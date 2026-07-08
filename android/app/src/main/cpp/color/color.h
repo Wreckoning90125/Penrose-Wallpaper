@@ -2,7 +2,9 @@
 
 #include "tiling/penrose.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -78,7 +80,7 @@ struct PresetResult {
 // Build the palette for `p`. When `p == Preset::Custom`, `customSource`
 // supplies the user-authored OKLCH slots (kMaxColors entries; only the
 // first `k` are read). For every other preset, `customSource` is ignored.
-PresetResult buildPreset(Preset p, int k, const Oklch* customSource = nullptr);
+PresetResult buildPreset(Preset p, int k, const Oklch* customSource = nullptr, float spectral = 0.0f);
 
 // =============================================================================
 // Color modes — assign each tile a bucket index, then map to a palette slot.
@@ -88,13 +90,13 @@ enum class ColorMode : int {
     Type = 0,    // family tile kind; Gailiunas uses arm index
     Orient = 1,  // family orientation bins
     Ring = 2,    // K bins by distance from origin
+    Phase = 3,   // continuous class + ring/arm phase coordinate
 };
 
-// Returns, for each tile in `tiles`, the bucket index in [0, numBuckets).
-// numBuckets is family-natural for Type/Orient and K for Ring; Gailiunas Type
-// cycles arms through K slots to mirror the source notebook's color count.
+// Returns, for each tile in `tiles`, either a bucket index in [0, numBuckets)
+// or a continuous coordinate in [0,1] when numBuckets == 0.
 struct Classification {
-    std::vector<uint8_t> bucket; // one byte per tile
+    std::vector<float> bucket;
     int numBuckets;
 };
 
@@ -103,19 +105,23 @@ Classification classify(const std::vector<Tile>& tiles,
                         ColorMode mode,
                         int colorCount);
 
-// Maps a tile's bucket index to a palette index, using the same contiguous-
-// grouping rule the HTML reference uses: when buckets > k, group neighbouring
-// buckets into k chunks; otherwise bucket % k.
-inline int bucketToPaletteIdx(int bucket, int numBuckets, int k) {
-    if (k <= 1) return 0;
-    if (numBuckets > k) {
-        const float groupBy = static_cast<float>(numBuckets) / static_cast<float>(k);
-        int idx = static_cast<int>(static_cast<float>(bucket) / groupBy);
-        if (idx >= k) idx = k - 1;
-        if (idx < 0) idx = 0;
-        return idx;
+// Maps a discrete or continuous bucket to a palette slot. Spread controls how
+// far classification reaches across the authored palette without changing the
+// palette colours themselves.
+inline float bucketToPaletteIdx(float bucket, int numBuckets, int k, int spreadPercent = 100) {
+    if (k <= 1) return 0.0f;
+    const int span = 1 + static_cast<int>(std::round(
+        static_cast<float>(k - 1) * std::clamp(spreadPercent, 0, 100) / 100.0f));
+    if (span <= 1) return 0.0f;
+    if (numBuckets <= 0) return std::clamp(bucket, 0.0f, 1.0f) * static_cast<float>(span - 1);
+    if (numBuckets <= 1) return 0.0f;
+    if (numBuckets > span) {
+        return std::min(static_cast<float>(span - 1),
+                        std::floor(bucket / (static_cast<float>(numBuckets) / static_cast<float>(span))));
     }
-    return bucket % k;
+    return std::clamp(std::round(bucket * static_cast<float>(span - 1) / static_cast<float>(numBuckets - 1)),
+                      0.0f,
+                      static_cast<float>(span - 1));
 }
 
 } // namespace penrose

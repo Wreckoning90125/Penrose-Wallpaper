@@ -22,6 +22,17 @@ constexpr double kPsi2  = kPsi * kPsi;
 constexpr double kInvSqrt3 = 0.5773502691896258;
 constexpr double kHalfSqrt3 = 0.8660254037844386;
 
+// Natural one-step linear inflation factors for the de Bruijn multigrid families
+// (docs/tilings/{octagonal,dodecagonal,heptagonal}.md). Each generation scales the
+// patch by exactly one inflation; using a power of these (e.g. 2 + sqrt(3) for the
+// dodecagonal, which is the *two*-step factor) would be an arbitrary multi-step rate.
+constexpr double kInflAmmannBeenker = 2.4142135623730951;  // 1 + sqrt(2)  (silver ratio)
+constexpr double kInflDodecagonal   = 1.9318516525781366;  // sqrt(2 + sqrt(3))  (2 + sqrt(3) is two-step)
+constexpr double kInflHeptagonal    = 1.8019377358048383;  // 2 cos(pi/7)  (matches the Danzer 7-fold rate)
+// Crop radius of the generation-0 multigrid patch (the minimal central rosette),
+// in raw dual-map units; the radius grows by the inflation factor each generation.
+constexpr double kMultigridBaseRadius = 1.6;
+
 struct Pt {
     double x;
     double y;
@@ -36,7 +47,6 @@ constexpr Xf kIdent{1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
 inline Pt pt(double x, double y) { return {x, y}; }
 inline Pt padd(Pt p, Pt q) { return {p.x + q.x, p.y + q.y}; }
 inline Pt psub(Pt p, Pt q) { return {p.x - q.x, p.y - q.y}; }
-
 inline Pt hexPt(double x, double y) {
     return {x + 0.5 * y, kHalfSqrt3 * y};
 }
@@ -501,14 +511,21 @@ std::array<SpecPtr, 9> buildSpectreBase() {
         pt(-0.866025403784439, 1.5), pt(0.0, 1.0),
     };
     const std::array<Pt, 4> quad = {spectre[3], spectre[5], spectre[7], spectre[11]};
+    // CurvyShape draws from the last straight anchor to the first, then walks the
+    // straight anchor list with alternating cubic bulges. Store only those 14
+    // anchors here; renderers flatten the cubic curve at the needed fidelity.
+    std::vector<Pt> spectreShape;
+    spectreShape.reserve(spectre.size());
+    spectreShape.push_back(spectre.back());
+    for (std::size_t i = 0; i + 1 < spectre.size(); ++i) spectreShape.push_back(spectre[i]);
 
     std::array<SpecPtr, 9> sys{};
     for (int i = 1; i < 9; ++i)
-        sys[i] = makeSpecLeaf(spectre, quad, static_cast<uint8_t>(i + 1));
+        sys[i] = makeSpecLeaf(spectreShape, quad, static_cast<uint8_t>(i + 1));
 
     SpecPtr gamma = makeSpecMeta(quad);
-    addSpecChild(gamma, makeSpecLeaf(spectre, quad, 0), kIdent);
-    addSpecChild(gamma, makeSpecLeaf(spectre, quad, 1),
+    addSpecChild(gamma, makeSpecLeaf(spectreShape, quad, 0), kIdent);
+    addSpecChild(gamma, makeSpecLeaf(spectreShape, quad, 1),
                  mul(ttrans(spectre[8].x, spectre[8].y), trot(kPi / 6.0)));
     sys[0] = gamma;
     return sys;
@@ -582,49 +599,91 @@ void emitSpecLeaves(const SpecPtr& geom, Xf T, std::vector<Tile>& out) {
 // Substitutions
 // =============================================================================
 
+// Penrose P3 (rhomb) deflation: the Robinson-triangle substitution that is MLD to
+// the Penrose Rhomb tiling (Grünbaum & Shephard, Tilings and Patterns [GS87];
+// inflation factor phi). Both half-triangles keep legs = rhombus edge every
+// generation, so two same-type triangles sharing their base reconstitute a rhomb.
+// Worked in role order (verts [A(apex), B, C], type = colour 0 acute / 1 obtuse);
+// finalizeGoldenTriangles() reorders to the renderer convention (base at edge index
+// 2, type acute = 1 / obtuse = 0). This is a distinct substitution from the P2
+// kite/dart rule (subdivideP2); the two Penrose versions are MLD but not identical.
 std::vector<Tile> subdivideP3(const std::vector<Tile>& in) {
     std::vector<Tile> out;
     out.reserve(in.size() * 3);
     for (const Tile& t : in) {
-        const float A0 = t.x[0], A1 = t.y[0];
-        const float B0 = t.x[1], B1 = t.y[1];
-        const float C0 = t.x[2], C1 = t.y[2];
-        if (t.type == 0) { // L → 2 L + 1 S
-            float Dx, Dy, Ex, Ey;
-            comb(A0, A1, kPsi2, C0, C1, kPsi, Dx, Dy);
-            comb(A0, A1, kPsi2, B0, B1, kPsi, Ex, Ey);
-            out.push_back(mkTri(0, Dx, Dy, Ex, Ey, A0, A1));
-            out.push_back(mkTri(1, Ex, Ey, Dx, Dy, B0, B1));
-            out.push_back(mkTri(0, C0, C1, Dx, Dy, B0, B1));
-        } else {           // S → 1 L + 1 S
-            float Dx, Dy;
-            comb(A0, A1, kPsi, B0, B1, kPsi2, Dx, Dy);
-            out.push_back(mkTri(1, Dx, Dy, C0, C1, A0, A1));
-            out.push_back(mkTri(0, C0, C1, Dx, Dy, B0, B1));
+        const float ax = t.x[0], ay = t.y[0];
+        const float bx = t.x[1], by = t.y[1];
+        const float cx = t.x[2], cy = t.y[2];
+        if (t.type == 0) { // acute (colour 0): cut P on leg A->B at 1/phi from apex A
+            float px, py;
+            comb(ax, ay, kPsi2, bx, by, kPsi, px, py);
+            out.push_back(mkTri(0, cx, cy, px, py, bx, by));
+            out.push_back(mkTri(1, px, py, cx, cy, ax, ay));
+        } else {           // obtuse (colour 1): cut Q on B->A and R on B->C at 1/phi from B
+            float qx, qy, rx, ry;
+            comb(bx, by, kPsi2, ax, ay, kPsi, qx, qy);
+            comb(bx, by, kPsi2, cx, cy, kPsi, rx, ry);
+            out.push_back(mkTri(1, rx, ry, cx, cy, ax, ay));
+            out.push_back(mkTri(1, qx, qy, rx, ry, bx, by));
+            out.push_back(mkTri(0, rx, ry, qx, qy, ax, ay));
         }
     }
     return out;
 }
 
+// P2 shares the P3 deflation (same Robinson half-triangles); the kite/dart split is
+// a downstream leg-leg weld, not a different subdivision.
+// P2 kite/dart is a distinct substitution from the P3 rhomb rule above: the
+// "Penrose Tiles" notebook Deflate (c1 = 1/phi, c2 = 1/phi^2; type 1 = acute a[],
+// type 0 = obtuse o[]). Children pair leg-leg into whole kites and darts.
 std::vector<Tile> subdivideP2(const std::vector<Tile>& in) {
     std::vector<Tile> out;
     out.reserve(in.size() * 3);
     for (const Tile& t : in) {
-        const float A0 = t.x[0], A1 = t.y[0];
-        const float B0 = t.x[1], B1 = t.y[1];
-        const float C0 = t.x[2], C1 = t.y[2];
-        if (t.type == 1) { // S → 2 S + 1 L
+        const float x0 = t.x[0], y0 = t.y[0];
+        const float x1 = t.x[1], y1 = t.y[1];
+        const float x2 = t.x[2], y2 = t.y[2];
+        if (t.type == 1) { // notebook a[x,y,z] -> a[d,z,x], a[d,z,e], o[y,e,d]
             float Dx, Dy, Ex, Ey;
-            comb(A0, A1, 1.0 - kPsi, B0, B1, kPsi, Dx, Dy);
-            comb(B0, B1, 1.0 - kPsi, C0, C1, kPsi, Ex, Ey);
-            out.push_back(mkTri(1, Dx, Dy, A0, A1, Ex, Ey));
-            out.push_back(mkTri(1, Ex, Ey, A0, A1, C0, C1));
-            out.push_back(mkTri(0, B0, B1, Dx, Dy, Ex, Ey));
-        } else {           // L → 1 S + 1 L
+            comb(x0, y0, kPsi,  x1, y1, kPsi2, Dx, Dy);
+            comb(x1, y1, kPsi,  x2, y2, kPsi2, Ex, Ey);
+            out.push_back(mkTri(1, Dx, Dy, x2, y2, x0, y0));
+            out.push_back(mkTri(1, Dx, Dy, x2, y2, Ex, Ey));
+            out.push_back(mkTri(0, x1, y1, Ex, Ey, Dx, Dy));
+        } else {           // notebook o[x,y,z] -> o[z,d,y], a[y,x,d]
             float Fx, Fy;
-            comb(A0, A1, 1.0 - kPsi, C0, C1, kPsi, Fx, Fy);
-            out.push_back(mkTri(1, B0, B1, A0, A1, Fx, Fy));
-            out.push_back(mkTri(0, B0, B1, Fx, Fy, C0, C1));
+            comb(x0, y0, kPsi2, x2, y2, kPsi, Fx, Fy);
+            out.push_back(mkTri(0, x2, y2, Fx, Fy, x1, y1));
+            out.push_back(mkTri(1, x1, y1, x0, y0, Fx, Fy));
+        }
+    }
+    return out;
+}
+
+// Reorder internal (Robinson-triangle role) golden triangles to the renderer convention: verts =
+// [baseVertex, apex, baseVertex] so the base (the odd edge; the two equal edges are
+// the legs) sits at edge index 2, and map the colour to the renderer type
+// (acute = 1, obtuse = 0).
+std::vector<Tile> finalizeGoldenTriangles(const std::vector<Tile>& in) {
+    std::vector<Tile> out;
+    out.reserve(in.size());
+    for (const Tile& t : in) {
+        const float ax = t.x[0], ay = t.y[0];
+        const float bx = t.x[1], by = t.y[1];
+        const float cx = t.x[2], cy = t.y[2];
+        const double eab = std::hypot(static_cast<double>(ax) - bx, static_cast<double>(ay) - by);
+        const double ebc = std::hypot(static_cast<double>(bx) - cx, static_cast<double>(by) - cy);
+        const double eca = std::hypot(static_cast<double>(cx) - ax, static_cast<double>(cy) - ay);
+        const uint8_t type = t.type == 0 ? 1 : 0;
+        const double dAbBc = std::abs(eab - ebc);
+        const double dBcCa = std::abs(ebc - eca);
+        const double dCaAb = std::abs(eca - eab);
+        if (dAbBc <= dBcCa && dAbBc <= dCaAb) {
+            out.push_back(mkTri(type, cx, cy, bx, by, ax, ay)); // apex B, base CA
+        } else if (dBcCa <= dCaAb) {
+            out.push_back(mkTri(type, ax, ay, cx, cy, bx, by)); // apex C, base AB
+        } else {
+            out.push_back(mkTri(type, bx, by, ax, ay, cx, cy)); // apex A, base BC
         }
     }
     return out;
@@ -769,93 +828,101 @@ std::vector<Tile> subdivideChair(const std::vector<Tile>& in) {
 // Seeds
 // =============================================================================
 
-std::vector<Tile> seedP3(SeedP3 seed) {
+// Sun: ten acute (colour 0) Robinson triangles meeting apex-first at the origin (a
+// legal fivefold P3 centre), alternating winding so the disk tiles edge-to-edge; the
+// seed ordinal rigidly rotates it so distinct seeds give distinct legal framings.
+static std::vector<Tile> goldenTriangleSun(int ordinal) {
     std::vector<Tile> out;
-    switch (seed) {
-        case SeedP3::Sun: {
-            out.reserve(10);
-            for (int i = 0; i < 10; ++i) {
-                double a1 = (2.0 * kPi * i) / 10.0;
-                double a2 = (2.0 * kPi * (i + 1)) / 10.0;
-                float ax = (float)std::cos(a1), ay = (float)std::sin(a1);
-                float cx = (float)std::cos(a2), cy = (float)std::sin(a2);
-                if ((i & 1) == 0) { std::swap(ax, cx); std::swap(ay, cy); }
-                out.push_back(mkTri(1, ax, ay, 0.0f, 0.0f, cx, cy));
-            }
-            break;
-        }
-        case SeedP3::Star: {
-            out.reserve(10);
-            for (int i = 0; i < 5; ++i) {
-                double a1 = (2.0 * kPi * i) / 5.0;
-                double a3 = a1 + 72.0 * kPi / 180.0;
-                float v1x = (float)std::cos(a1), v1y = (float)std::sin(a1);
-                float v3x = (float)std::cos(a3), v3y = (float)std::sin(a3);
-                float v2x = v1x + v3x, v2y = v1y + v3y;
-                out.push_back(mkTri(0, 0.0f, 0.0f, v1x, v1y, v2x, v2y));
-                out.push_back(mkTri(0, 0.0f, 0.0f, v3x, v3y, v2x, v2y));
-            }
-            break;
-        }
-        case SeedP3::Cartwheel: {
-            out.reserve(10);
-            for (int i = 0; i < 10; ++i) {
-                double a1 = (2.0 * kPi * i) / 10.0 + kPi / 10.0;
-                double a2 = (2.0 * kPi * (i + 1)) / 10.0 + kPi / 10.0;
-                float ax = (float)std::cos(a1), ay = (float)std::sin(a1);
-                float cx = (float)std::cos(a2), cy = (float)std::sin(a2);
-                if ((i & 1) == 1) { std::swap(ax, cx); std::swap(ay, cy); }
-                out.push_back(mkTri(1, ax, ay, 0.0f, 0.0f, cx, cy));
-            }
-            break;
-        }
-        case SeedP3::Ace: {
-            out.reserve(2);
-            double a1 = -36.0 * kPi / 180.0;
-            double a3 =  36.0 * kPi / 180.0;
-            float v1x = (float)std::cos(a1), v1y = (float)std::sin(a1);
-            float v3x = (float)std::cos(a3), v3y = (float)std::sin(a3);
-            float v2x = v1x + v3x, v2y = v1y + v3y;
-            const float cx = v2x * 0.5f;
-            const float cy = v2y * 0.5f;
-            out.push_back(mkTri(0, -cx, -cy, v1x - cx, v1y - cy, v2x - cx, v2y - cy));
-            out.push_back(mkTri(0, -cx, -cy, v3x - cx, v3y - cy, v2x - cx, v2y - cy));
-            break;
-        }
+    out.reserve(10);
+    const double twist = (kPi / 10.0) * static_cast<double>(ordinal);
+    for (int i = 0; i < 10; ++i) {
+        const double a1 = 2.0 * kPi * i / 10.0 + twist;
+        const double a2 = 2.0 * kPi * (i + 1) / 10.0 + twist;
+        float bx = static_cast<float>(std::cos(a1)), by = static_cast<float>(std::sin(a1));
+        float cx = static_cast<float>(std::cos(a2)), cy = static_cast<float>(std::sin(a2));
+        if ((i & 1) == 0) { std::swap(bx, cx); std::swap(by, cy); }
+        out.push_back(mkTri(0, 0.0f, 0.0f, bx, by, cx, cy));
     }
     return out;
 }
 
+// P3 seed as a decagon fan of ten acute (colour 0) triangles, apex at the origin,
+// each direction carrying a +/- pair (non-alternating winding). A distinct legal
+// fivefold centre from goldenTriangleSun.
+static std::vector<Tile> goldenTriangleFan() {
+    std::vector<Tile> out;
+    out.reserve(10);
+    for (int i = 0; i < 5; ++i) {
+        const double a0 = 2.0 * kPi * static_cast<double>(i) / 5.0;
+        const double ap = a0 + kPi / 5.0;
+        const double am = a0 - kPi / 5.0;
+        const float ax = static_cast<float>(std::cos(a0));
+        const float ay = static_cast<float>(std::sin(a0));
+        out.push_back(mkTri(0, 0.0f, 0.0f, ax, ay, static_cast<float>(std::cos(ap)), static_cast<float>(std::sin(ap))));
+        out.push_back(mkTri(0, 0.0f, 0.0f, ax, ay, static_cast<float>(std::cos(am)), static_cast<float>(std::sin(am))));
+    }
+    return out;
+}
+
+// P3 Ace seed: two acute (colour 0) triangles, apexes at the origin, legs = phi,
+// spanning a small kite-shaped patch.
+static std::vector<Tile> goldenTriangleAce() {
+    std::vector<Tile> out;
+    out.reserve(2);
+    auto acute = [](double ang) {
+        const double l = kPhi;
+        return mkTri(0, 0.0f, 0.0f,
+                     static_cast<float>(l * std::cos(ang - kPi / 10.0)), static_cast<float>(l * std::sin(ang - kPi / 10.0)),
+                     static_cast<float>(l * std::cos(ang + kPi / 10.0)), static_cast<float>(l * std::sin(ang + kPi / 10.0)));
+    };
+    out.push_back(acute(kPi / 2.0 - kPi / 10.0));
+    out.push_back(acute(kPi / 2.0 + kPi / 10.0));
+    return out;
+}
+
+// P3 seeds are all-acute (Robinson) patches; the rhomb obtuse rule expects children
+// in a specific role order that hand-built obtuse seeds do not carry, so each seed
+// is a distinct legal acute framing that deflates cleanly.
+std::vector<Tile> seedP3(SeedP3 seed) {
+    switch (seed) {
+        case SeedP3::Star:      return goldenTriangleFan();
+        case SeedP3::Cartwheel: return goldenTriangleSun(1);
+        case SeedP3::Ace:       return goldenTriangleAce();
+        case SeedP3::Sun:
+        default:                return goldenTriangleSun(0);
+    }
+}
+
+// P2 seeds use the notebook convention (type 1 = acute a[], apex at the origin
+// vertex), matching subdivideP2 above. Sun = ten acute meeting apex-first at the
+// centre; Star = a five-point star of obtuse triangles.
 std::vector<Tile> seedP2(SeedP2 seed) {
     std::vector<Tile> out;
     switch (seed) {
-        case SeedP2::Sun: {
+        case SeedP2::Star: {
             out.reserve(10);
-            for (int i = 0; i < 10; ++i) {
-                double a1 = (2.0 * kPi * i) / 10.0;
-                double a2 = (2.0 * kPi * (i + 1)) / 10.0;
-                float ax = (float)(kPhi * std::cos(a1));
-                float ay = (float)(kPhi * std::sin(a1));
-                float cx = (float)(kPhi * std::cos(a2));
-                float cy = (float)(kPhi * std::sin(a2));
-                if ((i & 1) == 0) { std::swap(ax, cx); std::swap(ay, cy); }
-                out.push_back(mkTri(1, ax, ay, 0.0f, 0.0f, cx, cy));
+            for (int i = 0; i < 5; ++i) {
+                const double a0 = 2.0 * kPi * static_cast<double>(i) / 5.0;
+                const double ap = a0 + kPi / 5.0;
+                const double am = a0 - kPi / 5.0;
+                const float yx = static_cast<float>(std::cos(a0));
+                const float yy = static_cast<float>(std::sin(a0));
+                out.push_back(mkTri(0, 0.0f, 0.0f, yx, yy, static_cast<float>(kPhi * std::cos(ap)), static_cast<float>(kPhi * std::sin(ap))));
+                out.push_back(mkTri(0, 0.0f, 0.0f, yx, yy, static_cast<float>(kPhi * std::cos(am)), static_cast<float>(kPhi * std::sin(am))));
             }
             break;
         }
-        case SeedP2::Star: {
+        case SeedP2::Sun:
+        default: {
             out.reserve(10);
-            const double ang36 = kPi / 5.0;
             for (int i = 0; i < 5; ++i) {
-                double theta = (2.0 * kPi * i) / 5.0 + kPi / 2.0;
-                float Bx = (float)std::cos(theta);
-                float By = (float)std::sin(theta);
-                float cLx = (float)(kPhi * std::cos(theta + ang36));
-                float cLy = (float)(kPhi * std::sin(theta + ang36));
-                float cRx = (float)(kPhi * std::cos(theta - ang36));
-                float cRy = (float)(kPhi * std::sin(theta - ang36));
-                out.push_back(mkTri(0, 0.0f, 0.0f, Bx, By, cLx, cLy));
-                out.push_back(mkTri(0, 0.0f, 0.0f, Bx, By, cRx, cRy));
+                const double a0 = 2.0 * kPi * static_cast<double>(i) / 5.0;
+                const double ap = a0 + kPi / 5.0;
+                const double am = a0 - kPi / 5.0;
+                const float ax = static_cast<float>(std::cos(a0));
+                const float ay = static_cast<float>(std::sin(a0));
+                out.push_back(mkTri(1, ax, ay, 0.0f, 0.0f, static_cast<float>(std::cos(ap)), static_cast<float>(std::sin(ap))));
+                out.push_back(mkTri(1, ax, ay, 0.0f, 0.0f, static_cast<float>(std::cos(am)), static_cast<float>(std::sin(am))));
             }
             break;
         }
@@ -1415,7 +1482,7 @@ void edgesChair(const Tile& t, std::vector<Edge>& out) {
 // dualization, not substitution: no seed/subdivide pair; `generations` scales
 // the grid range and `seedIdx` (0..2) picks a grid-offset variant.
 
-std::vector<Tile> generateMultigrid(int gridCount, int seedIdx, int generations) {
+std::vector<Tile> generateMultigrid(int gridCount, int seedIdx, int generations, double inflation) {
     const int N = (gridCount < 2) ? 2 : gridCount;
     std::vector<double> dirx(N), diry(N);
     for (int k = 0; k < N; ++k) {
@@ -1452,16 +1519,19 @@ std::vector<Tile> generateMultigrid(int gridCount, int seedIdx, int generations)
     }
 
     int gen = generations < 0 ? 0 : generations;
-    // The grid line-index half-range grows ~phi per generation, so the
-    // normalised tile size shrinks at the same 1/phi rate the renderer's
-    // border scaling (deflationRate) assumes for the substitution families.
-    int B = static_cast<int>(std::lround(12.0 * std::pow(kPhi, gen - 6)));
-    if (B < 2) B = 2;
-    // Keep rhombi whose centroid lies inside this raw-units radius. The dual
-    // map scales the plane by ~N/2, so 0.5*N*(B-1) keeps the patch hole-free
-    // out to that radius (for N = 6 this is the original 3*(B-1)).
-    const double keepLin = 0.5 * N * (B - 1);
+    // One generation = one true inflation. The crop radius grows by the family's
+    // natural inflation factor from the minimal central rosette, so tile count
+    // scales as inflation^(2*gen) and normalised tile size shrinks at 1/inflation
+    // per generation. The radius is grown *directly* (not through the integer grid
+    // half-range): the earlier `0.5*N*(B-1)` scheme tied the radius to B, so a
+    // single B step (2->5) meant a ~16x area jump — generation 1 exploded to
+    // hundreds of tiles. `maxGen` (per family, in kFamilyInfo) bounds the top.
+    const double keepLin = kMultigridBaseRadius * std::pow(inflation, gen);
     const double keepR2 = keepLin * keepLin;
+    // Grid half-range large enough to fill the crop disk (the dual map scales the
+    // plane by ~N/2), plus one line of margin so the disk stays hole-free.
+    int B = static_cast<int>(std::ceil(2.0 * keepLin / N)) + 1;
+    if (B < 2) B = 2;
 
     // Seed 0 is 2N-fold symmetric, but the de Bruijn dual of a constant-offset
     // grid centres that symmetry on P = (-1, -cot(pi/2N)) — not the origin
@@ -2023,7 +2093,7 @@ std::vector<Tile> generateP1(int /*seedIdx*/, int generations) {
 
 std::vector<Tile> generateHat(int seedIdx, int generations) {
     auto metatiles = initialHatMetatiles();
-    for (int g = 0; g < generations; ++g) {
+    for (int g = 0; g <= generations; ++g) {
         const HatPtr patch = constructHatPatch(metatiles);
         metatiles = constructHatMetatiles(patch);
     }
@@ -2036,7 +2106,7 @@ std::vector<Tile> generateHat(int seedIdx, int generations) {
 
 std::vector<Tile> generateSpectre(int seedIdx, int generations) {
     auto sys = buildSpectreBase();
-    for (int g = 0; g < generations; ++g) sys = buildSpectreSupertiles(sys);
+    for (int g = 0; g <= generations; ++g) sys = buildSpectreSupertiles(sys);
     const int seed = (seedIdx < 0 || seedIdx > 8) ? 0 : seedIdx;
     std::vector<Tile> out;
     emitSpecLeaves(sys[seed], kIdent, out);
@@ -2498,6 +2568,173 @@ std::vector<Tile> generateSocolarTaylor(int seedIdx, int generations) {
     return out;
 }
 
+struct D4Matrix {
+    int a;
+    int b;
+    int c;
+    int d;
+};
+
+constexpr std::array<D4Matrix, 8> kD4Matrices = {{
+    { 1,  0,  0,  1}, // identity
+    { 0, -1,  1,  0}, // rotate 90
+    {-1,  0,  0, -1}, // rotate 180
+    { 0,  1, -1,  0}, // rotate 270
+    {-1,  0,  0,  1}, // mirror left/right
+    { 1,  0,  0, -1}, // mirror up/down
+    { 0,  1,  1,  0}, // mirror main diagonal
+    { 0, -1, -1,  0}, // mirror anti-diagonal
+}};
+
+constexpr std::array<std::array<uint8_t, 4>, 6> kD4SubstitutionRules = {{
+    {{0, 1, 4, 7}},
+    {{0, 4, 1, 5}},
+    {{2, 6, 3, 7}},
+    {{0, 2, 5, 7}},
+    {{1, 3, 4, 6}},
+    {{0, 5, 6, 3}},
+}};
+
+struct D4State {
+    double cx;
+    double cy;
+    double size;
+    uint8_t sym;
+};
+
+int d4Compose(int left, int right) {
+    const D4Matrix& L = kD4Matrices[static_cast<size_t>(left & 7)];
+    const D4Matrix& R = kD4Matrices[static_cast<size_t>(right & 7)];
+    const D4Matrix C{
+        L.a * R.a + L.b * R.c,
+        L.a * R.b + L.b * R.d,
+        L.c * R.a + L.d * R.c,
+        L.c * R.b + L.d * R.d,
+    };
+    for (size_t i = 0; i < kD4Matrices.size(); ++i) {
+        const D4Matrix& M = kD4Matrices[i];
+        if (M.a == C.a && M.b == C.b && M.c == C.c && M.d == C.d) {
+            return static_cast<int>(i);
+        }
+    }
+    return 0;
+}
+
+int d4MapQuadrant(int sym, int child) {
+    const int sx = (child & 1) ? 1 : -1;
+    const int sy = (child & 2) ? 1 : -1;
+    const D4Matrix& M = kD4Matrices[static_cast<size_t>(sym & 7)];
+    const int mx = M.a * sx + M.b * sy;
+    const int my = M.c * sx + M.d * sy;
+    return (mx > 0 ? 1 : 0) + (my > 0 ? 2 : 0);
+}
+
+Tile d4SquareTile(const D4State& state) {
+    const double h = state.size * 0.5;
+    Tile tile{};
+    tile.vcount = 4;
+    tile.type = state.sym;
+    tile.x[0] = static_cast<float>(state.cx - h);
+    tile.y[0] = static_cast<float>(state.cy - h);
+    tile.x[1] = static_cast<float>(state.cx + h);
+    tile.y[1] = static_cast<float>(state.cy - h);
+    tile.x[2] = static_cast<float>(state.cx + h);
+    tile.y[2] = static_cast<float>(state.cy + h);
+    tile.x[3] = static_cast<float>(state.cx - h);
+    tile.y[3] = static_cast<float>(state.cy + h);
+    return tile;
+}
+
+bool d4StateIntersectsWindow(const D4State& state, const WindowBounds& window, double margin) {
+    const double half = state.size * 0.5;
+    return state.cx + half >= static_cast<double>(window.minX) - margin
+        && state.cx - half <= static_cast<double>(window.maxX) + margin
+        && state.cy + half >= static_cast<double>(window.minY) - margin
+        && state.cy - half <= static_cast<double>(window.maxY) + margin;
+}
+
+void pruneD4StatesForWindow(std::vector<D4State>& states, const WindowBounds& window) {
+    const double spanX = std::max(static_cast<double>(window.maxX - window.minX), 1e-3);
+    const double spanY = std::max(static_cast<double>(window.maxY - window.minY), 1e-3);
+    const double margin = std::max(0.08, std::max(spanX, spanY) * 0.18);
+    std::vector<D4State> kept;
+    kept.reserve(states.size());
+    for (const D4State& state : states) {
+        if (d4StateIntersectsWindow(state, window, margin)) kept.push_back(state);
+    }
+    if (!kept.empty()) states = std::move(kept);
+}
+
+std::vector<Tile> d4StatesToTiles(const std::vector<D4State>& states) {
+    std::vector<Tile> out;
+    out.reserve(states.size());
+    for (const D4State& state : states) out.push_back(d4SquareTile(state));
+    normalizeTiles(out);
+    return out;
+}
+
+std::vector<Tile> generateD4Substitution(int seedIdx, int generations) {
+    const int ruleIdx = seedIdx < 0 || seedIdx >= static_cast<int>(kD4SubstitutionRules.size())
+        ? 0
+        : seedIdx;
+    const std::array<uint8_t, 4>& rule = kD4SubstitutionRules[static_cast<size_t>(ruleIdx)];
+    std::vector<D4State> states;
+    states.push_back({0.0, 0.0, 1.0, 0});
+    for (int g = 0; g < generations; ++g) {
+        std::vector<D4State> next;
+        next.reserve(states.size() * 4u);
+        for (const D4State& state : states) {
+            const double childSize = state.size * 0.5;
+            const double offset = state.size * 0.25;
+            for (int child = 0; child < 4; ++child) {
+                const int mapped = d4MapQuadrant(state.sym, child);
+                const double sx = (mapped & 1) ? 1.0 : -1.0;
+                const double sy = (mapped & 2) ? 1.0 : -1.0;
+                next.push_back({
+                    state.cx + sx * offset,
+                    state.cy + sy * offset,
+                    childSize,
+                    static_cast<uint8_t>(d4Compose(state.sym, rule[static_cast<size_t>(child)])),
+                });
+            }
+        }
+        states = std::move(next);
+    }
+
+    return d4StatesToTiles(states);
+}
+
+std::vector<Tile> generateD4SubstitutionWindowed(int seedIdx, int generations, const WindowBounds& window) {
+    const int ruleIdx = seedIdx < 0 || seedIdx >= static_cast<int>(kD4SubstitutionRules.size())
+        ? 0
+        : seedIdx;
+    const std::array<uint8_t, 4>& rule = kD4SubstitutionRules[static_cast<size_t>(ruleIdx)];
+    std::vector<D4State> states;
+    states.push_back({0.0, 0.0, 1.0, 0});
+    for (int g = 0; g < generations; ++g) {
+        std::vector<D4State> next;
+        next.reserve(states.size() * 4u);
+        for (const D4State& state : states) {
+            const double childSize = state.size * 0.5;
+            const double offset = state.size * 0.25;
+            for (int child = 0; child < 4; ++child) {
+                const int mapped = d4MapQuadrant(state.sym, child);
+                const double sx = (mapped & 1) ? 1.0 : -1.0;
+                const double sy = (mapped & 2) ? 1.0 : -1.0;
+                next.push_back({
+                    state.cx + sx * offset,
+                    state.cy + sy * offset,
+                    childSize,
+                    static_cast<uint8_t>(d4Compose(state.sym, rule[static_cast<size_t>(child)])),
+                });
+            }
+        }
+        states = std::move(next);
+        pruneD4StatesForWindow(states, window);
+    }
+    return d4StatesToTiles(states);
+}
+
 // =============================================================================
 // Per-family descriptor table
 // =============================================================================
@@ -2520,13 +2757,13 @@ const FamilyInfo kFamilyInfo[kFamilyCount] = {
                           { 2, 10, false, 0, 2, false, false } },
     /* Chair         */ { 7, 0.5f,                 4, 0, false, false, 0,
                           { 4,  4, true,  0, 0, false, true  } },
-    /* Dodecagonal   */ { 8, 0.6180339887498949f, 12, 0, true,  false, 0,
+    /* Dodecagonal   */ { 6, 0.5176380902050415f, 12, 0, true,  false, 0,
                           { 3,  6, false, 0, 1, true,  false } },
     /* Pinwheel      */ { 6, 0.4472135954999579f,  0, 0, true,  false, 1,
                           { 2, 10, false, 0, 2, false, false } },
-    /* AmmannBeenker */ { 8, 0.6180339887498949f,  8, 0, true,  false, 0,
+    /* AmmannBeenker */ { 4, 0.4142135623730950f,  8, 0, true,  false, 0,
                           { 2,  4, false, 0, 1, true,  false } },
-    /* Heptagonal    */ { 8, 0.6180339887498949f, 14, 0, true,  false, 0,
+    /* Heptagonal    */ { 7, 0.5549581320873714f, 14, 0, true,  false, 0,
                           { 3,  7, false, 0, 1, true,  false } },
     /* Binary        */ { 8, 0.5257311121191336f,  5, 0, true,  false, 0,
                           { 2,  5, false, 0, 1, true,  false } },
@@ -2536,9 +2773,9 @@ const FamilyInfo kFamilyInfo[kFamilyCount] = {
                           { 4, 10, false, 0, 1, false, false } },
     /* Danzer        */ { 7, 0.5549581320873713f, 14, 0, true,  false, 2,
                           { 4, 14, false, 0, 2, false, false } },
-    /* Hat           */ { 5, 0.3819660112501051f,  0, 0, true,  true,  0,
+    /* Hat           */ { 4, 0.3819660112501051f,  0, 0, true,  true,  0,
                           { 5, 12, false, 0, 1, false, false } },
-    /* Spectre       */ { 5, 0.3535533905932738f,  0, 0, true,  true,  0,
+    /* Spectre       */ { 3, 0.3535533905932738f,  0, 0, true,  true,  0,
                           {10, 12, false, 0, 1, false, false } },
     /* Equithirds    */ {10, static_cast<float>(kInvSqrt3), 6, 0, true,  false, 2,
                           { 2,  6, false, 0, 1, false, false } },
@@ -2550,11 +2787,61 @@ const FamilyInfo kFamilyInfo[kFamilyCount] = {
                           { 8,  8, false, 0, 1, false, true  } },
     /* SocolarTaylor */ { 7, 0.5f,                 6, 0, true,  false, 0,
                           {28,  6, false, 0, 1, false, false } },
+    /* D4Substitution */ { 8, 0.5f,                4, 0, true,  true,  0,
+                          { 8,  8, true,  0, 0, false, true  } },
 };
 
 // =============================================================================
 // Family-erased generate()
 // =============================================================================
+
+bool supportsWindowedGeneration(Family family) {
+    switch (family) {
+        case Family::P3:
+        case Family::P2:
+        case Family::Chair:
+        case Family::Pinwheel:
+        case Family::Tuebingen:
+        case Family::Danzer:
+        case Family::Equithirds:
+        case Family::D4Substitution:
+            return true;
+        default:
+            return false;
+    }
+}
+
+namespace {
+
+bool tileIntersectsWindow(const Tile& tile, const WindowBounds& window, float margin) {
+    if (tile.vcount == 0) return false;
+    float minX = tile.x[0], maxX = tile.x[0];
+    float minY = tile.y[0], maxY = tile.y[0];
+    for (int i = 1; i < tile.vcount; ++i) {
+        minX = std::min(minX, tile.x[i]);
+        maxX = std::max(maxX, tile.x[i]);
+        minY = std::min(minY, tile.y[i]);
+        maxY = std::max(maxY, tile.y[i]);
+    }
+    return maxX >= window.minX - margin
+        && minX <= window.maxX + margin
+        && maxY >= window.minY - margin
+        && minY <= window.maxY + margin;
+}
+
+void pruneTilesForWindow(std::vector<Tile>& tiles, const WindowBounds& window) {
+    const float spanX = std::max(window.maxX - window.minX, 1e-3f);
+    const float spanY = std::max(window.maxY - window.minY, 1e-3f);
+    const float margin = std::max(0.08f, std::max(spanX, spanY) * 0.18f);
+    std::vector<Tile> kept;
+    kept.reserve(tiles.size());
+    for (const Tile& tile : tiles) {
+        if (tileIntersectsWindow(tile, window, margin)) kept.push_back(tile);
+    }
+    if (!kept.empty()) tiles = std::move(kept);
+}
+
+} // namespace
 
 std::vector<Tile> generate(Family family, int seedIdx, int generations) {
     const int cap0 = generations < 0 ? 0 : generations;
@@ -2565,12 +2852,14 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
             int s = (seedIdx < 0 || seedIdx > 3) ? 0 : seedIdx;
             auto tiles = seedP3(static_cast<SeedP3>(s));
             for (int g = 0; g < cap; ++g) tiles = subdivideP3(tiles);
-            return tiles;
+            return finalizeGoldenTriangles(tiles);
         }
         case Family::P2: {
             int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
             auto tiles = seedP2(static_cast<SeedP2>(s));
             for (int g = 0; g < cap; ++g) tiles = subdivideP2(tiles);
+            // No finalize: the notebook kite/dart tiles are already in renderer
+            // convention (apex at vert 1, base at edge 2, acute = type 1).
             return tiles;
         }
         case Family::Chair: {
@@ -2585,9 +2874,9 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
             for (int g = 0; g < cap; ++g) tiles = subdividePinwheel(tiles);
             return tiles;
         }
-        case Family::Dodecagonal:   return generateMultigrid(6, seedIdx, cap);
-        case Family::AmmannBeenker: return generateMultigrid(4, seedIdx, cap);
-        case Family::Heptagonal:    return generateMultigrid(7, seedIdx, cap);
+        case Family::Dodecagonal:   return generateMultigrid(6, seedIdx, cap, kInflDodecagonal);
+        case Family::AmmannBeenker: return generateMultigrid(4, seedIdx, cap, kInflAmmannBeenker);
+        case Family::Heptagonal:    return generateMultigrid(7, seedIdx, cap, kInflHeptagonal);
         case Family::Binary: {
             int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
             return generateBinary(s, cap);
@@ -2627,8 +2916,91 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
             int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
             return generateSocolarTaylor(s, cap);
         }
+        case Family::D4Substitution: {
+            int s = (seedIdx < 0 || seedIdx > 5) ? 0 : seedIdx;
+            return generateD4Substitution(s, cap);
+        }
     }
     return {};
+}
+
+std::vector<Tile> generateWindowed(Family family, int seedIdx, int generations, const WindowBounds& window) {
+    const int cap0 = generations < 0 ? 0 : generations;
+    const int maxG = familyInfo(family).maxGen;
+    const int cap  = cap0 > maxG ? maxG : cap0;
+    if (!supportsWindowedGeneration(family)) return generate(family, seedIdx, cap);
+    switch (family) {
+        case Family::P3: {
+            int s = (seedIdx < 0 || seedIdx > 3) ? 0 : seedIdx;
+            auto tiles = seedP3(static_cast<SeedP3>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdivideP3(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            return finalizeGoldenTriangles(tiles);
+        }
+        case Family::P2: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            auto tiles = seedP2(static_cast<SeedP2>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdivideP2(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            // No finalize: notebook kite/dart tiles are already renderer-convention.
+            return tiles;
+        }
+        case Family::Chair: {
+            int s = (seedIdx < 0 || seedIdx > 2) ? 0 : seedIdx;
+            auto tiles = seedChair(static_cast<SeedChair>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdivideChair(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            return tiles;
+        }
+        case Family::Pinwheel: {
+            int s = (seedIdx < 0 || seedIdx > 2) ? 0 : seedIdx;
+            auto tiles = seedPinwheel(static_cast<SeedPinwheel>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdividePinwheel(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            return tiles;
+        }
+        case Family::Tuebingen: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            auto tiles = seedTuebingen(static_cast<SeedTuebingen>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdivideTuebingen(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            return tiles;
+        }
+        case Family::Danzer: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            auto tiles = seedDanzer(static_cast<SeedDanzer>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdivideDanzer(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            return tiles;
+        }
+        case Family::Equithirds: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            auto tiles = seedEquithirds(static_cast<SeedEquithirds>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdivideEquithirds(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            return tiles;
+        }
+        case Family::D4Substitution: {
+            int s = (seedIdx < 0 || seedIdx > 5) ? 0 : seedIdx;
+            return generateD4SubstitutionWindowed(s, cap, window);
+        }
+        default:
+            return generate(family, seedIdx, cap);
+    }
 }
 
 } // namespace penrose

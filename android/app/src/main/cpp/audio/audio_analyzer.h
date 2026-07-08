@@ -81,7 +81,13 @@ public:
         float onsetStrength = 0.0f;
         float cwtTransient = 0.0f;
         float crestFactor = 0.0f;
+        float beatPhase = 0.0f;
+        float pulseLfo = 0.0f;
+        float pulseConfidence = 0.0f;
         float beatConfidence = 0.0f;
+        float tempoConfidence = 0.0f;
+        float beatStrength = 0.0f;
+        float bpm = 120.0f;
     };
 
     AudioAnalyzer();
@@ -132,7 +138,7 @@ private:
     void resetDspStateUnlocked();
     // Parabolic-interpolated peak in [lo,hi] over the autocorrelation
     // buffer. Returns a fractional lag for sub-frame BPM precision.
-    float peakLagParabolic(int lo, int hi, float& peakValOut) const;
+    float peakLagParabolic(int lo, int hi, float& peakValOut, float& rawPeakOut) const;
 
     int sampleRate_ = 48000;
 
@@ -164,6 +170,9 @@ private:
     float rawBpm_       = 120.0f;
     float beatPhase_    = 0.0f;
     float beatConf_     = 0.0f;
+    float beatStrength_ = 0.0f;
+    float pulseLfo_ = 0.0f;
+    float pulseConfidence_ = 0.0f;
     float periodFrames_ = 60.0f * 60.0f / 120.0f;
 
     // 3 pre-computed complex Morlet wavelet kernels for CWT-based

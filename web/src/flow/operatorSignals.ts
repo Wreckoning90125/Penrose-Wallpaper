@@ -43,7 +43,16 @@ export function createOperatorSignalStore(): OperatorSignalStore {
     getSnapshot: () => snapshot,
     set: next => {
       if (signalSnapshotEqual(snapshot, next)) return;
-      snapshot = next;
+      // Preserve per-node reference stability: nodes whose values did not
+      // change keep their previous slice object, so a component selecting
+      // snapshot[id] (via useSyncExternalStore) only re-renders when its own
+      // operator's signals moved — not on every frame of the whole graph.
+      const merged: Record<string, OperatorSignalValues | undefined> = {};
+      for (const [id, values] of Object.entries(next)) {
+        const previous = snapshot[id];
+        merged[id] = signalValuesEqual(previous, values) ? previous : values;
+      }
+      snapshot = merged;
       for (const listener of listeners) listener();
     },
     subscribe: listener => {

@@ -7,9 +7,24 @@ export type FamilyOption = {
   value: string;
   label: string;
   maxGeneration: number;
+  generationLabel?: string;
+  generationShortLabel?: string;
   seeds: SeedOption[];
   showOrientMode?: boolean;
 };
+
+function orderFiveSeedLabel(index: number): string {
+  if (index === 39) return '40 weighted kite';
+  if (index === 40) return '41 weighted hourglass';
+  if (index === 41) return '42 weighted half-hour';
+  if (index === 42) return '43 weighted house';
+  return `System ${index + 1}`;
+}
+
+const ORDER_FIVE_IFS_SEEDS: SeedOption[] = Array.from({ length: 43 }, (_, index) => ({
+  value: String(index),
+  label: orderFiveSeedLabel(index),
+}));
 
 const FAMILY_OPTIONS_BY_ID: Record<string, FamilyOption> = {
   '0': {
@@ -49,7 +64,7 @@ const FAMILY_OPTIONS_BY_ID: Record<string, FamilyOption> = {
   '3': {
     value: '3',
     label: 'Dodecagonal',
-    maxGeneration: 8,
+    maxGeneration: 6,
     seeds: [
       { value: '0', label: 'Rosette' },
       { value: '1', label: 'Drift' },
@@ -69,7 +84,7 @@ const FAMILY_OPTIONS_BY_ID: Record<string, FamilyOption> = {
   '5': {
     value: '5',
     label: 'Ammann-Beenker',
-    maxGeneration: 8,
+    maxGeneration: 4,
     seeds: [
       { value: '0', label: 'Star' },
       { value: '1', label: 'Drift' },
@@ -79,7 +94,7 @@ const FAMILY_OPTIONS_BY_ID: Record<string, FamilyOption> = {
   '6': {
     value: '6',
     label: 'Heptagonal',
-    maxGeneration: 8,
+    maxGeneration: 7,
     seeds: [
       { value: '0', label: 'Star' },
       { value: '1', label: 'Drift' },
@@ -122,7 +137,9 @@ const FAMILY_OPTIONS_BY_ID: Record<string, FamilyOption> = {
   '11': {
     value: '11',
     label: 'Hat monotile',
-    maxGeneration: 5,
+    maxGeneration: 4,
+    generationLabel: 'Layer',
+    generationShortLabel: 'Layer',
     seeds: [
       { value: '0', label: 'H metatile' },
       { value: '1', label: 'T metatile' },
@@ -132,8 +149,10 @@ const FAMILY_OPTIONS_BY_ID: Record<string, FamilyOption> = {
   },
   '12': {
     value: '12',
-    label: 'Spectre monotile',
-    maxGeneration: 5,
+    label: 'Curved Spectre monotile',
+    maxGeneration: 3,
+    generationLabel: 'Layer',
+    generationShortLabel: 'Layer',
     seeds: [
       { value: '0', label: 'Gamma' },
       { value: '1', label: 'Delta' },
@@ -240,14 +259,38 @@ const FAMILY_OPTIONS_BY_ID: Record<string, FamilyOption> = {
       { value: '1', label: 'A hex supertile' },
     ],
   },
+  '18': {
+    value: '18',
+    label: 'Experimental D4 square weave',
+    maxGeneration: 8,
+    generationLabel: 'Subdivision depth',
+    generationShortLabel: 'Depth',
+    seeds: [
+      { value: '0', label: 'Pinwheel D4' },
+      { value: '1', label: 'Reflected cross' },
+      { value: '2', label: 'Alternating turns' },
+      { value: '3', label: 'Half-turn weave' },
+      { value: '4', label: 'Spiral mirrors' },
+      { value: '5', label: 'Diagonal weave' },
+    ],
+  },
+  '19': {
+    value: '19',
+    label: 'Order-five IFS attractors',
+    maxGeneration: 4,
+    generationLabel: 'Points',
+    generationShortLabel: 'Pts',
+    showOrientMode: false,
+    seeds: ORDER_FIVE_IFS_SEEDS,
+  },
 };
 
 const FAMILY_DISPLAY_ORDER = [
   '9', '1', '0',       // Penrose systems: P1 / P2 / P3.
   '8', '10', '13', '14', // Triangle / Robinson-graph substitutions.
   '6', '5', '3', '7',  // Rotational/quasicrystal families.
-  '4', '2', '16', '17', // Other compact tiling families.
-  '15',                // Spiral constructions.
+  '4', '2', '16', '17', '18', // Other compact tiling families.
+  '19', '15',          // Point attractors and spiral constructions.
   '11', '12',          // Monotiles/metatiles.
 ] as const;
 
@@ -265,6 +308,14 @@ export function seedOptionsForFamily(value: string | number | boolean): SeedOpti
 
 export function maxGenerationForFamily(value: string | number | boolean): number {
   return familyByValue(value).maxGeneration;
+}
+
+export function generationLabelForFamily(value: string | number | boolean): string {
+  return familyByValue(value).generationLabel ?? 'Generation';
+}
+
+export function generationShortLabelForFamily(value: string | number | boolean): string {
+  return familyByValue(value).generationShortLabel ?? 'Gen';
 }
 
 export function seedLabel(familyValue: string | number | boolean, seedValue: string | number | boolean): string {

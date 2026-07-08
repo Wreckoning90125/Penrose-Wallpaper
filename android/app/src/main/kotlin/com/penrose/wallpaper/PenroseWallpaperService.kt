@@ -57,6 +57,10 @@ class PenroseWallpaperService : WallpaperService() {
 
         private var rippleAmount = 0f
         private var rippleMode = 0
+        private var panMode = 0
+        private var lightChoreoAmount = 0f
+        private var lightChoreoSource = 0f
+        private var graphWantsLoop = false
 
         private val choreographer: Choreographer by lazy { Choreographer.getInstance() }
         private var frameCallbackPosted = false
@@ -137,13 +141,20 @@ class PenroseWallpaperService : WallpaperService() {
          * into the active Renderer's Graph via the JNI bridge.
          */
         private fun loadGraphFromStore(ptr: Long) {
+            var nextGraphWantsLoop = false
             try {
                 val json = SettingsSnapshotStore.storedGraphJson(settingsStore)
                 if (!NativeBridge.graphLoad(ptr, json)) {
                     Log.w(TAG, "graph load failed")
+                } else {
+                    nextGraphWantsLoop = NativeBridge.graphNeedsFrameLoop(ptr)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "graph load failed", e)
+            }
+            engineScope.launch {
+                graphWantsLoop = nextGraphWantsLoop
+                updateChoreographer()
             }
         }
 
@@ -186,9 +197,16 @@ class PenroseWallpaperService : WallpaperService() {
             xOffsetStep: Float, yOffsetStep: Float,
             xPixelOffset: Int, yPixelOffset: Int,
         ) {
-            val shouldDraw = visible && rippleMode == RIPPLE_MODE_PAGE
+            val shouldDraw = visible
+            val effectiveXPixelOffset = if (panMode == 2 && xPixelOffset == 0 && xOffsetStep > 0f) {
+                val (screenW, _) = currentScreenSize()
+                val pageCount = (1f / xOffsetStep).toInt().coerceAtLeast(1) + 1
+                -(xOffset.coerceIn(0f, 1f) * screenW * (pageCount - 1) + 0.5f).toInt()
+            } else {
+                xPixelOffset
+            }
             session.submit { ptr ->
-                NativeBridge.setPageOffset(ptr, xOffset)
+                NativeBridge.setPageOffset(ptr, xOffset, effectiveXPixelOffset)
                 if (shouldDraw) NativeBridge.drawFrame(ptr)
             }
         }
@@ -342,6 +360,9 @@ class PenroseWallpaperService : WallpaperService() {
             val s = settingsStore.settings()
             rippleAmount = s.rippleAmount
             rippleMode = s.rippleMode
+            panMode = s.panMode
+            lightChoreoAmount = s.lightChoreoAmount
+            lightChoreoSource = s.lightChoreoSource
             val (ints, floats) = s.toNative()
             session.submit { ptr ->
                 NativeBridge.applySettings(ptr, ints, floats)
@@ -367,7 +388,8 @@ class PenroseWallpaperService : WallpaperService() {
             // workingSettingsListener -> updateChoreographer when
             // playback starts or stops.
             val audioActive = AudioPlaybackService.currentUri != null
-            val wantLoop = visible && (gestureActive || rippleWantsLoop || audioActive)
+            val lightChoreoWantsLoop = lightChoreoAmount > 0f && lightChoreoSource != 1f
+            val wantLoop = visible && (gestureActive || rippleWantsLoop || audioActive || lightChoreoWantsLoop || graphWantsLoop)
             if (wantLoop) armChoreographer() else disarmChoreographer()
         }
 
@@ -403,5 +425,6 @@ class PenroseWallpaperService : WallpaperService() {
         const val RIPPLE_MODE_TIME = 0
         const val RIPPLE_MODE_PAGE = 1
         const val RIPPLE_MODE_TIME_PAGE = 2
+        const val PAN_MODE_ENDLESS = 2
     }
 }

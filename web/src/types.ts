@@ -17,6 +17,13 @@ export type Patch = {
   tiles: Tile[];
 };
 
+export type TilingWindow = {
+  centerX: number;
+  centerY: number;
+  halfWidth: number;
+  halfHeight: number;
+};
+
 export type AtlasItem = {
   id: string;
   name: string;
@@ -38,6 +45,7 @@ export type AtlasManifest = {
 export type GeometryBuild = {
   geometry: BufferGeometry;
   edgeGeometry: BufferGeometry | null;
+  overlayGeometry: BufferGeometry | null;
   palette: Palette;
 };
 
@@ -50,6 +58,15 @@ export type AudioFeatures = {
   onsetStrength: number;
   cwtTransient: number;
   crestFactor: number;
+  beat: number;
+  beatPhase: number;
+  pulseLfo: number;
+  pulseConfidence: number;
+  beatConfidence: number;
+  tempoConfidence: number;
+  beatStrength: number;
+  tempo: number;
+  bpm: number;
 };
 
 export type AudioTransport = {
@@ -142,11 +159,19 @@ export type FieldSlot = {
   undulate: number;
   undulateFreq: number;
   color: number;
+  pattern: number;
 };
 
 export type RenderInputs = {
   geometry: boolean;
+  // Order-five IFS attractor source -> renderer:attractor. This is a separate
+  // point-cloud lane, not part of the polygon surface chain.
+  attractor: boolean;
   lighting: boolean;
+  // Any signal source -> lighting:phase. The wire IS the choreography source
+  // (clock, audio feature, or operator blend); cut it and the light orbit
+  // freezes. There is no source dropdown.
+  choreoPhase: boolean;
   // palette->material:color. Cut it and material color falls back to neutral,
   // regardless of whether the material color output is routed to the scene.
   color: boolean;

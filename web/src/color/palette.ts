@@ -71,6 +71,43 @@ function mixPaletteWithSpectra(colors: Oklch[], colorCount: number, spectral: nu
   return colors.map((color, idx): Oklch => lerp(color, spectralColors[idx] ?? spectralColors[0]!, amount));
 }
 
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+export function topologyPaletteSlot(
+  baseSlot: number,
+  colorCount: number,
+  degree: number,
+  motif: number,
+  relaxed: number,
+  biharmonic: number,
+  ring: number,
+): number {
+  const active = Math.max(1, Math.min(MAX_COLORS, colorCount | 0));
+  if (active <= 1) return 0;
+  const structural = clamp01(
+    clamp01(degree) * 0.24
+    + clamp01(motif) * 0.22
+    + clamp01(relaxed) * 0.31
+    + clamp01(biharmonic) * 0.23,
+  );
+  const signed = structural - 0.5;
+  const direction = signed < 0 ? -1 : 1;
+  const maxHop = Math.max(1, active - 1);
+  const structuralHop = 1 + Math.floor(clamp01(Math.abs(signed) * 2) * Math.min(2, maxHop - 1));
+  const ringHop = Math.floor(clamp01(ring) * Math.min(2, maxHop));
+  const motifHop = Math.floor(clamp01(motif) * Math.min(2, maxHop));
+  const hop = Math.max(1, Math.min(maxHop, structuralHop + ringHop + motifHop));
+  const baseWhole = Math.floor(Math.max(0, Math.min(active - 1, baseSlot)));
+  const baseFrac = clamp01(baseSlot - Math.floor(baseSlot));
+  const wrapped = (baseWhole + direction * hop + active * 4) % active;
+  const neighbor = direction < 0
+    ? Math.max(0, wrapped - baseFrac)
+    : Math.min(active - 1, wrapped + baseFrac);
+  return Math.max(0, Math.min(active - 1, neighbor));
+}
+
 export function buildPalette(
   presetIndex: number,
   colorCount: number,
@@ -79,10 +116,11 @@ export function buildPalette(
 ): Palette {
   const k = Math.max(1, Math.min(MAX_COLORS, colorCount | 0));
   if (presetIndex === CUSTOM_PALETTE_PRESET && customColors) {
+    const bg = customColors[0] ?? PRESETS[CUSTOM_PALETTE_PRESET]!.bg;
     const colors = mixPaletteWithSpectra(pad(customColors), k, spectral);
     return {
       name: 'Custom',
-      bg: customColors[0] ?? PRESETS[CUSTOM_PALETTE_PRESET]!.bg,
+      bg,
       colors,
     };
   }

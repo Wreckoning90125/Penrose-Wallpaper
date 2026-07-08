@@ -87,6 +87,7 @@ void pushInterleavedPcmToAnalyzer(const uint8_t* bytes, int byteCount, int forma
 // Decode a Settings struct from the flat int/float arrays the Kotlin side
 // passes us. Layout (ints / floats):
 //   ints:   [family, seedIdx, generation, preset, colorCount, colorMode,
+//            colorSpread, colorSpectral,
 //            borderOn, borderJoin, bgMode, rippleMode, panMode, rippleKind,
 //            projection, hypBorderSubdiv, hypFillSubdiv]
 //   floats: [borderWidth, borderFill, borderPoint, borderGap,
@@ -97,13 +98,23 @@ void pushInterleavedPcmToAnalyzer(const uint8_t* bytes, int byteCount, int forma
 //            matRoughness, matMetalness, matSheen, matClearcoat,
 //            matAnisotropy, matIridescence, matEmissive, matRelief,
 //            lightAngle, lightElevation, lightIntensity, lightWarmth, lightAmbient,
+//            lightChoreoAmount, lightChoreoSpeed, lightChoreoSource,
 //            matSheenColorR, matSheenColorG, matSheenColorB,
 //            matIridThickMin, matIridThickMax,
 //            matRoughMod, matMetalMod,
+//            ornamentStyle, ornamentAmount, ornamentWidth, ornamentDensity,
+//            ornamentPhase, ornamentTwist, ornamentSeed,
 //            hypScale, hypBoostX, hypBoostY,
+//            surfaceContourAmount, surfaceContourSource, surfaceContourSpacing,
+//            surfaceContourWidth, surfaceContourPhase,
+//            surfaceContourL, surfaceContourC, surfaceContourH,
+//            sourceMarkA_L, sourceMarkA_C, sourceMarkA_H,
+//            sourceMarkB_L, sourceMarkB_C, sourceMarkB_H,
+//            sourceMarkC_L, sourceMarkC_C, sourceMarkC_H,
+//            edgeProfileWidth, edgeProfileGlow, edgeProfileL, edgeProfileC, edgeProfileH,
 //            custom_0_L, custom_0_C, custom_0_H, ..., custom_N_L, custom_N_C, custom_N_H]
-constexpr int kIntCount   = 15;
-constexpr int kFloatCount = 19 + 8 + 5 + 5 + 2 + 3 + 3 * kMaxColors;
+constexpr int kIntCount   = 18;
+constexpr int kFloatCount = 19 + 8 + 5 + 3 + 5 + 2 + 7 + 3 + 8 + 9 + 5 + 3 * kMaxColors;
 
 Settings decodeSettings(const jint* ints, const jfloat* floats) {
     Settings s{};
@@ -114,25 +125,29 @@ Settings decodeSettings(const jint* ints, const jfloat* floats) {
     int preset = ints[3]; if (preset < 0 || preset >= kPresetCount) preset = (int)Preset::Gold;
     s.preset = static_cast<Preset>(preset);
     s.colorCount = ints[4];
-    int mode = ints[5]; if (mode < 0 || mode > 2) mode = 0;
+    int mode = ints[5]; if (mode < 0 || mode > 3) mode = 0;
     s.colorMode = static_cast<ColorMode>(mode);
-    s.borderOn = (ints[6] != 0);
-    int join = ints[7]; if (join < 0 || join > 2) join = 0;
+    s.colorSpread = std::clamp(static_cast<int>(ints[6]), 0, 100);
+    s.colorSpectral = std::clamp(static_cast<float>(ints[7]) / 100.0f, 0.0f, 1.0f);
+    s.borderOn = (ints[8] != 0);
+    int join = ints[9]; if (join < 0 || join > 2) join = 0;
     s.borderJoin = join;
-    int bg = ints[8]; if (bg < 0 || bg > 1) bg = 0;
+    int bg = ints[10]; if (bg < 0 || bg > 1) bg = 0;
     s.bgMode = static_cast<BackgroundMode>(bg);
-    int rm = ints[9]; if (rm < 0 || rm > 2) rm = 0;
+    int rm = ints[11]; if (rm < 0 || rm > 2) rm = 0;
     s.rippleMode = rm;
-    int pm = ints[10]; if (pm < 0 || pm > 1) pm = 0;
+    int pm = ints[12]; if (pm < 0 || pm > 2) pm = 0;
     s.panMode = pm;
-    int rk = ints[11]; if (rk < 0 || rk > 2) rk = 0;
+    int rk = ints[13]; if (rk < 0 || rk > 2) rk = 0;
     s.rippleKind = rk;
-    int pj = ints[12]; if (pj < 0 || pj > 1) pj = 0;
+    int pj = ints[14]; if (pj < 0 || pj > 1) pj = 0;
     s.projection = static_cast<Projection>(pj);
-    int bsub = ints[13]; if (bsub < 1) bsub = 1; if (bsub > 32) bsub = 32;
+    int bsub = ints[15]; if (bsub < 1) bsub = 1; if (bsub > 32) bsub = 32;
     s.hypBorderSubdiv = bsub;
-    int fsub = ints[14]; if (fsub < 1) fsub = 1; if (fsub > 8)  fsub = 8;
+    int fsub = ints[16]; if (fsub < 1) fsub = 1; if (fsub > 8)  fsub = 8;
     s.hypFillSubdiv = fsub;
+    int cwave = ints[17]; if (cwave < 0 || cwave > 3) cwave = 0;
+    s.clockWaveform = cwave;
 
     s.borderWidth = floats[0];
     s.borderFill = floats[1];
@@ -162,17 +177,59 @@ Settings decodeSettings(const jint* ints, const jfloat* floats) {
     s.lightIntensity = floats[29];
     s.lightWarmth    = floats[30];
     s.lightAmbient   = floats[31];
-    s.matSheenColorR  = floats[32];
-    s.matSheenColorG  = floats[33];
-    s.matSheenColorB  = floats[34];
-    s.matIridThickMin = floats[35];
-    s.matIridThickMax = floats[36];
-    s.matRoughMod     = floats[37];
-    s.matMetalMod     = floats[38];
-    s.hypScale        = floats[39];
-    s.hypBoostX       = floats[40];
-    s.hypBoostY       = floats[41];
-    int base = 42;
+    s.lightChoreoAmount = std::clamp(floats[32], 0.0f, 1.0f);
+    s.lightChoreoSpeed  = std::clamp(floats[33], 0.0f, 2.0f);
+    s.lightChoreoSource = std::clamp(floats[34], 0.0f, 3.0f);
+    s.matSheenColorR  = floats[35];
+    s.matSheenColorG  = floats[36];
+    s.matSheenColorB  = floats[37];
+    s.matIridThickMin = floats[38];
+    s.matIridThickMax = floats[39];
+    s.matRoughMod     = floats[40];
+    s.matMetalMod     = floats[41];
+    s.ornamentStyle   = std::clamp(floats[42], 0.0f, 4.0f);
+    s.ornamentAmount  = std::clamp(floats[43], 0.0f, 1.0f);
+    s.ornamentWidth   = std::clamp(floats[44], 0.0f, 1.0f);
+    s.ornamentDensity = std::clamp(floats[45], 0.0f, 1.0f);
+    s.ornamentPhase   = std::clamp(floats[46], 0.0f, 1.0f);
+    s.ornamentTwist   = std::clamp(floats[47], 0.0f, 1.0f);
+    s.ornamentSeed    = std::clamp(floats[48], 0.0f, 999.0f);
+    s.hypScale        = floats[49];
+    s.hypBoostX       = floats[50];
+    s.hypBoostY       = floats[51];
+    s.surfaceContourAmount  = std::clamp(floats[52], 0.0f, 1.0f);
+    s.surfaceContourSource  = std::clamp(floats[53], 0.0f, 7.0f);
+    s.surfaceContourSpacing = std::clamp(floats[54], 1.0f, 64.0f);
+    s.surfaceContourWidth   = std::clamp(floats[55], 0.01f, 0.50f);
+    s.surfaceContourPhase   = std::clamp(floats[56], 0.0f, 1.0f);
+    s.surfaceContourColor   = {
+        std::clamp(floats[57], 0.0f, 1.0f),
+        std::clamp(floats[58], 0.0f, 0.40f),
+        std::clamp(floats[59], 0.0f, 360.0f),
+    };
+    s.sourceMarkA = {
+        std::clamp(floats[60], 0.0f, 1.0f),
+        std::clamp(floats[61], 0.0f, 0.40f),
+        std::clamp(floats[62], 0.0f, 360.0f),
+    };
+    s.sourceMarkB = {
+        std::clamp(floats[63], 0.0f, 1.0f),
+        std::clamp(floats[64], 0.0f, 0.40f),
+        std::clamp(floats[65], 0.0f, 360.0f),
+    };
+    s.sourceMarkC = {
+        std::clamp(floats[66], 0.0f, 1.0f),
+        std::clamp(floats[67], 0.0f, 0.40f),
+        std::clamp(floats[68], 0.0f, 360.0f),
+    };
+    s.edgeProfileWidth = std::clamp(floats[69], 0.0f, 1.0f);
+    s.edgeProfileGlow = std::clamp(floats[70], 0.0f, 1.0f);
+    s.edgeProfileColor = {
+        std::clamp(floats[71], 0.0f, 1.0f),
+        std::clamp(floats[72], 0.0f, 0.37f),
+        std::clamp(floats[73], 0.0f, 359.0f),
+    };
+    int base = 74;
     for (int i = 0; i < kMaxColors; ++i) {
         s.customOklch[i] = { floats[base + 3 * i + 0],
                              floats[base + 3 * i + 1],
@@ -239,12 +296,22 @@ JNIEXPORT void JNICALL
 Java_com_penrose_wallpaper_NativeBridge_applySettings(JNIEnv* env, jobject, jlong ptr,
                                                      jintArray ints, jfloatArray floats) {
     auto* r = asRenderer(ptr); if (!r) return;
+    if (!ints || !floats) {
+        LOGE("applySettings: null settings arrays");
+        return;
+    }
     if (env->GetArrayLength(ints) < kIntCount || env->GetArrayLength(floats) < kFloatCount) {
         LOGE("applySettings: bad array length");
         return;
     }
     jint* iPtr = env->GetIntArrayElements(ints, nullptr);
     jfloat* fPtr = env->GetFloatArrayElements(floats, nullptr);
+    if (!iPtr || !fPtr) {
+        if (iPtr) env->ReleaseIntArrayElements(ints, iPtr, JNI_ABORT);
+        if (fPtr) env->ReleaseFloatArrayElements(floats, fPtr, JNI_ABORT);
+        LOGE("applySettings: failed to access settings arrays");
+        return;
+    }
     Settings s = decodeSettings(iPtr, fPtr);
     env->ReleaseIntArrayElements(ints, iPtr, JNI_ABORT);
     env->ReleaseFloatArrayElements(floats, fPtr, JNI_ABORT);
@@ -266,6 +333,7 @@ Java_com_penrose_wallpaper_NativeBridge_touchPinch(JNIEnv*, jobject, jlong ptr,
 JNIEXPORT void JNICALL
 Java_com_penrose_wallpaper_NativeBridge_readView(JNIEnv* env, jobject, jlong ptr, jfloatArray out) {
     auto* r = asRenderer(ptr); if (!r) return;
+    if (!out) return;
     if (env->GetArrayLength(out) < 4) return;
     float values[4] = { 1.0f, 0.0f, 0.0f, 0.0f };
     r->readView(&values[0], &values[1], &values[2], &values[3]);
@@ -291,8 +359,9 @@ Java_com_penrose_wallpaper_NativeBridge_surfaceGeometry(JNIEnv*, jobject, jlong 
 }
 
 JNIEXPORT void JNICALL
-Java_com_penrose_wallpaper_NativeBridge_setPageOffset(JNIEnv*, jobject, jlong ptr, jfloat xOffset) {
-    auto* r = asRenderer(ptr); if (r) r->setPageOffset(xOffset);
+Java_com_penrose_wallpaper_NativeBridge_setPageOffset(JNIEnv*, jobject, jlong ptr,
+                                                      jfloat xOffset, jint xPixelOffset) {
+    auto* r = asRenderer(ptr); if (r) r->setPageOffset(xOffset, static_cast<int>(xPixelOffset));
 }
 
 JNIEXPORT void JNICALL

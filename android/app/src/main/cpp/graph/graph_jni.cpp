@@ -33,6 +33,12 @@ Java_com_penrose_wallpaper_NativeBridge_graphIsVisible(JNIEnv*, jobject, jlong p
     return r->graphUi().visible() ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_penrose_wallpaper_NativeBridge_graphNeedsFrameLoop(JNIEnv*, jobject, jlong ptr) {
+    auto* r = asRenderer(ptr); if (!r) return JNI_FALSE;
+    return r->graph().needsFrameLoop() ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_penrose_wallpaper_NativeBridge_graphSave(JNIEnv* env, jobject, jlong ptr) {
     auto* r = asRenderer(ptr); if (!r) return env->NewStringUTF("");

@@ -2,7 +2,7 @@
 import type Node from 'three/src/nodes/core/Node.js';
 import type UniformNode from 'three/src/nodes/core/UniformNode.js';
 import {
-  abs, add, convertToTexture, dot, float, floor, Fn, fract, fwidth, luminance, max, mix, posterize,
+  abs, add, clamp, convertToTexture, dot, float, floor, Fn, fract, fwidth, luminance, max, mix, posterize,
   screenSize, screenUV, smoothstep, uniform, vec2, vec3, vec4,
 } from 'three/tsl';
 import { film } from 'three/addons/tsl/display/FilmNode.js';
@@ -14,7 +14,7 @@ import { dotScreen } from 'three/addons/tsl/display/DotScreenNode.js';
 import { chromaticAberration } from 'three/addons/tsl/display/ChromaticAberrationNode.js';
 import { bleach } from 'three/addons/tsl/display/BleachBypass.js';
 import { hashBlur } from 'three/addons/tsl/display/hashBlur.js';
-import { anamorphic } from 'three/addons/tsl/display/AnamorphicNode.js';
+import { anamorphic } from './anamorphicNode';
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
 import { smaa } from 'three/addons/tsl/display/SMAANode.js';
 import type { Vector3 } from 'three/webgpu';
@@ -93,7 +93,7 @@ export const FX_BUILDERS: Record<FxKind, FxBuilder> = {
   bloom: {
     createUniforms: () => ({ strength: uniform(0.5), radius: uniform(0.4), threshold: uniform(0.8) }),
     apply: (input, u) => {
-      const glow = bloom(input, 0.5, 0.4, 0.8);
+      const glow = bloom(convertToTexture(input).sample(screenUV), 0.5, 0.4, 0.8);
       glow.strength = u['strength']!;
       glow.radius = u['radius']!;
       glow.threshold = u['threshold']!;
@@ -144,17 +144,52 @@ export const FX_BUILDERS: Record<FxKind, FxBuilder> = {
       return bleach(base, u['opacity']!);
     },
   },
+  colorGrade: {
+    createUniforms: () => ({
+      exposure: uniform(0),
+      contrast: uniform(0),
+      saturation: uniform(1),
+      temperature: uniform(0),
+      tint: uniform(0),
+    }),
+    apply: (input, u) => {
+      const base = convertToTexture(input).sample(screenUV);
+      const exposureScale = float(1).add(u['exposure']!);
+      const exposed = base.rgb.mul(max(exposureScale, 0.0));
+      const contrasted = mix(vec3(0.5), exposed, float(1).add(u['contrast']!));
+      const luma = luminance(contrasted);
+      const saturated = mix(vec3(luma), contrasted, u['saturation']!);
+      const balanced = saturated.add(vec3(
+        u['temperature']!.mul(0.08),
+        u['tint']!.mul(0.055),
+        u['temperature']!.mul(-0.08),
+      ));
+      return vec4(clamp(balanced, 0.0, 1.0), base.a);
+    },
+  },
+  vignette: {
+    createUniforms: () => ({ amount: uniform(0), radius: uniform(0.72), softness: uniform(0.34), lift: uniform(0) }),
+    apply: (input, u) => {
+      const base = convertToTexture(input).sample(screenUV);
+      const centered = screenUV.sub(vec2(0.5, 0.5));
+      const distance2 = dot(centered, centered).mul(2.0);
+      const mask = smoothstep(u['radius']!, u['radius']!.add(max(u['softness']!, 0.01)), distance2)
+        .mul(u['amount']!);
+      const edgeScale = mix(float(1), u['lift']!, mask);
+      return vec4(clamp(base.rgb.mul(edgeScale), 0.0, 1.0), base.a);
+    },
+  },
   blur: {
     createUniforms: () => ({ amount: uniform(0) }),
     apply: (input, u) => hashBlur(convertToTexture(input), u['amount']!),
   },
   anamorphic: {
-    createUniforms: () => ({ threshold: uniform(0.9), scale: uniform(3) }),
+    createUniforms: () => ({ threshold: uniform(0.9), scale: uniform(3), intensity: uniform(0.6), tint: uniform(0) }),
     apply: (input, u, node) => {
       const samples = Number(node.selects['samples'] ?? '32');
-      const streaks = anamorphic(input, u['threshold']!, u['scale']!, samples);
+      const streaks = anamorphic(input, u['threshold']!, u['scale']!, samples, u['intensity']!, u['tint']!);
       const base = convertToTexture(input).sample(screenUV);
-      return add(base, streaks);
+      return add(base, streaks.getTextureNode().sample(screenUV));
     },
   },
   feedback: {

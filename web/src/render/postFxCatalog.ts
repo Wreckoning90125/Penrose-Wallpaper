@@ -36,6 +36,8 @@ export type FxKind =
   | 'chromaticAberration'
   | 'sepia'
   | 'bleach'
+  | 'colorGrade'
+  | 'vignette'
   | 'blur'
   | 'anamorphic'
   | 'feedback'
@@ -83,10 +85,18 @@ export const EFFECT_CATALOG: readonly FxDescriptor[] = [
     params: [P('mix', 'Mix', 0, 1, 0.01, 0)] },
   { kind: 'bleach', label: 'Bleach', icon: 'Sun', domain: 'display', compose: 'blend',
     params: [P('opacity', 'Opacity', 0, 1, 0.01, 0)] },
+  { kind: 'colorGrade', label: 'Color grade', icon: 'SlidersHorizontal', domain: 'display', compose: 'replace',
+    params: [P('exposure', 'Exposure', -1, 2, 0.01, 0), P('contrast', 'Contrast', -1, 1, 0.01, 0),
+             P('saturation', 'Saturation', 0, 2, 0.01, 1), P('temperature', 'Temp', -1, 1, 0.01, 0),
+             P('tint', 'Tint', -1, 1, 0.01, 0)] },
+  { kind: 'vignette', label: 'Vignette', icon: 'Focus', domain: 'display', compose: 'blend',
+    params: [P('amount', 'Amount', 0, 1, 0.01, 0), P('radius', 'Radius', 0, 1, 0.01, 0.72),
+             P('softness', 'Softness', 0.01, 1, 0.01, 0.34), P('lift', 'Lift', 0, 1, 0.01, 0)] },
   { kind: 'blur', label: 'Blur', icon: 'Haze', domain: 'linear', compose: 'replace',
     params: [P('amount', 'Amount', 0, 1, 0.01, 0)] },
   { kind: 'anamorphic', label: 'Anamorphic', icon: 'Zap', domain: 'linear', compose: 'additive',
-    params: [P('threshold', 'Threshold', 0, 1, 0.01, 0.9), P('scale', 'Scale', 0, 20, 0.1, 3)],
+    params: [P('threshold', 'Threshold', 0, 1, 0.01, 0.9), P('scale', 'Scale', 0, 20, 0.1, 3),
+             P('intensity', 'Intensity', 0, 2, 0.01, 0.6), P('tint', 'Blue flare', 0, 1, 0.01, 0)],
     selects: [{ key: 'samples', label: 'Quality', def: '32', options: [
       { value: '16', label: 'Low' }, { value: '32', label: 'Med' }, { value: '64', label: 'High' }] }] },
   { kind: 'feedback', label: 'Feedback', icon: 'Repeat', domain: 'display', compose: 'feedback',

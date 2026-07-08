@@ -791,6 +791,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
             15 -> R.array.seed_gailiunas_spiral_entries to R.array.seed_gailiunas_spiral_values
             16 -> R.array.seed_cairo_entries to R.array.seed_cairo_values
             17 -> R.array.seed_socolar_taylor_entries to R.array.seed_socolar_taylor_values
+            18 -> R.array.seed_d4_substitution_entries to R.array.seed_d4_substitution_values
             else -> R.array.seed_p3_entries to R.array.seed_p3_values
         }
         val entries = resources.getStringArray(entriesId)
@@ -806,13 +807,22 @@ class SettingsFragment : PreferenceFragmentCompat(),
         val generationPref = findPreference<SeekBarPreference>(Settings.KEY_GENERATION) ?: return
         val familyPref = findPreference<ListPreference>(Settings.KEY_FAMILY) ?: return
         val family = familyPref.value?.toIntOrNull() ?: 0
+        val layeredMonotile = family == 11 || family == 12
+        generationPref.title = getString(
+            if (layeredMonotile) R.string.tiling_layer_title else R.string.tiling_generation_title
+        )
+        generationPref.summary = getString(
+            if (layeredMonotile) R.string.tiling_layer_summary else R.string.tiling_generation_summary
+        )
         val maxGen = when (family) {
             2 -> 7       // Chair
             4 -> 6       // Pinwheel
             9, 10, 17 -> 7   // P1, Danzer, Socolar-Taylor
             13 -> 10     // Equithirds
-            11, 12, 14 -> 5  // Hat, Spectre, Cromwell KRT
-            15, 16 -> 8  // Gailiunas spirals, Cairo pentagons
+            12 -> 3      // Spectre
+            11 -> 4      // Hat
+            14 -> 5      // Cromwell KRT
+            15, 16, 18 -> 8  // Gailiunas spirals, Cairo pentagons, experimental D4 square weave
             else -> 8
         }
         generationPref.max = maxGen

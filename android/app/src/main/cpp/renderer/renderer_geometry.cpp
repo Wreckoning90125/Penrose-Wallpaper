@@ -25,6 +25,19 @@ namespace penrose {
 
 namespace {
 
+Point2 d4Orientation(uint8_t type) {
+    switch (type & 7u) {
+        case 1: return { 0.0f,  1.0f };
+        case 2: return {-1.0f,  0.0f };
+        case 3: return { 0.0f, -1.0f };
+        case 4: return {-1.0f,  0.0f };
+        case 5: return { 1.0f,  0.0f };
+        case 6: return { 0.0f,  1.0f };
+        case 7: return { 0.0f, -1.0f };
+        default: return { 1.0f, 0.0f };
+    }
+}
+
 int typeBucketCount(const std::vector<Tile>& tiles, Family family, const ClassSpec& cs) {
     if (family != Family::GailiunasSpiral) return cs.typeBuckets > 0 ? cs.typeBuckets : 1;
     uint8_t maxType = 0;
@@ -41,6 +54,23 @@ struct EdgeRec {
     EdgeKind k1, k2;
     uint8_t  ownerCount;
     bool     secondSet;
+};
+
+struct TopologyScalar {
+    float degree;
+    float motif;
+    float relaxed;
+    float biharmonic;
+};
+
+struct TopologySide {
+    size_t tileIndex;
+    uint8_t tileType;
+    EdgeKind kind;
+};
+
+struct TopologyRec {
+    std::vector<TopologySide> sides;
 };
 
 struct EdgeKey {
@@ -90,6 +120,7 @@ inline EdgeKey canonicalEdgeKey(const Edge& e, float scale) {
 // barycentric component pinned to 1 at every vertex so the fragment
 // shader's min(bary) never dips to 0 along a seam that is not a tile edge.
 struct Bary3 { float v[3][3]; };
+struct EdgeMetric3 { float v[3]; };
 
 struct TriIdx { int a, b, c; };
 
@@ -258,6 +289,53 @@ std::vector<TriIdx> triangulatePolygon(const Tile& t) {
     return out;
 }
 
+struct Point2 {
+    float x;
+    float y;
+};
+
+struct Bounds2 {
+    float minX;
+    float minY;
+    float maxX;
+    float maxY;
+    float rSqMax;
+};
+
+constexpr int kSpectreLogicalSides = 14;
+constexpr int kSpectreFillSamplesPerSide = 6;
+constexpr int kSpectreBorderSamplesPerSide = 12;
+constexpr float kSpectreCurveBulge = 0.6f;
+constexpr float kSpectreEdgeFadeFraction = 0.24f;
+constexpr int kSpectreRadialSupportBands = 13;
+constexpr size_t kMaxFillVertexCount = 3'200'000u;
+
+struct SpectreMeshDetail {
+    int samplesPerSide;
+    int radialBands;
+};
+
+constexpr SpectreMeshDetail kSpectreMeshDetailCandidates[] = {
+    { kSpectreFillSamplesPerSide, kSpectreRadialSupportBands },
+    { 5, 13 },
+    { 4, 13 },
+    { 4, 9 },
+    { 3, 9 },
+    { 3, 5 },
+    { 2, 3 },
+    { 2, 2 },
+    { 1, 1 },
+};
+
+struct BoundarySample {
+    float distance;
+    float gradX;
+    float gradY;
+};
+
+float signedArea(const std::vector<Point2>& pts);
+inline float cross(Point2 a, Point2 b);
+
 float distanceToSegment(float px, float py, float ax, float ay, float bx, float by) {
     const float dx = bx - ax;
     const float dy = by - ay;
@@ -269,6 +347,88 @@ float distanceToSegment(float px, float py, float ax, float ay, float bx, float 
     return std::sqrt((px - qx) * (px - qx) + (py - qy) * (py - qy));
 }
 
+BoundarySample segmentBoundaryDistanceSample(
+    float px,
+    float py,
+    float ax,
+    float ay,
+    float bx,
+    float by,
+    bool ccw
+) {
+    const float dx = bx - ax;
+    const float dy = by - ay;
+    const float lenSq = dx * dx + dy * dy;
+    if (lenSq <= 1e-12f) {
+        const float vx = px - ax;
+        const float vy = py - ay;
+        const float dist = std::sqrt(vx * vx + vy * vy);
+        return dist > 1e-7f
+            ? BoundarySample{ dist, vx / dist, vy / dist }
+            : BoundarySample{ 0.0f, 0.0f, 0.0f };
+    }
+    const float t = std::clamp(((px - ax) * dx + (py - ay) * dy) / lenSq, 0.0f, 1.0f);
+    const float qx = ax + dx * t;
+    const float qy = ay + dy * t;
+    const float vx = px - qx;
+    const float vy = py - qy;
+    const float dist = std::sqrt(vx * vx + vy * vy);
+    if (dist > 1e-7f) return { dist, vx / dist, vy / dist };
+    const float len = std::sqrt(lenSq);
+    return ccw
+        ? BoundarySample{ 0.0f, -dy / len, dx / len }
+        : BoundarySample{ 0.0f, dy / len, -dx / len };
+}
+
+BoundarySample nearestBoundaryDistanceSample(const Tile& t, float px, float py) {
+    const bool ccw = tileSignedArea(t) >= 0.0;
+    BoundarySample best{ 1e30f, 0.0f, 0.0f };
+    for (int i = 0; i < t.vcount; ++i) {
+        const int j = (i + 1) % t.vcount;
+        const BoundarySample sample = segmentBoundaryDistanceSample(px, py, t.x[i], t.y[i], t.x[j], t.y[j], ccw);
+        if (sample.distance < best.distance) best = sample;
+    }
+    if (best.distance >= 1e29f) return { 0.0f, 0.0f, 0.0f };
+    return best;
+}
+
+float smootherStep(float t) {
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+float smootherStepDerivative(float t) {
+    return 30.0f * t * t * (t - 1.0f) * (t - 1.0f);
+}
+
+float averageSegmentLength(const Tile& t) {
+    if (t.vcount <= 0) return 1.0f;
+    float total = 0.0f;
+    for (int i = 0; i < t.vcount; ++i) {
+        const int j = (i + 1) % t.vcount;
+        total += std::sqrt((t.x[j] - t.x[i]) * (t.x[j] - t.x[i]) + (t.y[j] - t.y[i]) * (t.y[j] - t.y[i]));
+    }
+    return total / static_cast<float>(t.vcount);
+}
+
+float spectreReliefReference(const Tile& t, float cx, float cy) {
+    if (t.vcount <= 0) return 1.0f;
+    float total = 0.0f;
+    for (int i = 0; i < t.vcount; ++i) {
+        total += std::sqrt((t.x[i] - cx) * (t.x[i] - cx) + (t.y[i] - cy) * (t.y[i] - cy));
+    }
+    return std::max(total / static_cast<float>(t.vcount), averageSegmentLength(t) * 0.5f);
+}
+
+Point2 spectreReliefGradient(const Tile& t, float px, float py, float referenceDistance) {
+    const BoundarySample boundary = nearestBoundaryDistanceSample(t, px, py);
+    const float edgeBand = std::max(referenceDistance * kSpectreEdgeFadeFraction, 1e-7f);
+    const float edgeT = std::clamp(boundary.distance / edgeBand, 0.0f, 1.0f);
+    const float edgeDerivative = edgeT > 0.0f && edgeT < 1.0f
+        ? smootherStepDerivative(edgeT) / edgeBand
+        : 0.0f;
+    return { edgeDerivative * boundary.gradX, edgeDerivative * boundary.gradY };
+}
+
 float distanceToBoundary(const Tile& t, float px, float py) {
     float best = 1e30f;
     for (int i = 0; i < t.vcount; ++i) {
@@ -278,12 +438,199 @@ float distanceToBoundary(const Tile& t, float px, float py) {
     return best < 1e29f ? best : 0.0f;
 }
 
+float normalizedDistanceToSegment(
+    float px,
+    float py,
+    float ax,
+    float ay,
+    float bx,
+    float by,
+    float reference
+) {
+    return std::clamp(
+        distanceToSegment(px, py, ax, ay, bx, by) / std::max(reference, 1e-6f),
+        0.0f,
+        1.0f);
+}
+
+bool baryComponentPinned(const Bary3& bary, int component) {
+    return std::fabs(bary.v[0][component] - 1.0f) <= 1e-6f
+        && std::fabs(bary.v[1][component] - 1.0f) <= 1e-6f
+        && std::fabs(bary.v[2][component] - 1.0f) <= 1e-6f;
+}
+
+EdgeMetric3 edgeMetricForTriangle(
+    float ax,
+    float ay,
+    float bx,
+    float by,
+    float cx,
+    float cy,
+    const Bary3& bary,
+    float reference
+) {
+    EdgeMetric3 metric{};
+    metric.v[0] = baryComponentPinned(bary, 0)
+        ? 1.0f
+        : normalizedDistanceToSegment(ax, ay, bx, by, cx, cy, reference);
+    metric.v[1] = baryComponentPinned(bary, 1)
+        ? 1.0f
+        : normalizedDistanceToSegment(bx, by, cx, cy, ax, ay, reference);
+    metric.v[2] = baryComponentPinned(bary, 2)
+        ? 1.0f
+        : normalizedDistanceToSegment(cx, cy, ax, ay, bx, by, reference);
+    return metric;
+}
+
 float tileDepthAt(const Tile& t, float px, float py, float cx, float cy, float apexDepth) {
     if (std::fabs(apexDepth) <= 1e-7f) return 0.0f;
     const float boundary = distanceToBoundary(t, px, py);
     const float centerDist = std::sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy));
     const float denom = boundary + centerDist;
     return denom > 1e-7f ? apexDepth * boundary / denom : 0.0f;
+}
+
+bool isSpectreCurveTile(const Tile& tile, Family family);
+
+size_t spectreSourceTrianglesPerTile(const SpectreMeshDetail& detail) {
+    const size_t sampleCount = static_cast<size_t>(kSpectreLogicalSides * std::max(1, detail.samplesPerSide));
+    constexpr size_t reliefBandCount = 2u;
+    const size_t capBandCount = static_cast<size_t>(std::max(1, detail.radialBands));
+    return sampleCount * (2u * reliefBandCount + 2u * capBandCount - 1u);
+}
+
+SpectreMeshDetail spectreMeshDetailForTiles(const std::vector<Tile>& tiles, Family family) {
+    if (family != Family::Spectre) return kSpectreMeshDetailCandidates[0];
+    size_t spectreTileCount = 0;
+    for (const Tile& tile : tiles) {
+        if (isSpectreCurveTile(tile, family)) ++spectreTileCount;
+    }
+    if (spectreTileCount == 0) return kSpectreMeshDetailCandidates[0];
+    const size_t maxSourceTriangles = kMaxFillVertexCount / 3u;
+    for (const SpectreMeshDetail& detail : kSpectreMeshDetailCandidates) {
+        if (spectreTileCount * spectreSourceTrianglesPerTile(detail) <= maxSourceTriangles) return detail;
+    }
+    return kSpectreMeshDetailCandidates[sizeof(kSpectreMeshDetailCandidates) / sizeof(kSpectreMeshDetailCandidates[0]) - 1u];
+}
+
+int clampQuadraticSubdivision(int requested, size_t sourceTriangleCount, size_t maxVertices) {
+    if (sourceTriangleCount == 0) return requested;
+    const double maxSub = std::floor(std::sqrt(static_cast<double>(maxVertices) / static_cast<double>(sourceTriangleCount * 3u)));
+    return std::max(1, std::min(requested, static_cast<int>(std::max(1.0, maxSub))));
+}
+
+Point2 sourcePoint(const Tile& t, int index) {
+    return { t.x[index], t.y[index] };
+}
+
+Point2 sourceLerp(Point2 a, Point2 b, float u) {
+    return { a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u };
+}
+
+Point2 sourceEdgeInwardNormal(const Tile& t, int edge, bool ccw) {
+    const int next = (edge + 1) % t.vcount;
+    const float dx = t.x[next] - t.x[edge];
+    const float dy = t.y[next] - t.y[edge];
+    const float edgeLen = std::sqrt(dx * dx + dy * dy);
+    if (edgeLen <= 1e-7f) return { 0.0f, 0.0f };
+    return ccw
+        ? Point2{ -dy / edgeLen, dx / edgeLen }
+        : Point2{ dy / edgeLen, -dx / edgeLen };
+}
+
+Point2 sourceVertexInwardNormal(const Tile& t, int index, bool ccw) {
+    const int prev = (index + t.vcount - 1) % t.vcount;
+    const Point2 a = sourceEdgeInwardNormal(t, prev, ccw);
+    const Point2 b = sourceEdgeInwardNormal(t, index, ccw);
+    const float nx = a.x + b.x;
+    const float ny = a.y + b.y;
+    const float normalLen = std::sqrt(nx * nx + ny * ny);
+    if (normalLen > 1e-7f) return { nx / normalLen, ny / normalLen };
+    return b;
+}
+
+Point2 offsetSpectreRingPoint(const Tile& t, Point2 p, Point2 normal, Point2 center, float distance) {
+    const float centerDx = center.x - p.x;
+    const float centerDy = center.y - p.y;
+    const float centerDistance = std::sqrt(centerDx * centerDx + centerDy * centerDy);
+    if (centerDistance <= 1e-7f || distance <= 1e-7f) return p;
+    const float normalLen = std::sqrt(normal.x * normal.x + normal.y * normal.y);
+    if (normalLen <= 1e-7f) return sourceLerp(p, center, std::min(0.5f, distance / centerDistance));
+    float step = std::min(distance, centerDistance * 0.48f);
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        const Point2 candidate{ p.x + normal.x / normalLen * step, p.y + normal.y / normalLen * step };
+        if (pointInPolygon(t, candidate.x, candidate.y)) return candidate;
+        step *= 0.5f;
+    }
+    float u = std::min(0.48f, distance / centerDistance);
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        const Point2 candidate = sourceLerp(p, center, u);
+        if (pointInPolygon(t, candidate.x, candidate.y)) return candidate;
+        u *= 0.5f;
+    }
+    return p;
+}
+
+void appendSourceTri(
+    std::vector<SourceTri>& out,
+    Point2 a,
+    Point2 b,
+    Point2 c,
+    int p0,
+    int p1,
+    int p2
+) {
+    if (std::fabs(orient2(a.x, a.y, b.x, b.y, c.x, c.y)) <= 1e-12) return;
+    out.push_back({ a.x, a.y, 0.0f, b.x, b.y, 0.0f, c.x, c.y, 0.0f, p0, p1, p2 });
+}
+
+double sourceDistanceSquared(Point2 a, Point2 b) {
+    const double dx = static_cast<double>(b.x) - static_cast<double>(a.x);
+    const double dy = static_cast<double>(b.y) - static_cast<double>(a.y);
+    return dx * dx + dy * dy;
+}
+
+double sourceTriangleQuality(Point2 a, Point2 b, Point2 c) {
+    const double area = std::fabs(orient2(a.x, a.y, b.x, b.y, c.x, c.y));
+    if (area <= 1e-12) return -1.0;
+    const double ab = sourceDistanceSquared(a, b);
+    const double bc = sourceDistanceSquared(b, c);
+    const double ca = sourceDistanceSquared(c, a);
+    const double longest = std::max(std::max(ab, bc), std::max(ca, 1e-12));
+    return area / longest;
+}
+
+bool splitSourceQuadOnBD(Point2 a, Point2 b, Point2 c, Point2 d, bool alternateTie) {
+    const double acScore = std::min(
+        sourceTriangleQuality(a, b, c),
+        sourceTriangleQuality(a, c, d));
+    const double bdScore = std::min(
+        sourceTriangleQuality(a, b, d),
+        sourceTriangleQuality(b, c, d));
+    if (bdScore > acScore + 1e-12) return true;
+    if (acScore > bdScore + 1e-12) return false;
+    return alternateTie;
+}
+
+void appendSourceQuad(
+    std::vector<SourceTri>& out,
+    Point2 a,
+    Point2 b,
+    Point2 c,
+    Point2 d,
+    int pa,
+    int pb,
+    int pc,
+    int pd,
+    bool alternateTie
+) {
+    if (splitSourceQuadOnBD(a, b, c, d, alternateTie)) {
+        appendSourceTri(out, a, b, d, pa, pb, pd);
+        appendSourceTri(out, b, c, d, pb, pc, pd);
+        return;
+    }
+    appendSourceTri(out, a, b, c, pa, pb, pc);
+    appendSourceTri(out, a, c, d, pa, pc, pd);
 }
 
 std::vector<SourceTri> sourceTrianglesForCenterDepth(const Tile& t, float cx, float cy, float centerDepth) {
@@ -323,6 +670,89 @@ std::vector<SourceTri> sourceTrianglesForCenterDepth(const Tile& t, float cx, fl
     return out;
 }
 
+std::vector<SourceTri> sourceTrianglesForSpectre(
+    const Tile& t,
+    Point2 center,
+    const SpectreMeshDetail& detail
+) {
+    std::vector<SourceTri> out;
+    if (t.vcount < 3) return out;
+    const float reference = spectreReliefReference(t, center.x, center.y);
+    const float edgeBand = std::max(reference * kSpectreEdgeFadeFraction, 1e-7f);
+    const bool ccw = tileSignedArea(t) >= 0.0;
+    constexpr float ringFractions[] = { 0.0f, 0.55f, 1.15f };
+    std::vector<std::vector<Point2>> rings;
+    rings.reserve(sizeof(ringFractions) / sizeof(ringFractions[0]));
+    for (const float fraction : ringFractions) {
+        std::vector<Point2> ring;
+        ring.reserve(t.vcount);
+        for (int i = 0; i < t.vcount; ++i) {
+            const Point2 p = sourcePoint(t, i);
+            if (fraction <= 0.0f) {
+                ring.push_back(p);
+            } else {
+                ring.push_back(offsetSpectreRingPoint(
+                    t,
+                    p,
+                    sourceVertexInwardNormal(t, i, ccw),
+                    center,
+                    edgeBand * fraction));
+            }
+        }
+        rings.push_back(std::move(ring));
+    }
+
+    const int edgeCount = t.vcount;
+    out.reserve(spectreSourceTrianglesPerTile(detail));
+    for (int ringIndex = 0; ringIndex + 1 < static_cast<int>(rings.size()); ++ringIndex) {
+        const std::vector<Point2>& outer = rings[ringIndex];
+        const std::vector<Point2>& inner = rings[ringIndex + 1];
+        for (int i = 0; i < edgeCount; ++i) {
+            const int next = (i + 1) % edgeCount;
+            if (ringIndex == 0) {
+                appendSourceQuad(out, outer[i], outer[next], inner[next], inner[i], i, next, -1, -1, (ringIndex + i) % 2 == 1);
+            } else {
+                appendSourceQuad(out, outer[i], outer[next], inner[next], inner[i], -1, -1, -1, -1, (ringIndex + i) % 2 == 1);
+            }
+        }
+    }
+
+    const std::vector<Point2>& inner = rings.back();
+    std::vector<std::vector<Point2>> capRings;
+    const int capBands = std::max(1, detail.radialBands);
+    capRings.reserve(static_cast<size_t>(capBands));
+    for (int band = 1; band <= capBands; ++band) {
+        const float u = std::sqrt(static_cast<float>(band) / static_cast<float>(capBands));
+        std::vector<Point2> ring;
+        ring.reserve(edgeCount);
+        for (const Point2 p : inner) ring.push_back(sourceLerp(center, p, u));
+        capRings.push_back(std::move(ring));
+    }
+    for (int ringIndex = 0; ringIndex < capBands; ++ringIndex) {
+        const std::vector<Point2>& outer = capRings[ringIndex];
+        const std::vector<Point2>* innerRing = ringIndex == 0 ? nullptr : &capRings[ringIndex - 1];
+        const bool useCentralTriangulation = edgeCount <= kSpectreLogicalSides * 2;
+        for (int i = 0; i < edgeCount; ++i) {
+            const int next = (i + 1) % edgeCount;
+            if (innerRing == nullptr) {
+                if (useCentralTriangulation) {
+                    const std::vector<TriIdx> central = triangulatePointPolygonByArea(outer);
+                    if (!central.empty()) {
+                        for (const TriIdx& tri : central) {
+                            appendSourceTri(out, outer[tri.a], outer[tri.b], outer[tri.c], -1, -1, -1);
+                        }
+                        break;
+                    }
+                }
+                appendSourceTri(out, center, outer[i], outer[next], -1, -1, -1);
+            } else {
+                appendSourceQuad(out, (*innerRing)[i], outer[i], outer[next], (*innerRing)[next], -1, -1, -1, -1, (ringIndex + i) % 2 == 1);
+            }
+        }
+    }
+    return out;
+}
+
 inline bool hideSeam(Family fam, EdgeKind k1, EdgeKind k2) {
     switch (familyInfo(fam).hideSeamMode) {
         case 1:  return k1 == EdgeKind::Base && k2 == EdgeKind::Base;  // P3
@@ -331,15 +761,19 @@ inline bool hideSeam(Family fam, EdgeKind k1, EdgeKind k2) {
     }
 }
 
-struct Point2 {
-    float x;
-    float y;
-};
-
 struct BorderTileEdge {
     std::vector<Point2> pts;
     bool visible = false;
 };
+
+int borderLogicalSideCount(const Tile& tile, Family family) {
+    if (family == Family::Spectre
+        && tile.vcount >= kSpectreLogicalSides
+        && tile.vcount % kSpectreLogicalSides == 0) {
+        return kSpectreLogicalSides;
+    }
+    return tile.vcount;
+}
 
 inline Point2 add(Point2 a, Point2 b) { return { a.x + b.x, a.y + b.y }; }
 inline Point2 sub(Point2 a, Point2 b) { return { a.x - b.x, a.y - b.y }; }
@@ -357,6 +791,78 @@ Point2 lerp(Point2 a, Point2 b, float t) {
     return { a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t };
 }
 
+bool isSpectreCurveTile(const Tile& tile, Family family) {
+    return family == Family::Spectre
+        && tile.vcount >= kSpectreLogicalSides
+        && tile.vcount % kSpectreLogicalSides == 0;
+}
+
+Point2 tilePoint(const Tile& tile, int index) {
+    return { tile.x[index], tile.y[index] };
+}
+
+Point2 spectreAnchorPoint(const Tile& tile, int side) {
+    const int stride = std::max(1, static_cast<int>(tile.vcount) / kSpectreLogicalSides);
+    return tilePoint(tile, side * stride);
+}
+
+Point2 cubicPoint(Point2 p0, Point2 p1, Point2 p2, Point2 p3, float t) {
+    const float u = 1.0f - t;
+    const float uu = u * u;
+    const float tt = t * t;
+    return {
+        uu * u * p0.x + 3.0f * uu * t * p1.x + 3.0f * u * tt * p2.x + tt * t * p3.x,
+        uu * u * p0.y + 3.0f * uu * t * p1.y + 3.0f * u * tt * p2.y + tt * t * p3.y,
+    };
+}
+
+Point2 spectreCurvePoint(const Tile& tile, int side, float t) {
+    const Point2 start = spectreAnchorPoint(tile, side);
+    const Point2 end = spectreAnchorPoint(tile, (side + 1) % kSpectreLogicalSides);
+    const Point2 v = sub(end, start);
+    const Point2 w{ -v.y, v.x };
+    const float bulge = (side % 2 == 0) ? kSpectreCurveBulge : -kSpectreCurveBulge;
+    const Point2 c1 = add(start, add(mul(v, 0.33f), mul(w, bulge)));
+    const Point2 c2 = add(start, add(mul(v, 0.67f), mul(w, bulge)));
+    return cubicPoint(start, c1, c2, end, t);
+}
+
+Point2 spectreKeyCenter(const Tile& tile) {
+    constexpr int kKeyIndices[4] = { 4, 6, 8, 12 };
+    Point2 sum{ 0.0f, 0.0f };
+    for (const int index : kKeyIndices) sum = add(sum, spectreAnchorPoint(tile, index));
+    return mul(sum, 0.25f);
+}
+
+Tile spectreFlattenedTile(const Tile& tile, Family family, int samplesPerSide) {
+    if (!isSpectreCurveTile(tile, family)) return tile;
+    const int samples = std::max(1, std::min(samplesPerSide, kMaxTileVerts / kSpectreLogicalSides));
+    const int targetCount = samples * kSpectreLogicalSides;
+    if (tile.vcount == targetCount && samples > 1) return tile;
+
+    Tile out = tile;
+    out.vcount = static_cast<uint8_t>(targetCount);
+    int cursor = 0;
+    for (int side = 0; side < kSpectreLogicalSides; ++side) {
+        for (int sample = 0; sample < samples; ++sample) {
+            const float t = static_cast<float>(sample) / static_cast<float>(samples);
+            const Point2 p = spectreCurvePoint(tile, side, t);
+            out.x[cursor] = p.x;
+            out.y[cursor] = p.y;
+            ++cursor;
+        }
+    }
+    return out;
+}
+
+void appendSpectreLogicalEdges(const Tile& tile, std::vector<Edge>& out) {
+    for (int side = 0; side < kSpectreLogicalSides; ++side) {
+        const Point2 a = spectreAnchorPoint(tile, side);
+        const Point2 b = spectreAnchorPoint(tile, (side + 1) % kSpectreLogicalSides);
+        out.push_back({ a.x, a.y, b.x, b.y, EdgeKind::ChairEdge, tile.type });
+    }
+}
+
 float signedArea(const std::vector<Point2>& pts) {
     float twice = 0.0f;
     for (size_t i = 0; i < pts.size(); ++i) {
@@ -365,6 +871,63 @@ float signedArea(const std::vector<Point2>& pts) {
         twice += cross(a, b);
     }
     return twice * 0.5f;
+}
+
+bool pointInTriangle(const std::vector<Point2>& pts, int p, int a, int b, int c, bool ccw) {
+    const double ab = orient2(pts[a].x, pts[a].y, pts[b].x, pts[b].y, pts[p].x, pts[p].y);
+    const double bc = orient2(pts[b].x, pts[b].y, pts[c].x, pts[c].y, pts[p].x, pts[p].y);
+    const double ca = orient2(pts[c].x, pts[c].y, pts[a].x, pts[a].y, pts[p].x, pts[p].y);
+    constexpr double kEps = 1e-10;
+    return ccw ? (ab >= -kEps && bc >= -kEps && ca >= -kEps)
+               : (ab <=  kEps && bc <=  kEps && ca <=  kEps);
+}
+
+std::vector<TriIdx> triangulatePointPolygonByArea(const std::vector<Point2>& pts) {
+    std::vector<TriIdx> out;
+    if (pts.size() < 3) return out;
+    if (pts.size() == 3) {
+        out.push_back({0, 1, 2});
+        return out;
+    }
+    const float area = signedArea(pts);
+    if (std::fabs(area) <= 1e-12f) return out;
+    const bool ccw = area > 0.0f;
+    std::vector<int> remaining;
+    remaining.reserve(pts.size());
+    for (int i = 0; i < static_cast<int>(pts.size()); ++i) remaining.push_back(i);
+
+    while (remaining.size() > 3) {
+        int earAt = -1;
+        double bestScore = 1e300;
+        TriIdx best{ -1, -1, -1 };
+        for (int i = 0; i < static_cast<int>(remaining.size()); ++i) {
+            const int ia = remaining[(i + remaining.size() - 1) % remaining.size()];
+            const int ib = remaining[i];
+            const int ic = remaining[(i + 1) % remaining.size()];
+            const double turn = orient2(pts[ia].x, pts[ia].y, pts[ib].x, pts[ib].y, pts[ic].x, pts[ic].y);
+            if (ccw ? turn <= 1e-12 : turn >= -1e-12) continue;
+            bool blocked = false;
+            for (int idx : remaining) {
+                if (idx == ia || idx == ib || idx == ic) continue;
+                if (pointInTriangle(pts, idx, ia, ib, ic, ccw)) {
+                    blocked = true;
+                    break;
+                }
+            }
+            if (blocked) continue;
+            const double score = std::fabs(turn);
+            if (score < bestScore) {
+                bestScore = score;
+                earAt = i;
+                best = { ia, ib, ic };
+            }
+        }
+        if (earAt < 0) return {};
+        out.push_back(best);
+        remaining.erase(remaining.begin() + earAt);
+    }
+    out.push_back({remaining[0], remaining[1], remaining[2]});
+    return out;
 }
 
 EdgeKey canonicalEdgeKey(float ax, float ay, float bx, float by, float scale) {
@@ -379,11 +942,16 @@ std::unordered_set<EdgeKey, EdgeKeyHash> visibleEdgeKeysForTiles(
 ) {
     std::vector<Edge> edges;
     size_t edgeCapacity = 0;
-    for (const Tile& tile : tiles) edgeCapacity += tile.vcount;
+    for (const Tile& tile : tiles) {
+        edgeCapacity += isSpectreCurveTile(tile, family)
+            ? static_cast<size_t>(kSpectreLogicalSides)
+            : static_cast<size_t>(tile.vcount);
+    }
     edges.reserve(edgeCapacity);
     for (const Tile& tile : tiles) {
-        if (tile.vcount == 3) edgesPenrose(tile, edges);
-        else                  edgesChair(tile, edges);
+        if (isSpectreCurveTile(tile, family)) appendSpectreLogicalEdges(tile, edges);
+        else if (tile.vcount == 3)            edgesPenrose(tile, edges);
+        else                                  edgesChair(tile, edges);
     }
 
     std::unordered_map<EdgeKey, EdgeRec, EdgeKeyHash> edgeMap;
@@ -418,6 +986,166 @@ std::unordered_set<EdgeKey, EdgeKeyHash> visibleEdgeKeysForTiles(
     return visible;
 }
 
+void addTopologySide(
+    std::unordered_map<EdgeKey, TopologyRec, EdgeKeyHash>& edgeMap,
+    const Tile& tile,
+    size_t tileIndex,
+    float ax,
+    float ay,
+    float bx,
+    float by,
+    EdgeKind kind,
+    float keyScale
+) {
+    const EdgeKey key = canonicalEdgeKey(ax, ay, bx, by, keyScale);
+    edgeMap[key].sides.push_back(TopologySide{ tileIndex, tile.type, kind });
+}
+
+std::vector<float> relaxScalarField(
+    const std::vector<float>& source,
+    const std::vector<std::vector<size_t>>& neighbors,
+    const std::vector<uint8_t>& boundary,
+    int iterations
+) {
+    std::vector<float> current = source;
+    std::vector<float> next(source.size(), 0.0f);
+    for (int iteration = 0; iteration < iterations; ++iteration) {
+        for (size_t i = 0; i < source.size(); ++i) {
+            const std::vector<size_t>& list = neighbors[i];
+            if (boundary[i] != 0u || list.empty()) {
+                next[i] = source[i];
+                continue;
+            }
+            float sum = 0.0f;
+            for (size_t neighbor : list) sum += current[neighbor];
+            next[i] = sum / static_cast<float>(list.size());
+        }
+        current.swap(next);
+    }
+    return current;
+}
+
+std::vector<float> tileTopologyRings(const std::vector<Tile>& tiles, Family family) {
+    std::vector<TilePoint> centers(tiles.size(), TilePoint{ 0.0, 0.0 });
+    std::vector<float> rings(tiles.size(), 0.0f);
+    double maxTopologyX = 0.0;
+    double maxTopologyY = 0.0;
+    double maxTopologyR = 0.0;
+    for (size_t tileIndex = 0; tileIndex < tiles.size(); ++tileIndex) {
+        TilePoint center = tileAreaCentroid(tiles[tileIndex]);
+        if (!std::isfinite(center.x) || !std::isfinite(center.y)) {
+            center = TilePoint{ 0.0, 0.0 };
+        }
+        centers[tileIndex] = center;
+        maxTopologyX = std::max(maxTopologyX, std::fabs(center.x));
+        maxTopologyY = std::max(maxTopologyY, std::fabs(center.y));
+        maxTopologyR = std::max(maxTopologyR, std::hypot(center.x, center.y));
+    }
+
+    const bool ringChebyshev = familyInfo(family).cls.ringChebyshev;
+    for (size_t tileIndex = 0; tileIndex < tiles.size(); ++tileIndex) {
+        const TilePoint center = centers[tileIndex];
+        if (ringChebyshev) {
+            const double x = maxTopologyX > 0.0 ? std::fabs(center.x) / maxTopologyX : 0.0;
+            const double y = maxTopologyY > 0.0 ? std::fabs(center.y) / maxTopologyY : 0.0;
+            rings[tileIndex] = static_cast<float>(std::clamp(std::max(x, y), 0.0, 1.0));
+        } else {
+            const double r = maxTopologyR > 0.0
+                ? std::hypot(center.x, center.y) / maxTopologyR
+                : 0.0;
+            rings[tileIndex] = static_cast<float>(std::clamp(r, 0.0, 1.0));
+        }
+    }
+    return rings;
+}
+
+std::vector<TopologyScalar> tileTopologyScalars(
+    const std::vector<Tile>& tiles,
+    Family family,
+    float keyScale
+) {
+    std::unordered_map<EdgeKey, TopologyRec, EdgeKeyHash> edgeMap;
+    size_t edgeCapacity = 0;
+    for (const Tile& tile : tiles) {
+        edgeCapacity += isSpectreCurveTile(tile, family)
+            ? static_cast<size_t>(kSpectreLogicalSides)
+            : static_cast<size_t>(tile.vcount);
+    }
+    edgeMap.reserve(edgeCapacity / 2 + 16);
+    for (size_t tileIndex = 0; tileIndex < tiles.size(); ++tileIndex) {
+        const Tile& tile = tiles[tileIndex];
+        if (isSpectreCurveTile(tile, family)) {
+            for (int side = 0; side < kSpectreLogicalSides; ++side) {
+                const Point2 a = spectreAnchorPoint(tile, side);
+                const Point2 b = spectreAnchorPoint(tile, (side + 1) % kSpectreLogicalSides);
+                addTopologySide(edgeMap, tile, tileIndex, a.x, a.y, b.x, b.y, EdgeKind::ChairEdge, keyScale);
+            }
+        } else if (tile.vcount == 3) {
+            addTopologySide(edgeMap, tile, tileIndex, tile.x[0], tile.y[0], tile.x[1], tile.y[1], EdgeKind::Leg, keyScale);
+            addTopologySide(edgeMap, tile, tileIndex, tile.x[1], tile.y[1], tile.x[2], tile.y[2], EdgeKind::Leg, keyScale);
+            addTopologySide(edgeMap, tile, tileIndex, tile.x[0], tile.y[0], tile.x[2], tile.y[2], EdgeKind::Base, keyScale);
+        } else {
+            for (int i = 0; i < tile.vcount; ++i) {
+                const int j = (i + 1) % tile.vcount;
+                addTopologySide(edgeMap, tile, tileIndex, tile.x[i], tile.y[i], tile.x[j], tile.y[j], EdgeKind::ChairEdge, keyScale);
+            }
+        }
+    }
+
+    std::vector<std::vector<uint8_t>> neighborTypes(tiles.size());
+    std::vector<std::vector<size_t>> neighborIndices(tiles.size());
+    for (const auto& kv : edgeMap) {
+        const TopologyRec& rec = kv.second;
+        if (rec.sides.size() < 2) continue;
+        const bool hiddenSeam = rec.sides.size() == 2
+            && rec.sides[0].tileType == rec.sides[1].tileType
+            && hideSeam(family, rec.sides[0].kind, rec.sides[1].kind);
+        if (hiddenSeam) continue;
+        for (const TopologySide& side : rec.sides) {
+            std::vector<uint8_t>& typeList = neighborTypes[side.tileIndex];
+            std::vector<size_t>& indexList = neighborIndices[side.tileIndex];
+            for (const TopologySide& other : rec.sides) {
+                if (other.tileIndex == side.tileIndex) continue;
+                bool alreadyNeighbor = false;
+                for (size_t existing : indexList) {
+                    if (existing == other.tileIndex) {
+                        alreadyNeighbor = true;
+                        break;
+                    }
+                }
+                if (alreadyNeighbor) continue;
+                typeList.push_back(other.tileType);
+                indexList.push_back(other.tileIndex);
+            }
+        }
+    }
+
+    std::vector<float> source(tiles.size(), 0.0f);
+    const std::vector<float> rings = tileTopologyRings(tiles, family);
+    std::vector<uint8_t> boundary(tiles.size(), uint8_t{0});
+    std::vector<TopologyScalar> out(tiles.size(), TopologyScalar{ 0.0f, 0.0f, 0.0f, 0.0f });
+    for (size_t tileIndex = 0; tileIndex < tiles.size(); ++tileIndex) {
+        std::vector<uint8_t>& list = neighborTypes[tileIndex];
+        std::sort(list.begin(), list.end());
+        const float maxDegree = std::max(1.0f, static_cast<float>(tiles[tileIndex].vcount));
+        out[tileIndex].degree = std::clamp(static_cast<float>(list.size()) / maxDegree, 0.0f, 1.0f);
+        boundary[tileIndex] = list.size() < static_cast<size_t>(tiles[tileIndex].vcount) ? uint8_t{1} : uint8_t{0};
+        uint32_t hash = static_cast<uint32_t>(tiles[tileIndex].type + 1u) * 2166136261u;
+        for (uint8_t type : list) {
+            hash = (hash ^ static_cast<uint32_t>(type + 31u)) * 16777619u;
+        }
+        out[tileIndex].motif = static_cast<float>(hash % 997u) / 996.0f;
+        source[tileIndex] = std::clamp(rings[tileIndex] * 0.62f + out[tileIndex].motif * 0.38f, 0.0f, 1.0f);
+    }
+    const std::vector<float> relaxed = relaxScalarField(source, neighborIndices, boundary, 28);
+    const std::vector<float> biharmonic = relaxScalarField(relaxed, neighborIndices, boundary, 28);
+    for (size_t tileIndex = 0; tileIndex < tiles.size(); ++tileIndex) {
+        out[tileIndex].relaxed = relaxed[tileIndex];
+        out[tileIndex].biharmonic = biharmonic[tileIndex];
+    }
+    return out;
+}
+
 float averageTileRadius(const std::vector<Tile>& tiles) {
     double sum = 0.0;
     int count = 0;
@@ -431,6 +1159,131 @@ float averageTileRadius(const std::vector<Tile>& tiles) {
         }
     }
     return count > 0 ? static_cast<float>(sum / count) : 1.0f;
+}
+
+float tileRadius(const Tile& tile, float cx, float cy) {
+    if (tile.vcount <= 0) return 1.0f;
+    double sum = 0.0;
+    for (int i = 0; i < tile.vcount; ++i) {
+        const double dx = static_cast<double>(tile.x[i]) - static_cast<double>(cx);
+        const double dy = static_cast<double>(tile.y[i]) - static_cast<double>(cy);
+        sum += std::sqrt(dx * dx + dy * dy);
+    }
+    return std::max(1e-6f, static_cast<float>(sum / static_cast<double>(tile.vcount)));
+}
+
+Bounds2 tileBounds(const std::vector<Tile>& tiles) {
+    Bounds2 b{ 1e9f, 1e9f, -1e9f, -1e9f, 0.0f };
+    for (const Tile& tile : tiles) {
+        for (int i = 0; i < tile.vcount; ++i) {
+            const float x = static_cast<float>(tile.x[i]);
+            const float y = static_cast<float>(tile.y[i]);
+            b.minX = std::min(b.minX, x);
+            b.maxX = std::max(b.maxX, x);
+            b.minY = std::min(b.minY, y);
+            b.maxY = std::max(b.maxY, y);
+            b.rSqMax = std::max(b.rSqMax, x * x + y * y);
+        }
+    }
+    return b;
+}
+
+bool tileIntersectsWindow(const Tile& tile, float centerX, float centerY, float halfX, float halfY) {
+    float minX = 1e9f, minY = 1e9f;
+    float maxX = -1e9f, maxY = -1e9f;
+    for (int i = 0; i < tile.vcount; ++i) {
+        const float x = static_cast<float>(tile.x[i]);
+        const float y = static_cast<float>(tile.y[i]);
+        minX = std::min(minX, x);
+        maxX = std::max(maxX, x);
+        minY = std::min(minY, y);
+        maxY = std::max(maxY, y);
+    }
+    return maxX >= centerX - halfX
+        && minX <= centerX + halfX
+        && maxY >= centerY - halfY
+        && minY <= centerY + halfY;
+}
+
+WindowBounds windowBoundsForView(
+    const Bounds2& fullBounds,
+    const Settings& settings,
+    const LiveView& view,
+    float pagePanX,
+    uint32_t surfaceWidth,
+    uint32_t surfaceHeight,
+    int screenWidth,
+    int screenHeight,
+    float marginRadius
+) {
+    const float surfW = surfaceWidth > 0 ? static_cast<float>(surfaceWidth) : 1080.0f;
+    const float surfH = surfaceHeight > 0 ? static_cast<float>(surfaceHeight) : 1920.0f;
+    const float screenW = screenWidth > 0 ? static_cast<float>(screenWidth) : surfW;
+    const float screenH = screenHeight > 0 ? static_cast<float>(screenHeight) : surfH;
+    const float aspect = screenW / std::max(screenH, 1.0f);
+    const float gw = std::max(fullBounds.maxX - fullBounds.minX, 1e-3f);
+    const float gh = std::max(fullBounds.maxY - fullBounds.minY, 1e-3f);
+    const float baseScale = std::min(2.0f / gw, 2.0f / gh) * 0.95f;
+    float sX = (aspect >= 1.0f ? baseScale / aspect : baseScale) * view.zoom;
+    float sY = (aspect >= 1.0f ? baseScale          : baseScale * aspect) * view.zoom;
+    sX *= screenW / surfW;
+    sY *= screenH / surfH;
+    sX = std::max(std::abs(sX), 1e-4f);
+    sY = std::max(std::abs(sY), 1e-4f);
+
+    const float activePagePanX = settings.panMode == 2 ? pagePanX : 0.0f;
+    const float tX = ((view.panX + activePagePanX) / surfW) * 2.0f;
+    const float tY = (view.panY / surfH) * 2.0f;
+    const float cosR = std::cos(view.rotation);
+    const float sinR = std::sin(view.rotation);
+    const float centerX = (-tX * cosR - tY * sinR) / sX;
+    const float centerY = ( tX * sinR - tY * cosR) / sY;
+    const float halfX = (1.0f / sX) * 1.9f + marginRadius * 4.0f;
+    const float halfY = (1.0f / sY) * 1.9f + marginRadius * 4.0f;
+    return {
+        centerX - halfX,
+        centerX + halfX,
+        centerY - halfY,
+        centerY + halfY,
+    };
+}
+
+std::vector<Tile> windowTilesForView(
+    const std::vector<Tile>& fullTiles,
+    const Bounds2& fullBounds,
+    const Settings& settings,
+    const LiveView& view,
+    float pagePanX,
+    uint32_t surfaceWidth,
+    uint32_t surfaceHeight,
+    int screenWidth,
+    int screenHeight
+) {
+    if (settings.panMode == 0 || fullTiles.empty()) return fullTiles;
+    const float meanRadius = averageTileRadius(fullTiles);
+    const WindowBounds window = windowBoundsForView(
+        fullBounds,
+        settings,
+        view,
+        pagePanX,
+        surfaceWidth,
+        surfaceHeight,
+        screenWidth,
+        screenHeight,
+        meanRadius);
+
+    std::vector<Tile> windowed;
+    windowed.reserve(fullTiles.size());
+    const float centerX = (window.minX + window.maxX) * 0.5f;
+    const float centerY = (window.minY + window.maxY) * 0.5f;
+    const float halfX = (window.maxX - window.minX) * 0.5f;
+    const float halfY = (window.maxY - window.minY) * 0.5f;
+    for (const Tile& tile : fullTiles) {
+        if (tileIntersectsWindow(tile, centerX, centerY, halfX, halfY)) {
+            windowed.push_back(tile);
+        }
+    }
+    return windowed.empty() ? fullTiles : windowed;
 }
 
 Point2 radialUnproject(Point2 p, float scale) {
@@ -461,12 +1314,218 @@ void pushBakedBorderTri(
     const Point2 sourceB = borderSourceFromGeometry(b, settings);
     const Point2 sourceC = borderSourceFromGeometry(c, settings);
     const uint32_t base = static_cast<uint32_t>(borders.size());
-    borders.push_back({ a.x, a.y, sourceA.x, sourceA.y });
-    borders.push_back({ b.x, b.y, sourceB.x, sourceB.y });
-    borders.push_back({ c.x, c.y, sourceC.x, sourceC.y });
+    borders.push_back({ a.x, a.y, sourceA.x, sourceA.y, 0.0f });
+    borders.push_back({ b.x, b.y, sourceB.x, sourceB.y, 0.0f });
+    borders.push_back({ c.x, c.y, sourceC.x, sourceC.y, 0.0f });
     indices.push_back(base + 0);
     indices.push_back(base + 1);
     indices.push_back(base + 2);
+}
+
+Point2 projectForBorder(Point2 p, const Settings& settings) {
+    return settings.projection == Projection::PoincareDisk
+        ? radialProject(p, std::max(settings.hypScale, 1e-3f))
+        : p;
+}
+
+void pushSourceOverlayTri(
+    std::vector<BorderVertex>& borders,
+    std::vector<uint32_t>& indices,
+    Point2 a,
+    Point2 b,
+    Point2 c,
+    float role,
+    const Settings& settings
+) {
+    if (std::fabs(cross(sub(b, a), sub(c, a))) <= 1e-12f) return;
+    const Point2 ga = projectForBorder(a, settings);
+    const Point2 gb = projectForBorder(b, settings);
+    const Point2 gc = projectForBorder(c, settings);
+    const uint32_t base = static_cast<uint32_t>(borders.size());
+    borders.push_back({ ga.x, ga.y, a.x, a.y, role });
+    borders.push_back({ gb.x, gb.y, b.x, b.y, role });
+    borders.push_back({ gc.x, gc.y, c.x, c.y, role });
+    indices.push_back(base + 0);
+    indices.push_back(base + 1);
+    indices.push_back(base + 2);
+}
+
+void pushSourceOverlayStrip(
+    std::vector<BorderVertex>& borders,
+    std::vector<uint32_t>& indices,
+    Point2 a,
+    Point2 b,
+    float halfWidth,
+    float role,
+    const Settings& settings
+) {
+    const Point2 d = sub(b, a);
+    const float l = len(d);
+    if (l <= 1e-9f) return;
+    const Point2 n{ -d.y / l * halfWidth, d.x / l * halfWidth };
+    const Point2 p0 = add(a, n);
+    const Point2 p1 = add(b, n);
+    const Point2 p2 = sub(b, n);
+    const Point2 p3 = sub(a, n);
+    pushSourceOverlayTri(borders, indices, p0, p1, p2, role, settings);
+    pushSourceOverlayTri(borders, indices, p0, p2, p3, role, settings);
+}
+
+void pushSourceOverlayPolyline(
+    std::vector<BorderVertex>& borders,
+    std::vector<uint32_t>& indices,
+    const std::vector<Point2>& points,
+    float halfWidth,
+    float role,
+    const Settings& settings
+) {
+    for (size_t i = 0; i + 1 < points.size(); ++i) {
+        pushSourceOverlayStrip(borders, indices, points[i], points[i + 1], halfWidth, role, settings);
+    }
+}
+
+Point2 tileCentroidPoint(const Tile& tile) {
+    const TilePoint c = tileAreaCentroid(tile);
+    return { static_cast<float>(c.x), static_cast<float>(c.y) };
+}
+
+Point2 tileVertex(const Tile& tile, int index) {
+    const int i = std::max(0, std::min(index, static_cast<int>(tile.vcount) - 1));
+    return { tile.x[i], tile.y[i] };
+}
+
+constexpr float kOverlayGoldenRatio = 1.6180339887498948482f;
+
+std::pair<float, float> shortAngleSpan(float thetaA, float thetaB) {
+    const float lo = std::min(thetaA, thetaB);
+    const float hi = std::max(thetaA, thetaB);
+    constexpr float kPi = 3.14159265358979323846f;
+    return std::fabs(hi - lo) < kPi
+        ? std::pair<float, float>{ lo, hi }
+        : std::pair<float, float>{ hi, lo + 2.0f * kPi };
+}
+
+std::vector<Point2> circleArc(Point2 center, float radius, Point2 startThrough, Point2 endThrough, int steps) {
+    std::vector<Point2> points;
+    const int n = std::max(2, steps);
+    points.reserve(static_cast<size_t>(n + 1));
+    const float a0 = std::atan2(startThrough.y - center.y, startThrough.x - center.x);
+    const float a1 = std::atan2(endThrough.y - center.y, endThrough.x - center.x);
+    const std::pair<float, float> span = shortAngleSpan(a0, a1);
+    for (int i = 0; i <= n; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(n);
+        const float a = span.first + (span.second - span.first) * t;
+        points.push_back({ center.x + std::cos(a) * radius, center.y + std::sin(a) * radius });
+    }
+    return points;
+}
+
+Point2 tileOrientationForOverlay(const Tile& tile, Family family) {
+    if (family == Family::D4Substitution) return d4Orientation(tile.type);
+    const TilePoint c = tileAreaCentroid(tile);
+    if (tile.vcount <= 0) return { 1.0f, 0.0f };
+    Point2 best{ tile.x[0] - static_cast<float>(c.x), tile.y[0] - static_cast<float>(c.y) };
+    float bestLen = dot(best, best);
+    for (int i = 1; i < tile.vcount; ++i) {
+        const Point2 candidate{ tile.x[i] - static_cast<float>(c.x), tile.y[i] - static_cast<float>(c.y) };
+        const float candidateLen = dot(candidate, candidate);
+        if (candidateLen > bestLen) {
+            best = candidate;
+            bestLen = candidateLen;
+        }
+    }
+    return unit(best);
+}
+
+bool isAmmannBeenkerSquare(const Tile& tile) {
+    if (tile.vcount != 4) return false;
+    if (tile.type != uint8_t{1}) return false;
+    float minLength = 1e30f;
+    float maxLength = 0.0f;
+    for (int i = 0; i < 4; ++i) {
+        const int j = (i + 1) % 4;
+        const float edgeLen = len(sub(tileVertex(tile, j), tileVertex(tile, i)));
+        minLength = std::min(minLength, edgeLen);
+        maxLength = std::max(maxLength, edgeLen);
+    }
+    return minLength > 1e-7f && maxLength / minLength <= 1.08f;
+}
+
+int beattyParity(int n) {
+    const int value = static_cast<int>(std::floor(std::sqrt(2.0f) * (static_cast<float>(n) - 0.5f)));
+    const int mod = value % 2;
+    return mod < 0 ? mod + 2 : mod;
+}
+
+void appendRobinsonSourceOverlays(
+    const std::vector<Tile>& tiles,
+    const Settings& settings,
+    float halfWidth,
+    std::vector<BorderVertex>& borders,
+    std::vector<uint32_t>& indices
+) {
+    const float width = std::max(halfWidth * 0.85f, 1e-5f);
+    for (const Tile& tile : tiles) {
+        if (tile.vcount != 3) continue;
+        const Point2 x = tileVertex(tile, 0);
+        const Point2 y = tileVertex(tile, 1);
+        const Point2 z = tileVertex(tile, 2);
+        const float radius = len(sub(x, z));
+        if (radius <= 1e-7f) continue;
+        const bool acute = tile.type == uint8_t{1};
+        const std::vector<Point2> red = acute
+            ? circleArc(x, radius / kOverlayGoldenRatio, z, y, 12)
+            : circleArc(y, radius / (kOverlayGoldenRatio * kOverlayGoldenRatio * kOverlayGoldenRatio), z, x, 12);
+        const std::vector<Point2> blue = acute
+            ? circleArc(y, radius, x, z, 12)
+            : circleArc(x, radius / (kOverlayGoldenRatio * kOverlayGoldenRatio), y, z, 12);
+        pushSourceOverlayPolyline(borders, indices, red, width, 1.0f, settings);
+        pushSourceOverlayPolyline(borders, indices, blue, width, 2.0f, settings);
+    }
+}
+
+void appendAmmannBeenkerSourceOverlays(
+    const std::vector<Tile>& tiles,
+    const Settings& settings,
+    float halfWidth,
+    std::vector<BorderVertex>& borders,
+    std::vector<uint32_t>& indices
+) {
+    const float width = std::max(halfWidth * 0.9f, 1e-5f);
+    for (const Tile& tile : tiles) {
+        if (!isAmmannBeenkerSquare(tile)) continue;
+        const Point2 center = tileCentroidPoint(tile);
+        Point2 orient = tileOrientationForOverlay(tile, settings.family);
+        if (len(orient) <= 1e-7f) orient = { 1.0f, 0.0f };
+        const Point2 side{ -orient.y, orient.x };
+        float minLength = 1e30f;
+        for (int i = 0; i < 4; ++i) {
+            const int j = (i + 1) % 4;
+            minLength = std::min(minLength, len(sub(tileVertex(tile, j), tileVertex(tile, i))));
+        }
+        const float step = std::max(minLength, 1e-6f);
+        const int gx = static_cast<int>(std::lround(dot(center, orient) / step));
+        const int gy = static_cast<int>(std::lround(dot(center, side) / step));
+        const bool firstDiagonal = beattyParity(gx) == beattyParity(gy);
+        const Point2 a = firstDiagonal ? tileVertex(tile, 0) : tileVertex(tile, 1);
+        const Point2 b = firstDiagonal ? tileVertex(tile, 2) : tileVertex(tile, 3);
+        pushSourceOverlayStrip(borders, indices, a, b, width, 3.0f, settings);
+    }
+}
+
+void appendSourceOverlaysForTiles(
+    const std::vector<Tile>& tiles,
+    const Settings& settings,
+    float halfWidth,
+    std::vector<BorderVertex>& borders,
+    std::vector<uint32_t>& indices
+) {
+    if (settings.ornamentStyle < 3.5f || settings.ornamentWidth <= 0.0f) return;
+    if (settings.family == Family::P3 || settings.family == Family::P2) {
+        appendRobinsonSourceOverlays(tiles, settings, halfWidth, borders, indices);
+    } else if (settings.family == Family::AmmannBeenker) {
+        appendAmmannBeenkerSourceOverlays(tiles, settings, halfWidth, borders, indices);
+    }
 }
 
 void emitTileBorderRing(
@@ -484,8 +1543,12 @@ void emitTileBorderRing(
     std::vector<BorderVertex>& borders,
     std::vector<uint32_t>& indices
 ) {
-    const int k = tile.vcount;
-    if (k < 2) return;
+    const int vertexCount = tile.vcount;
+    const int k = borderLogicalSideCount(tile, settings.family);
+    if (vertexCount < 2 || k < 2) return;
+    const int samplesPerSide = vertexCount / k;
+    if (samplesPerSide < 1) return;
+    const bool spectreCurve = isSpectreCurveTile(visibilityTile, settings.family);
 
     const TilePoint centroidD = tileAreaCentroid(tile);
     const Point2 centroid{ static_cast<float>(centroidD.x), static_cast<float>(centroidD.y) };
@@ -499,23 +1562,48 @@ void emitTileBorderRing(
     const int subCount = std::max(1, subdiv);
     const float projectionScale = std::max(settings.hypScale, 1e-3f);
     for (int e = 0; e < k; ++e) {
-        const int n = (e + 1) % k;
-        const Point2 a{ tile.x[e], tile.y[e] };
-        const Point2 b{ tile.x[n], tile.y[n] };
-        const Point2 sourceA{ visibilityTile.x[e], visibilityTile.y[e] };
-        const Point2 sourceB{ visibilityTile.x[n], visibilityTile.y[n] };
+        const int first = e * samplesPerSide;
+        const int next = ((e + 1) % k) * samplesPerSide;
+        const Point2 a{ tile.x[first], tile.y[first] };
+        const Point2 b{ tile.x[next], tile.y[next] };
         corners.push_back(a);
         chord.push_back(unit(sub(b, a)));
         BorderTileEdge edge{};
-        edge.visible = visible.find(canonicalEdgeKey(sourceA.x, sourceA.y, sourceB.x, sourceB.y, keyScale)) != visible.end();
-        edge.pts.reserve(static_cast<size_t>(subCount) + 1);
-        for (int s = 0; s <= subCount; ++s) {
-            const float t = static_cast<float>(s) / static_cast<float>(subCount);
-            const Point2 source = lerp(sourceA, sourceB, t);
-            const Point2 p = settings.projection == Projection::PoincareDisk
-                ? radialProject(source, projectionScale)
-                : source;
-            edge.pts.push_back(p);
+        edge.pts.reserve(static_cast<size_t>(samplesPerSide * subCount) + 1u);
+        if (spectreCurve) {
+            const Point2 sourceA = spectreAnchorPoint(visibilityTile, e);
+            const Point2 sourceB = spectreAnchorPoint(visibilityTile, (e + 1) % kSpectreLogicalSides);
+            edge.visible =
+                visible.find(canonicalEdgeKey(sourceA.x, sourceA.y, sourceB.x, sourceB.y, keyScale)) != visible.end();
+            const int curveSamples = std::max(subCount, kSpectreBorderSamplesPerSide);
+            edge.pts.reserve(static_cast<size_t>(curveSamples) + 1u);
+            for (int s = 0; s <= curveSamples; ++s) {
+                const float t = static_cast<float>(s) / static_cast<float>(curveSamples);
+                const Point2 source = spectreCurvePoint(visibilityTile, e, t);
+                const Point2 p = settings.projection == Projection::PoincareDisk
+                    ? radialProject(source, projectionScale)
+                    : source;
+                edge.pts.push_back(p);
+            }
+        } else {
+            for (int segment = 0; segment < samplesPerSide; ++segment) {
+                const int ia = (first + segment) % vertexCount;
+                const int ib = (first + segment + 1) % vertexCount;
+                const Point2 sourceA{ visibilityTile.x[ia], visibilityTile.y[ia] };
+                const Point2 sourceB{ visibilityTile.x[ib], visibilityTile.y[ib] };
+                const bool segmentVisible =
+                    visible.find(canonicalEdgeKey(sourceA.x, sourceA.y, sourceB.x, sourceB.y, keyScale)) != visible.end();
+                edge.visible = edge.visible || segmentVisible;
+                for (int s = 0; s <= subCount; ++s) {
+                    if (!edge.pts.empty() && s == 0) continue;
+                    const float t = static_cast<float>(s) / static_cast<float>(subCount);
+                    const Point2 source = lerp(sourceA, sourceB, t);
+                    const Point2 p = settings.projection == Projection::PoincareDisk
+                        ? radialProject(source, projectionScale)
+                        : source;
+                    edge.pts.push_back(p);
+                }
+            }
         }
         edges.push_back(std::move(edge));
     }
@@ -628,9 +1716,32 @@ void emitTileBorderRing(
             const float frac = s - static_cast<float>(j);
             return lerp(ep[j], ep[j + 1], frac);
         };
+        const bool curvedSampledSide = spectreCurve || samplesPerSide > 1;
+        const auto tangentAt = [&](float t) {
+            const float s = std::clamp(
+                t * static_cast<float>(last),
+                0.0f,
+                static_cast<float>(last) - 1.0e-6f);
+            const int j = std::max(0, std::min(last - 1, static_cast<int>(std::floor(s))));
+            return unit(sub(ep[j + 1], ep[j]));
+        };
+        const auto offsetAt = [&](float t) {
+            const Point2 o = outerAt(t);
+            const Point2 d = tangentAt(t);
+            const Point2 n = ccw ? Point2{ -d.y, d.x } : Point2{ d.y, -d.x };
+            return add(o, mul(n, h));
+        };
+        const Point2 baseStart = curvedSampledSide ? offsetAt(0.0f) : a0;
+        const Point2 baseEnd = curvedSampledSide ? offsetAt(1.0f) : a1;
         const float gapZone = g > 0.0f && edgeLen > 0.0f ? std::min(0.45f, (h * 1.5f) / edgeLen) : 0.0f;
         const auto innerAt = [&](float t) {
             Point2 p = lerp(a0, a1, t);
+            if (curvedSampledSide) {
+                const Point2 base = offsetAt(t);
+                p = add(base,
+                        add(mul(sub(a0, baseStart), 1.0f - t),
+                            mul(sub(a1, baseEnd), t)));
+            }
             if (gapZone > 1e-6f) {
                 if (!reflex[e]) {
                     const float w = g * std::clamp((tA + gapZone - t) / gapZone, 0.0f, 1.0f);
@@ -734,7 +1845,9 @@ void buildBorderMeshForTiles(
     std::vector<BorderVertex>& borders,
     std::vector<uint32_t>& borderIndices
 ) {
-    if (!settings.borderOn) return;
+    const bool sourceOverlayOn = settings.ornamentStyle >= 3.5f && settings.ornamentWidth > 0.0f
+        && (settings.family == Family::P3 || settings.family == Family::P2 || settings.family == Family::AmmannBeenker);
+    if (!settings.borderOn && !sourceOverlayOn) return;
 
     constexpr float kKeyScale = 1.0e5f;
     const auto visible = visibleEdgeKeysForTiles(tiles, settings.family, kKeyScale);
@@ -752,22 +1865,28 @@ void buildBorderMeshForTiles(
     }
     borders.reserve(reserveVertices);
     borderIndices.reserve(reserveVertices);
-    for (size_t i = 0; i < tiles.size(); ++i) {
-        emitTileBorderRing(
-            geometryTiles[i],
-            tiles[i],
-            visible,
-            kKeyScale,
-            sub,
-            requestedHalfWidth,
-            settings.borderJoin,
-            settings.borderFill,
-            settings.borderPoint,
-            settings.borderGap,
-            settings,
-            borders,
-            borderIndices);
+    if (settings.borderOn && settings.borderWidth > 0.0f) {
+        for (size_t i = 0; i < tiles.size(); ++i) {
+            emitTileBorderRing(
+                geometryTiles[i],
+                tiles[i],
+                visible,
+                kKeyScale,
+                sub,
+                requestedHalfWidth,
+                settings.borderJoin,
+                settings.borderFill,
+                settings.borderPoint,
+                settings.borderGap,
+                settings,
+                borders,
+                borderIndices);
+        }
     }
+    const float overlayHalfWidth = averageTileRadius(tiles)
+        * std::clamp(settings.ornamentWidth, 0.0f, 1.0f)
+        * 0.018f;
+    appendSourceOverlaysForTiles(tiles, settings, overlayHalfWidth, borders, borderIndices);
 }
 
 } // namespace
@@ -780,51 +1899,134 @@ bool Renderer::buildGeometry() {
     if (effectiveGeneration_ < settings_.generation) {
         effectiveGeneration_ = settings_.generation;
     }
-    std::vector<Tile> tiles = generate(settings_.family, settings_.seedIdx, effectiveGeneration_);
+    std::vector<Tile> fullTiles;
+    Bounds2 fullBounds{};
+    if (settings_.panMode != 0 && supportsWindowedGeneration(settings_.family)) {
+        const std::vector<Tile> seedTiles = generate(settings_.family, settings_.seedIdx, 0);
+        if (!seedTiles.empty()) {
+            fullBounds = tileBounds(seedTiles);
+            const WindowBounds activeWindow = windowBoundsForView(
+                fullBounds,
+                settings_,
+                view_,
+                pagePanX_,
+                swapchainExtent_.width,
+                swapchainExtent_.height,
+                screenW_,
+                screenH_,
+                averageTileRadius(seedTiles));
+            fullTiles = generateWindowed(settings_.family, settings_.seedIdx, effectiveGeneration_, activeWindow);
+        }
+    }
+    if (fullTiles.empty()) {
+        fullTiles = generate(settings_.family, settings_.seedIdx, effectiveGeneration_);
+        if (!fullTiles.empty()) fullBounds = tileBounds(fullTiles);
+    }
+    if (fullTiles.empty()) { LOGE("buildGeometry: empty tile set"); return false; }
+    std::vector<Tile> tiles = windowTilesForView(
+        fullTiles,
+        fullBounds,
+        settings_,
+        view_,
+        pagePanX_,
+        swapchainExtent_.width,
+        swapchainExtent_.height,
+        screenW_,
+        screenH_);
     if (tiles.empty()) { LOGE("buildGeometry: empty tile set"); return false; }
 
     Classification cls = classify(tiles, settings_.family, settings_.colorMode, settings_.colorCount);
+    constexpr float kTopologyKeyScale = 1.0e5f;
+    const std::vector<TopologyScalar> topologyScalars = tileTopologyScalars(tiles, settings_.family, kTopologyKeyScale);
+    const SpectreMeshDetail spectreDetail = spectreMeshDetailForTiles(tiles, settings_.family);
+    const int requestedFillSub = (settings_.projection == Projection::PoincareDisk
+                                  || settings_.family == Family::Spectre)
+                                 ? settings_.hypFillSubdiv
+                                 : 1;
+    const size_t spectreSourceTriCount = settings_.family == Family::Spectre
+        ? tiles.size() * spectreSourceTrianglesPerTile(spectreDetail)
+        : 0u;
+    const int fillSub = settings_.family == Family::Spectre
+        ? clampQuadraticSubdivision(std::max(1, requestedFillSub), spectreSourceTriCount, kMaxFillVertexCount)
+        : requestedFillSub;
+    size_t plannedSpectreFillVertices = 0u;
+    if (settings_.family == Family::Spectre) {
+        const size_t fillSubSq = static_cast<size_t>(fillSub) * static_cast<size_t>(fillSub);
+        const size_t verticesPerSource = fillSubSq * 3u;
+        if (spectreSourceTriCount == 0u || spectreSourceTriCount > kMaxFillVertexCount / verticesPerSource) {
+            const size_t requestedVertices = spectreSourceTriCount * verticesPerSource;
+            LOGE("Spectre fill mesh exceeds vertex budget: %zu > %zu",
+                 requestedVertices, kMaxFillVertexCount);
+            return false;
+        }
+        plannedSpectreFillVertices = spectreSourceTriCount * verticesPerSource;
+    }
 
     // -------- Fill vertices ---------------------------------------------------
     // Penrose tris -> 3 verts. Chair L -> fan from vert 0 (4 triangles).
     // Each vert also carries the tile centroid so the ripple shader can
     // phase the quasicrystal plane-wave sum per tile.
     std::vector<FillVertex> fills;
-    fills.reserve(tiles.size() * 6);
+    fills.reserve(settings_.family == Family::Spectre ? plannedSpectreFillVertices : tiles.size() * 6);
 
     // One push site for the fill mesh — keeps the per-branch emit loops from
     // spelling out the full 14-float vertex. (bgx,bgy) is the triangle's
     // bulge-tilt direction; bary3 is the vertex's row of the edge-distance
     // basis; mat4 is the per-tile material identity. The latter two are
     // shared by all of a triangle's vertices.
-    auto pushFill = [&fills](float x, float y, uint32_t idx, float cx, float cy,
-                             float bgx, float bgy, const float* bary3, const float* mat4) {
-        fills.push_back(FillVertex{ x, y, idx, cx, cy, bgx, bgy,
+    auto pushFill = [&fills](float x, float y, float colorSlot, float cx, float cy,
+                             float bgx, float bgy, const float* bary3, const float* mat4,
+                             const float* topology4, const float* edgeMetric3) {
+        fills.push_back(FillVertex{ x, y, colorSlot, cx, cy, bgx, bgy,
                                     bary3[0], bary3[1], bary3[2],
-                                    mat4[0], mat4[1], mat4[2], mat4[3] });
+                                    mat4[0], mat4[1], mat4[2], mat4[3],
+                                    topology4[0], topology4[1], topology4[2], topology4[3],
+                                    edgeMetric3[0], edgeMetric3[1], edgeMetric3[2] });
     };
 
     // Per-tile subdivision count for fill triangles in hyperbolic mode.
     // Each parent tri is split into N² child tris by a barycentric
     // (i,j,k) grid, with every child-vertex attribute computed by
-    // linear interpolation from parent corners. Because bary, bulge,
-    // centroid and material are all linear-interpolation-safe, the
-    // fragment shader's bevel still falls only on parent edges (the
-    // min(bary) is zero only along original edges, never along
-    // interior subdivision cuts). Driven by Settings.hypFillSubdiv,
-    // separate from the border subdivision because the costs are
-    // different shapes (N² vs N) — JNI already clamped to [1, 8].
-    const int fillSub = (settings_.projection == Projection::PoincareDisk)
-                        ? settings_.hypFillSubdiv : 1;
-
+    // linear interpolation from parent corners. Because bary, edge metric,
+    // bulge, centroid and material are all interpolation-safe, the fragment
+    // shader's bevel still falls only on parent boundary edges: pinned
+    // bary components keep interior subdivision cuts away from zero.
+    // Driven by Settings.hypFillSubdiv, separate from the border subdivision
+    // because the costs are different shapes (N² vs N) — JNI already clamped
+    // to [1, 8].
     auto emitFillTri = [&](float ax, float ay, float bx, float by,
                            float cx_v, float cy_v,
-                           uint32_t paletteIdx, float ctrX, float ctrY,
-                           float bgx, float bgy, const Bary3& bary, const float* mat) {
+                           float paletteSlot, float ctrX, float ctrY,
+                           float bgx, float bgy, const Bary3& bary, const float* mat,
+                           const float* topology,
+                           float edgeReference,
+                           const Tile* spectreTile, float spectreReference) {
+        Bary3 emittedBary = bary;
+        const EdgeMetric3 edgeMetric = edgeMetricForTriangle(
+            ax, ay,
+            bx, by,
+            cx_v, cy_v,
+            bary,
+            edgeReference);
+        if (orient2(ax, ay, bx, by, cx_v, cy_v) < -1e-12) {
+            std::swap(bx, cx_v);
+            std::swap(by, cy_v);
+            for (int c = 0; c < 3; ++c) std::swap(emittedBary.v[1][c], emittedBary.v[2][c]);
+        }
+        const auto pushVertex = [&](float vx, float vy, const float* baryRow) {
+            float gx = bgx;
+            float gy = bgy;
+            if (spectreTile != nullptr) {
+                const Point2 gradient = spectreReliefGradient(*spectreTile, vx, vy, spectreReference);
+                gx = gradient.x;
+                gy = gradient.y;
+            }
+            pushFill(vx, vy, paletteSlot, ctrX, ctrY, gx, gy, baryRow, mat, topology, edgeMetric.v);
+        };
         if (fillSub <= 1) {
-            pushFill(ax,   ay,   paletteIdx, ctrX, ctrY, bgx, bgy, bary.v[0], mat);
-            pushFill(bx,   by,   paletteIdx, ctrX, ctrY, bgx, bgy, bary.v[1], mat);
-            pushFill(cx_v, cy_v, paletteIdx, ctrX, ctrY, bgx, bgy, bary.v[2], mat);
+            pushVertex(ax,   ay,   emittedBary.v[0]);
+            pushVertex(bx,   by,   emittedBary.v[1]);
+            pushVertex(cx_v, cy_v, emittedBary.v[2]);
             return;
         }
         const float invN = 1.0f / static_cast<float>(fillSub);
@@ -836,8 +2038,8 @@ bool Renderer::buildGeometry() {
             const float vy = fa * ay + fb * by + fc * cy_v;
             float vb[3];
             for (int c = 0; c < 3; ++c)
-                vb[c] = fa * bary.v[0][c] + fb * bary.v[1][c] + fc * bary.v[2][c];
-            pushFill(vx, vy, paletteIdx, ctrX, ctrY, bgx, bgy, vb, mat);
+                vb[c] = fa * emittedBary.v[0][c] + fb * emittedBary.v[1][c] + fc * emittedBary.v[2][c];
+            pushVertex(vx, vy, vb);
         };
         for (int i = 0; i < fillSub; ++i) {
             for (int j = 0; j < fillSub - i; ++j) {
@@ -855,41 +2057,66 @@ bool Renderer::buildGeometry() {
         }
     };
 
-    float minX =  1e9f, minY =  1e9f;
-    float maxX = -1e9f, maxY = -1e9f;
-    float rSqMax = 0.0f;
-
     for (size_t i = 0; i < tiles.size(); ++i) {
-        const Tile& t = tiles[i];
-        const uint32_t paletteIdx = static_cast<uint32_t>(
-            bucketToPaletteIdx(cls.bucket[i], cls.numBuckets, settings_.colorCount));
+        const Tile& sourceTile = tiles[i];
+        const Tile fillTile = spectreFlattenedTile(sourceTile, settings_.family, spectreDetail.samplesPerSide);
+        const Tile& t = fillTile;
+        const float paletteSlot = bucketToPaletteIdx(
+            cls.bucket[i], cls.numBuckets, settings_.colorCount, settings_.colorSpread);
         const int vc = t.vcount;
-        const TilePoint center = tileAreaCentroid(t);
-        const float cx = static_cast<float>(center.x);
-        const float cy = static_cast<float>(center.y);
+        const bool spectreTile = settings_.family == Family::Spectre;
+        const TilePoint areaCenter = tileAreaCentroid(t);
+        const Point2 center = spectreTile
+            ? spectreKeyCenter(sourceTile)
+            : Point2{ static_cast<float>(areaCenter.x), static_cast<float>(areaCenter.y) };
+        const float cx = center.x;
+        const float cy = center.y;
         // Parallax depth shading. type 0 bulges toward the viewer (+1),
         // every other type recedes (-1); the depthAmount slider scales the
         // effect in the fragment shader. The bulge sits on one vertex for a
         // triangle, along the long diagonal for a rhomb, and at the centre
         // for a P1 tile, so every family but the flat Chair reads as 3-D.
         const FamilyInfo& fi = familyInfo(settings_.family);
-        const float dsign = (t.type == 0) ? +1.0f : -1.0f;
+        const float dsign = (sourceTile.type == 0) ? +1.0f : -1.0f;
 
         // Per-tile material identity (location 5, see render_state.h):
         // type normalised over the family's distinct kinds, the unit
-        // direction of the classifier edge as orientation, and the
-        // centroid radius. Shared by all of this tile's fill vertices.
+        // direction of the classifier edge as orientation, and approximate
+        // tile scale. Spectre uses its canonical key-center/frame instead
+        // of the flattened curved polygon's area centroid.
         const ClassSpec& cs = fi.cls;
         const int typeBuckets = typeBucketCount(tiles, settings_.family, cs);
         const float typeNorm = (typeBuckets > 1)
-            ? static_cast<float>(t.type) / static_cast<float>(typeBuckets - 1)
+            ? static_cast<float>(sourceTile.type) / static_cast<float>(typeBuckets - 1)
             : 0.0f;
-        const float odx  = t.x[cs.angB] - t.x[cs.angA];
-        const float ody  = t.y[cs.angB] - t.y[cs.angA];
+        const Point2 d4Orient = settings_.family == Family::D4Substitution
+            ? d4Orientation(sourceTile.type)
+            : Point2{ 1.0f, 0.0f };
+        const Point2 orientA = spectreTile
+            ? spectreAnchorPoint(sourceTile, 1)
+            : Point2{ sourceTile.x[cs.angA], sourceTile.y[cs.angA] };
+        const Point2 orientB = spectreTile
+            ? spectreAnchorPoint(sourceTile, 2)
+            : Point2{ sourceTile.x[cs.angB], sourceTile.y[cs.angB] };
+        const float odx  = orientB.x - orientA.x;
+        const float ody  = orientB.y - orientA.y;
         const float olen = std::sqrt(odx * odx + ody * ody);
-        const float ocos = (olen > 1e-6f) ? odx / olen : 1.0f;
-        const float osin = (olen > 1e-6f) ? ody / olen : 0.0f;
-        const float mat[4] = { typeNorm, ocos, osin, std::sqrt(cx * cx + cy * cy) };
+        const float ocos = settings_.family == Family::D4Substitution
+            ? d4Orient.x
+            : ((olen > 1e-6f) ? odx / olen : 1.0f);
+        const float osin = settings_.family == Family::D4Substitution
+            ? d4Orient.y
+            : ((olen > 1e-6f) ? ody / olen : 0.0f);
+        const float tileScale = std::max(tileRadius(t, cx, cy), 1e-6f);
+        const float edgeReference = tileScale;
+        const float mat[4] = { typeNorm, ocos, osin, tileScale };
+        const TopologyScalar topologyScalar = topologyScalars[i];
+        const float topology[4] = {
+            topologyScalar.degree,
+            topologyScalar.motif,
+            topologyScalar.relaxed,
+            topologyScalar.biharmonic,
+        };
 
         if (vc == 3) {
             // Triangle tiles: one vertex carries the bulge, the other two
@@ -903,28 +2130,41 @@ bool Renderer::buildGeometry() {
             bulgeDir(t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2],
                      depths[0], depths[1], depths[2], bgx, bgy);
             emitFillTri(t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2],
-                        paletteIdx, cx, cy, bgx, bgy, bary, mat);
+                        paletteSlot, cx, cy, bgx, bgy, bary, mat, topology,
+                        edgeReference, nullptr, 1.0f);
         } else if (fi.centroidFan) {
             // Center-depth polygons: use the area centroid as the material
             // center and relief apex, but only use a centroid fan when that fan
             // is actually contained in the tile. Concave monotiles/spirals that
-            // are not star-shaped are ear-triangulated and get local contained
-            // depth hubs instead.
+            // are not star-shaped are ear-triangulated. Curved Spectres use
+            // edge-conforming relief rings plus equal-area radial cap rings,
+            // avoiding centroid/ear fan normals while keeping the center cap.
             const float cd = fi.depthParallax ? dsign : 0.0f;
-            const std::vector<SourceTri> sources = sourceTrianglesForCenterDepth(t, cx, cy, cd);
+            const std::vector<SourceTri> sources = spectreTile
+                ? sourceTrianglesForSpectre(t, center, spectreDetail)
+                : sourceTrianglesForCenterDepth(t, cx, cy, cd);
             if (sources.empty()) {
                 LOGE("failed to triangulate tile family=%d type=%u vertices=%u",
                      static_cast<int>(settings_.family), static_cast<unsigned>(t.type),
                      static_cast<unsigned>(t.vcount));
                 return false;
             }
+            const float spectreReference = spectreTile
+                ? spectreReliefReference(t, cx, cy)
+                : 1.0f;
             for (const SourceTri& tri : sources) {
                 const Bary3 bary = computeBary(vc, tri.p0, tri.p1, tri.p2);
                 float bgx, bgy;
-                bulgeDir(tri.x0, tri.y0, tri.x1, tri.y1, tri.x2, tri.y2,
-                         tri.z0, tri.z1, tri.z2, bgx, bgy);
+                if (spectreTile) {
+                    bgx = 0.0f;
+                    bgy = 0.0f;
+                } else {
+                    bulgeDir(tri.x0, tri.y0, tri.x1, tri.y1, tri.x2, tri.y2,
+                             tri.z0, tri.z1, tri.z2, bgx, bgy);
+                }
                 emitFillTri(tri.x0, tri.y0, tri.x1, tri.y1, tri.x2, tri.y2,
-                            paletteIdx, cx, cy, bgx, bgy, bary, mat);
+                            paletteSlot, cx, cy, bgx, bgy, bary, mat, topology,
+                            edgeReference, spectreTile ? &t : nullptr, spectreReference);
             }
         } else {
             // Convex polygons fanned from vertex 0. A rhomb (the de Bruijn
@@ -947,18 +2187,9 @@ bool Renderer::buildGeometry() {
                 bulgeDir(t.x[0], t.y[0], t.x[v], t.y[v], t.x[v + 1], t.y[v + 1],
                          depth[0], depth[v], depth[v + 1], bgx, bgy);
                 emitFillTri(t.x[0], t.y[0], t.x[v], t.y[v], t.x[v + 1], t.y[v + 1],
-                            paletteIdx, cx, cy, bgx, bgy, bary, mat);
+                            paletteSlot, cx, cy, bgx, bgy, bary, mat, topology,
+                            edgeReference, nullptr, 1.0f);
             }
-        }
-        // Per-vertex extents: bbox AND true farthest |vertex| for the
-        // hyperbolic auto-fit. Tracked once per tile across all vc
-        // vertices (shared by every emit branch above).
-        for (int v = 0; v < vc; ++v) {
-            const float vx = t.x[v], vy = t.y[v];
-            minX = std::min(minX, vx); maxX = std::max(maxX, vx);
-            minY = std::min(minY, vy); maxY = std::max(maxY, vy);
-            const float rSq = vx * vx + vy * vy;
-            if (rSq > rSqMax) rSqMax = rSq;
         }
     }
     // -------- Border geometry: tile-local inset rings -------------------------
@@ -1045,19 +2276,35 @@ bool Renderer::buildGeometry() {
     currentTiles_ = std::move(tiles);
     fillVertexCount_ = static_cast<uint32_t>(fills.size());
     borderIndexCount_ = static_cast<uint32_t>(borderIndices.size());
-    geomMinX_ = minX; geomMaxX_ = maxX;
-    geomMinY_ = minY; geomMaxY_ = maxY;
-    geomRmax_ = std::sqrt(rSqMax);
+    geomMinX_ = fullBounds.minX; geomMaxX_ = fullBounds.maxX;
+    geomMinY_ = fullBounds.minY; geomMaxY_ = fullBounds.maxY;
+    geomRmax_ = std::sqrt(fullBounds.rSqMax);
+    geometryViewPanX_ = view_.panX;
+    geometryViewPanY_ = view_.panY;
+    geometryPagePanX_ = pagePanX_;
+    geometryPagePanValid_ = true;
 
-    LOGI("geom: %zu tiles, %u fillVerts, %u borderIdx, bounds [%.3f,%.3f]-[%.3f,%.3f]",
-         currentTiles_.size(), fillVertexCount_, borderIndexCount_,
+    LOGI("geom: %zu/%zu tiles, %u fillVerts, %u borderIdx, bounds [%.3f,%.3f]-[%.3f,%.3f]",
+         currentTiles_.size(), fullTiles.size(), fillVertexCount_, borderIndexCount_,
          geomMinX_, geomMinY_, geomMaxX_, geomMaxY_);
     return true;
 }
 
 bool Renderer::buildBorderGeometry() {
     if (currentTiles_.empty()) {
-        currentTiles_ = generate(settings_.family, settings_.seedIdx, effectiveGeneration_);
+        std::vector<Tile> fullTiles = generate(settings_.family, settings_.seedIdx, effectiveGeneration_);
+        if (fullTiles.empty()) { LOGE("buildBorderGeometry: empty tile set"); return false; }
+        const Bounds2 fullBounds = tileBounds(fullTiles);
+        currentTiles_ = windowTilesForView(
+            fullTiles,
+            fullBounds,
+            settings_,
+            view_,
+            pagePanX_,
+            swapchainExtent_.width,
+            swapchainExtent_.height,
+            screenW_,
+            screenH_);
     }
     const std::vector<Tile>& tiles = currentTiles_;
     if (tiles.empty()) { LOGE("buildBorderGeometry: empty tile set"); return false; }
@@ -1139,7 +2386,7 @@ void Renderer::updatePaletteUbo() {
     for (void* mapped : paletteUboMapped_) anyMapped = anyMapped || mapped != nullptr;
     if (!anyMapped) return;
     PresetResult ps = buildPreset(settings_.preset, settings_.colorCount,
-                                  settings_.customOklch);
+                                  settings_.customOklch, settings_.colorSpectral);
     PaletteUbo ubo{};
     auto enc = [&](Oklch c, float alpha) {
         return oklchToShaderColor(c, alpha, wideGamut_, cpuLinearOutput_);
@@ -1160,6 +2407,9 @@ void Renderer::updatePaletteUbo() {
     ubo.bgColor[0] = bg.r; ubo.bgColor[1] = bg.g;
     ubo.bgColor[2] = bg.b; ubo.bgColor[3] = 1.0f;
     ubo.flags[0] = 0;
+    ubo.flags[1] = static_cast<uint32_t>(std::clamp(settings_.colorCount, 1, kMaxColors));
+    ubo.flags[2] = 0;
+    ubo.flags[3] = 0;
 
     // Ripple animation. The shader gates trig on `anim.y > 0` so a zero
     // amount short-circuits the wave math for every tile.
@@ -1168,11 +2418,11 @@ void Renderer::updatePaletteUbo() {
     ubo.anim[2] = static_cast<float>(familyInfo(settings_.family).waveSymmetry);
     ubo.anim[3] = pageOffset_;
 
-    // Border width is baked into the tile-local ring vertices so the slider
-    // follows the web renderer's average-tile-radius contract. The row stays
-    // present to preserve the shared UBO layout.
-    ubo.borderGeom[0] = 0.0f;
-    ubo.borderGeom[1] = 0.0f;
+    // Border width stays baked into tile-local ring vertices. Reuse this row
+    // for the optional fill-surface edge profile so the mesh border contract
+    // and shared UBO layout stay stable.
+    ubo.borderGeom[0] = settings_.edgeProfileWidth;
+    ubo.borderGeom[1] = settings_.edgeProfileGlow;
     ubo.borderGeom[2] = 0.0f;
     ubo.borderGeom[3] = 0.0f;
 
@@ -1180,6 +2430,38 @@ void Renderer::updatePaletteUbo() {
     ubo.effects[1] = settings_.depthAmount;
     ubo.effects[2] = settings_.rippleSpeed;
     ubo.effects[3] = static_cast<float>(settings_.rippleKind);
+
+    ubo.ornament[0] = settings_.ornamentStyle;
+    ubo.ornament[1] = settings_.ornamentAmount;
+    ubo.ornament[2] = settings_.ornamentWidth;
+    ubo.ornament[3] = settings_.ornamentPhase;
+    ubo.ornamentExtra[0] = settings_.ornamentDensity;
+    ubo.ornamentExtra[1] = settings_.ornamentTwist;
+    ubo.ornamentExtra[2] = 0.0f;
+    ubo.ornamentExtra[3] = 0.0f;
+    ShaderColor contourColor = enc(settings_.surfaceContourColor, 1.0f);
+    ubo.contour[0] = settings_.surfaceContourAmount;
+    ubo.contour[1] = settings_.surfaceContourSource;
+    ubo.contour[2] = settings_.surfaceContourSpacing;
+    ubo.contour[3] = settings_.surfaceContourWidth;
+    ubo.contourColor[0] = settings_.surfaceContourPhase;
+    ubo.contourColor[1] = contourColor.r;
+    ubo.contourColor[2] = contourColor.g;
+    ubo.contourColor[3] = contourColor.b;
+    const float markAlpha = sourceOverlayAlpha(
+        settings_.ornamentStyle, settings_.ornamentAmount, settings_.ornamentDensity);
+    const ShaderColor markA = enc(settings_.sourceMarkA, markAlpha);
+    const ShaderColor markB = enc(settings_.sourceMarkB, markAlpha);
+    const ShaderColor markC = enc(settings_.sourceMarkC, markAlpha);
+    const ShaderColor edgeProfile = enc(settings_.edgeProfileColor, 1.0f);
+    ubo.sourceMarkA[0] = markA.r; ubo.sourceMarkA[1] = markA.g;
+    ubo.sourceMarkA[2] = markA.b; ubo.sourceMarkA[3] = markA.a;
+    ubo.sourceMarkB[0] = markB.r; ubo.sourceMarkB[1] = markB.g;
+    ubo.sourceMarkB[2] = markB.b; ubo.sourceMarkB[3] = markB.a;
+    ubo.sourceMarkC[0] = markC.r; ubo.sourceMarkC[1] = markC.g;
+    ubo.sourceMarkC[2] = markC.b; ubo.sourceMarkC[3] = markC.a;
+    ubo.edgeProfileColor[0] = edgeProfile.r; ubo.edgeProfileColor[1] = edgeProfile.g;
+    ubo.edgeProfileColor[2] = edgeProfile.b; ubo.edgeProfileColor[3] = 0.0f;
 
     AudioAnalyzer::FeatureSnapshot audio{};
     globalAudioAnalyzer().snapshot(audio);
@@ -1214,9 +2496,12 @@ void Renderer::updatePaletteUbo() {
     m.iridThickMax  = settings_.matIridThickMax;
     m.roughMod      = settings_.matRoughMod;
     m.metalMod      = settings_.matMetalMod;
-    applyLightControls(m, settings_.lightAngle, settings_.lightElevation,
-                       settings_.lightIntensity, settings_.lightWarmth,
-                       settings_.lightAmbient);
+    applyLightChoreography(m, settings_.lightAngle, settings_.lightElevation,
+                           settings_.lightIntensity, settings_.lightWarmth,
+                           settings_.lightAmbient, settings_.lightChoreoAmount,
+                           settings_.lightChoreoSpeed, settings_.lightChoreoSource,
+                           time_, pageOffset_, audio.beat, audio.beatPhase,
+                           audio.cwtTransient, settings_.clockWaveform);
     writeMaterialRows(&ubo.matNormal[0], m);
 
     for (void* mapped : paletteUboMapped_) {

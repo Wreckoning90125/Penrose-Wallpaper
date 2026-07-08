@@ -83,12 +83,49 @@ const NodeDescriptor kDescriptors[] = {
     { NodeKind::SrcBass,         "Bass",                "Source"   },
     { NodeKind::SrcMid,          "Mid",                 "Source"   },
     { NodeKind::SrcHigh,         "High",                "Source"   },
+    { NodeKind::OutOrnamentAmount, "Ornament amount",   "Target"   },
+    { NodeKind::OutOrnamentWidth,  "Ornament width",    "Target"   },
+    { NodeKind::OutOrnamentPhase,  "Ornament phase",    "Target"   },
+    { NodeKind::OutOrnamentStyle,  "Ornament motif",    "Target"   },
+    { NodeKind::OutOrnamentDensity,"Ornament density",  "Target"   },
+    { NodeKind::OutOrnamentTwist,  "Ornament twist",    "Target"   },
+    { NodeKind::OpAmplitudeMod,    "AM",                "Operator" },
+    { NodeKind::OpPhaseMod,        "PM Osc",            "Operator" },
+    { NodeKind::OpBeatOsc,         "Beat Osc",          "Operator" },
+    { NodeKind::SrcTempo,          "Tempo",             "Source"   },
+    { NodeKind::OutSurfaceContourAmount,  "Contour amount",  "Target" },
+    { NodeKind::OutSurfaceContourSpacing, "Contour spacing", "Target" },
+    { NodeKind::OutSurfaceContourWidth,   "Contour width",   "Target" },
+    { NodeKind::OutSurfaceContourPhase,   "Contour phase",   "Target" },
+    { NodeKind::OutSurfaceContourSource,  "Contour source",  "Target" },
+    { NodeKind::OutMatRoughMod,    "Worn-edge variation", "Target" },
+    { NodeKind::OutMatMetalMod,    "Tile metal variation", "Target" },
+    { NodeKind::OutLightChoreoAmount, "Light choreography", "Target" },
+    { NodeKind::OutLightChoreoSpeed,  "Light choreo speed", "Target" },
+    { NodeKind::OutLightChoreoSource, "Light choreo source", "Target" },
+    { NodeKind::OutEdgeProfileWidth,  "Inner edge profile", "Target" },
+    { NodeKind::OutEdgeProfileGlow,   "Inner edge glow",    "Target" },
+    { NodeKind::OutEdgeProfileLight,  "Inner edge light",   "Target" },
+    { NodeKind::OutEdgeProfileChroma, "Inner edge color",   "Target" },
+    { NodeKind::OutEdgeProfileHue,    "Inner edge hue",     "Target" },
+    { NodeKind::OutSurfaceContourLight,  "Contour light",   "Target" },
+    { NodeKind::OutSurfaceContourChroma, "Contour color",   "Target" },
+    { NodeKind::OutSurfaceContourHue,    "Contour hue",     "Target" },
 };
 static_assert(sizeof(kDescriptors) / sizeof(kDescriptors[0])
                   == static_cast<size_t>(NodeKind::Count_),
               "NodeKind / kDescriptors out of sync");
 
 inline float clamp01(float v) { return std::clamp(v, 0.0f, 1.0f); }
+
+inline float boundedSignal(float v) {
+    if (!std::isfinite(v)) return 0.0f;
+    return std::clamp(v, -4.0f, 4.0f);
+}
+
+inline float finiteSignal(float v) {
+    return std::isfinite(v) ? v : 0.0f;
+}
 
 inline float smoothingAlpha(float seconds, float dtSeconds) {
     if (seconds <= 0.0f) return 1.0f;
@@ -133,15 +170,13 @@ inline float widestBandLabelWidth() {
 
 // Pixel width of the widest Target label. Used by every TargetNode to
 // pad its body so the right-side stack is uniform-width regardless of
-// which Targets the user has wired in. Iterates the contiguous Target
-// block in NodeKind (OutRippleAmount .. OutHypBoostY).
+// which Targets the user has wired in.
 inline float widestTargetLabelWidth() {
     float w = 0.0f;
-    const int first = static_cast<int>(NodeKind::OutRippleAmount);
-    const int last  = static_cast<int>(NodeKind::OutHypBoostY);
-    for (int i = first; i <= last; ++i) {
-        w = std::max(w, ImGui::CalcTextSize(
-            descriptor(static_cast<NodeKind>(i)).label).x);
+    for (int i = 0; i < descriptorCount(); ++i) {
+        const NodeDescriptor& d = descriptors()[i];
+        if (std::string_view(d.category) != "Target") continue;
+        w = std::max(w, ImGui::CalcTextSize(d.label).x);
     }
     return w;
 }
@@ -169,6 +204,10 @@ public:
     void draw() override {
         if (isBandKind(kind_)) {
             ImGui::Dummy(ImVec2(widestBandLabelWidth(), 0.0f));
+            return;
+        }
+        if (kind_ == NodeKind::SrcTempo) {
+            ImGui::Text("Tempo  %.1f BPM", static_cast<double>(graph_->context().bpm));
             return;
         }
         if (kind_ != NodeKind::SrcConstant) return;
@@ -229,6 +268,7 @@ private:
             case NodeKind::SrcCwtTransient: return c.cwtTransient;
             case NodeKind::SrcCrestFactor: return c.crestFactor;
             case NodeKind::SrcBeatConfidence: return c.beatConfidence;
+            case NodeKind::SrcTempo:      return std::clamp((c.bpm - 60.0f) / 140.0f, 0.0f, 1.0f);
             case NodeKind::SrcTime:       return c.timeSec;
             case NodeKind::SrcPageScroll: return c.pageScroll;
             case NodeKind::SrcConstant:   return p0;
@@ -275,7 +315,7 @@ public:
                 addIN<float>("signal", 0.0f, filt);
                 break;
             case NodeKind::OpLag:
-                p0 = 0.25f;
+                p0 = 0.0f;
                 addIN<float>("signal", 0.0f, filt);
                 break;
             case NodeKind::OpGain:
@@ -310,6 +350,20 @@ public:
                 addIN<float>("signal", 0.0f, filt);
                 addIN<float>("trigger", 0.0f, filt);
                 break;
+            case NodeKind::OpAmplitudeMod:
+                p0 = 1.0f; p1 = 0.5f;
+                addIN<float>("carrier", 0.0f, filt);
+                addIN<float>("modulator", 0.5f, filt);
+                break;
+            case NodeKind::OpPhaseMod:
+                p0 = 1.0f; p1 = 1.0f; p2 = 0.0f;
+                addIN<float>("phase", 0.0f, filt);
+                addIN<float>("modulator", 0.0f, filt);
+                break;
+            case NodeKind::OpBeatOsc:
+                p0 = 4.0f; p1 = 4.25f; p2 = 0.0f;
+                addIN<float>("phase", 0.0f, filt);
+                break;
             case NodeKind::OpInvert:
                 p0 = 0.5f;
                 addIN<float>("signal", 0.0f, filt);
@@ -325,6 +379,12 @@ public:
             addOUT<float>("gate")->behaviour([this] {
                 computeCached();
                 return flag0 ? 1.0f : 0.0f;
+            });
+        }
+        if (k == NodeKind::OpBeatOsc) {
+            addOUT<float>("envelope")->behaviour([this] {
+                computeCached();
+                return cacheAux_;
             });
         }
     }
@@ -448,12 +508,42 @@ private:
                 flag0 = trigger;
                 return state1 > 0.5f ? state0 : signal;
             }
+            case NodeKind::OpAmplitudeMod: {
+                const float carrier = getInVal<float>("carrier");
+                const float bias = clamp01(p1);
+                const float modulator = inputConnected("modulator")
+                    ? getInVal<float>("modulator")
+                    : bias;
+                const float depth = std::clamp(p0, 0.0f, 2.0f);
+                return boundedSignal(carrier * (1.0f + depth * (modulator - bias)));
+            }
+            case NodeKind::OpPhaseMod: {
+                constexpr float kTau = 6.28318530717958647692f;
+                const float depth = std::clamp(p0, 0.0f, 4.0f);
+                const float cycles = std::clamp(p1, 0.0f, 16.0f);
+                const float offset = clamp01(p2);
+                const float phase = finiteSignal(getInVal<float>("phase") * cycles
+                    + getInVal<float>("modulator") * depth
+                    + offset);
+                return 0.5f + 0.5f * std::sin(kTau * phase);
+            }
+            case NodeKind::OpBeatOsc: {
+                constexpr float kTau = 6.28318530717958647692f;
+                const float cyclesA = std::clamp(p0, 0.0f, 32.0f);
+                const float cyclesB = std::clamp(p1, 0.0f, 32.0f);
+                const float phase = finiteSignal(getInVal<float>("phase") + clamp01(p2));
+                const float a = std::sin(kTau * phase * cyclesA);
+                const float b = std::sin(kTau * phase * cyclesB);
+                cacheAux_ = clamp01(std::fabs(std::cos(0.5f * kTau * phase * (cyclesA - cyclesB))));
+                return clamp01(0.5f + 0.25f * (a + b));
+            }
             default:                    return 0.0f;
         }
     }
 
     uint64_t cacheSerial_ = 0;
     float cacheValue_ = 0.0f;
+    float cacheAux_ = 0.0f;
     bool cacheValid_ = false;
 };
 
@@ -679,7 +769,8 @@ void Graph::resetToDefault() {
     // (~200px wide × 80–140px tall) doesn't overlap neighbours.
     constexpr float kColX0     =  40.0f;   // left source column
     constexpr float kColX1     = 280.0f;   // right source column
-    constexpr float kColXOut   = 620.0f;   // target column
+    constexpr float kColX2     = 520.0f;   // tempo source column
+    constexpr float kColXOut   = 720.0f;   // target column
     constexpr float kRowStep   = 110.0f;
     constexpr float kRowY0     =  40.0f;   // top row of bands
 
@@ -692,10 +783,11 @@ void Graph::resetToDefault() {
               ImVec2(x, y),
               this);
     }
-    // Beat / Time on a 5th row below the bands, mirroring the column split.
+    // Beat / Time / Tempo on a 5th row below the bands, mirroring the column split.
     const float beatRowY = kRowY0 + 4 * kRowStep;
     spawn(handler_, NodeKind::SrcBeat, ImVec2(kColX0, beatRowY), this);
     spawn(handler_, NodeKind::SrcTime, ImVec2(kColX1, beatRowY), this);
+    spawn(handler_, NodeKind::SrcTempo, ImVec2(kColX2, beatRowY), this);
 
     // Four targets stacked, vertically centred against the source
     // block. Source block spans y=40..480 (5 rows × 110, plus a row
@@ -752,9 +844,47 @@ bool Graph::canConnect(ImFlow::Pin* out, ImFlow::Pin* in) {
     return true;
 }
 
-// The contiguous Target block, OutRippleAmount .. OutHypBoostY inclusive.
-constexpr int kTargetCount = static_cast<int>(NodeKind::OutHypBoostY)
-                           - static_cast<int>(NodeKind::OutRippleAmount) + 1;
+// Legacy targets are contiguous from OutRippleAmount .. OutHypBoostY.
+// New target kinds append at the enum tail for saved-graph compatibility, so
+// active target accumulation maps kinds through targetIndexForKind().
+constexpr int kLegacyTargetCount = static_cast<int>(NodeKind::OutHypBoostY)
+                                 - static_cast<int>(NodeKind::OutRippleAmount) + 1;
+constexpr int kTargetCount = kLegacyTargetCount + 24;
+
+int targetIndexForKind(NodeKind kind) {
+    const int raw = static_cast<int>(kind);
+    const int first = static_cast<int>(NodeKind::OutRippleAmount);
+    if (raw >= first && raw <= static_cast<int>(NodeKind::OutHypBoostY)) {
+        return raw - first;
+    }
+    switch (kind) {
+        case NodeKind::OutOrnamentAmount: return kLegacyTargetCount + 0;
+        case NodeKind::OutOrnamentWidth:  return kLegacyTargetCount + 1;
+        case NodeKind::OutOrnamentPhase:  return kLegacyTargetCount + 2;
+        case NodeKind::OutOrnamentStyle:  return kLegacyTargetCount + 3;
+        case NodeKind::OutOrnamentDensity:return kLegacyTargetCount + 4;
+        case NodeKind::OutOrnamentTwist:  return kLegacyTargetCount + 5;
+        case NodeKind::OutSurfaceContourAmount:  return kLegacyTargetCount + 6;
+        case NodeKind::OutSurfaceContourSpacing: return kLegacyTargetCount + 7;
+        case NodeKind::OutSurfaceContourWidth:   return kLegacyTargetCount + 8;
+        case NodeKind::OutSurfaceContourPhase:   return kLegacyTargetCount + 9;
+        case NodeKind::OutSurfaceContourSource:  return kLegacyTargetCount + 10;
+        case NodeKind::OutMatRoughMod:           return kLegacyTargetCount + 11;
+        case NodeKind::OutMatMetalMod:           return kLegacyTargetCount + 12;
+        case NodeKind::OutLightChoreoAmount:     return kLegacyTargetCount + 13;
+        case NodeKind::OutLightChoreoSpeed:      return kLegacyTargetCount + 14;
+        case NodeKind::OutLightChoreoSource:     return kLegacyTargetCount + 15;
+        case NodeKind::OutEdgeProfileWidth:      return kLegacyTargetCount + 16;
+        case NodeKind::OutEdgeProfileGlow:       return kLegacyTargetCount + 17;
+        case NodeKind::OutEdgeProfileLight:      return kLegacyTargetCount + 18;
+        case NodeKind::OutEdgeProfileChroma:     return kLegacyTargetCount + 19;
+        case NodeKind::OutEdgeProfileHue:        return kLegacyTargetCount + 20;
+        case NodeKind::OutSurfaceContourLight:   return kLegacyTargetCount + 21;
+        case NodeKind::OutSurfaceContourChroma:  return kLegacyTargetCount + 22;
+        case NodeKind::OutSurfaceContourHue:     return kLegacyTargetCount + 23;
+        default:                          return -1;
+    }
+}
 
 void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
     ctx_ = ctx;
@@ -764,10 +894,9 @@ void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
     // so frame N+1 actually recomputes instead of replaying frame N.
     handler_.get_recursion_blacklist().clear();
 
-    // Accumulate every connected Target by kind index within the block.
+    // Accumulate every connected Target by stable kind index.
     float add[kTargetCount]  = {};
     bool  seen[kTargetCount] = {};
-    const int firstTarget = static_cast<int>(NodeKind::OutRippleAmount);
     for (auto& [uid, node] : handler_.getNodes()) {
         // Skip nodes the user deleted this frame — destroy() only marks
         // them; handler_.update() sweeps them afterwards. Evaluating one
@@ -775,8 +904,8 @@ void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
         if (!node || node->toDestroy()) continue;
         auto* fn = dynamic_cast<FlowNode*>(node.get());
         if (!fn) continue;
-        const int ti = static_cast<int>(fn->kind()) - firstTarget;
-        if (ti < 0 || ti >= kTargetCount) continue;  // not a Target
+        const int ti = targetIndexForKind(fn->kind());
+        if (ti < 0 || ti >= kTargetCount) continue;  // not an active Target
         // Skip Targets whose input pin has no upstream link. An
         // unconnected target should LEAVE the slider baseline alone,
         // not push it to zero — the default graph ships disconnected
@@ -800,6 +929,16 @@ void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
         &out.lightAngle, &out.lightElevation, &out.lightIntensity,
         &out.lightWarmth, &out.lightAmbient,
         &out.hypBoostX, &out.hypBoostY,
+        &out.ornamentAmount, &out.ornamentWidth, &out.ornamentPhase, &out.ornamentStyle,
+        &out.ornamentDensity, &out.ornamentTwist,
+        &out.surfaceContourAmount, &out.surfaceContourSpacing,
+        &out.surfaceContourWidth, &out.surfaceContourPhase,
+        &out.surfaceContourSource,
+        &out.matRoughMod, &out.matMetalMod,
+        &out.lightChoreoAmount, &out.lightChoreoSpeed, &out.lightChoreoSource,
+        &out.edgeProfileWidth, &out.edgeProfileGlow,
+        &out.edgeProfileLight, &out.edgeProfileChroma, &out.edgeProfileHue,
+        &out.surfaceContourLight, &out.surfaceContourChroma, &out.surfaceContourHue,
     };
     // Hyperbolic boost clamped to |b| <= 0.92 component-wise so a runaway
     // graph can't drive the τ_b transform near the disk boundary where it
@@ -808,14 +947,94 @@ void Graph::evaluate(const EvalContext& ctx, EvalResult& out) {
         0.0f, 0.1f, 0.0f, 0.0f,  0.05f, 0.0f, 0.0f, 0.0f,  -1.0f, 0.0f, 0.0f, 0.0f,
         0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
         -0.92f, -0.92f,
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.01f, 0.0f,
+        0.0f,
+        0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f,
     };
     const float hi[kTargetCount] = {
         1.0f, 3.0f, 2.0f, 1.0f,  1.0f,  1.0f, 2.0f, 1.0f,   1.0f, 1.0f, 2.0f, 2.0f,
         360.0f, 90.0f, 2.0f, 1.0f, 1.0f,
         0.92f, 0.92f,
+        1.0f, 1.0f, 1.0f, 4.0f, 1.0f, 1.0f,
+        1.0f, 64.0f, 0.50f, 1.0f,
+        7.0f,
+        1.0f, 1.0f,
+        1.0f, 2.0f, 3.0f,
+        1.0f, 1.0f, 1.0f, 0.37f, 359.0f,
+        1.0f, 0.40f, 360.0f,
     };
     for (int i = 0; i < kTargetCount; ++i)
         if (seen[i]) *slot[i] = std::clamp(*slot[i] + add[i], lo[i], hi[i]);
+}
+
+bool Graph::needsFrameLoop() {
+    auto& nodes = handler_.getNodes();
+    auto upstreamForInput = [this](ImFlow::Pin* input) -> FlowNode* {
+        if (!input || !input->isConnected()) return nullptr;
+        for (const auto& weak : handler_.getLinks()) {
+            const auto link = weak.lock();
+            if (!link || link->right() != input) continue;
+            ImFlow::Pin* out = link->left();
+            if (!out || !out->getParent()) return nullptr;
+            auto* flowNode = dynamic_cast<FlowNode*>(out->getParent());
+            return flowNode && !flowNode->toDestroy() ? flowNode : nullptr;
+        }
+        return nullptr;
+    };
+    auto isContinuousOperator = [](NodeKind kind) {
+        return kind == NodeKind::OpLag
+            || kind == NodeKind::OpSmooth
+            || kind == NodeKind::OpEnvelope
+            || kind == NodeKind::OpGate
+            || kind == NodeKind::OpSampleHold
+            || kind == NodeKind::OpBeatOsc
+            || kind == NodeKind::OpPhaseMod
+            || kind == NodeKind::OpAmplitudeMod;
+    };
+    std::unordered_set<uint64_t> visiting;
+    auto dependsOnContinuousSource = [&](auto&& self, FlowNode* node) -> bool {
+        if (!node || node->toDestroy()) return false;
+        const uint64_t uid = node->getUID();
+        if (!visiting.insert(uid).second) return false;
+        const NodeKind kind = node->kind();
+        if (kind == NodeKind::SrcTime || isContinuousOperator(kind)) {
+            visiting.erase(uid);
+            return true;
+        }
+        for (const auto& input : node->getIns()) {
+            if (input && input->isConnected() && self(self, upstreamForInput(input.get()))) {
+                visiting.erase(uid);
+                return true;
+            }
+        }
+        visiting.erase(uid);
+        return false;
+    };
+
+    for (auto& [uid, node] : nodes) {
+        if (!node || node->toDestroy()) continue;
+        auto* flowNode = dynamic_cast<FlowNode*>(node.get());
+        if (!flowNode) continue;
+        const int targetIndex = targetIndexForKind(flowNode->kind());
+        if (targetIndex < 0 || targetIndex >= kTargetCount) continue;
+        const auto& inputs = node->getIns();
+        if (inputs.empty() || !inputs[0] || !inputs[0]->isConnected()) continue;
+        const NodeKind kind = flowNode->kind();
+        if (
+            kind == NodeKind::OutLightChoreoAmount
+            || kind == NodeKind::OutLightChoreoSpeed
+            || kind == NodeKind::OutLightChoreoSource
+        ) {
+            return true;
+        }
+        visiting.clear();
+        if (dependsOnContinuousSource(dependsOnContinuousSource, upstreamForInput(inputs[0].get()))) return true;
+    }
+    return false;
 }
 
 // -----------------------------------------------------------------------------

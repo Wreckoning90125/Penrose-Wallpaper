@@ -65,6 +65,9 @@ bool hasEditableParams(NodeKind kind) {
         case NodeKind::OpGate:
         case NodeKind::OpMath:
         case NodeKind::OpSampleHold:
+        case NodeKind::OpAmplitudeMod:
+        case NodeKind::OpPhaseMod:
+        case NodeKind::OpBeatOsc:
             return true;
         default:
             return false;
@@ -280,6 +283,7 @@ void GraphUi::drawParameterSheet(FlowNode* selNode) {
     float sheetDp = 172.0f;
     if (kind == NodeKind::OpMap || kind == NodeKind::OpEnvelope) sheetDp = 286.0f;
     if (kind == NodeKind::OpGate) sheetDp = 392.0f;
+    if (kind == NodeKind::OpPhaseMod || kind == NodeKind::OpBeatOsc) sheetDp = 286.0f;
     const float sheetH = std::max(140.0f * densityScale_,
                                   std::min(io.DisplaySize.y - insetTopPx_ - 24.0f * densityScale_,
                                            sheetDp * densityScale_));
@@ -415,6 +419,39 @@ void GraphUi::drawParameterSheet(FlowNode* selNode) {
         case NodeKind::OpSampleHold:
             drawFloatEditor("Threshold", selNode->p0, 0.0f, 1.0f,
                             0.005f, 0.01f, 0.1f, "%.3f", densityScale_);
+            break;
+        case NodeKind::OpAmplitudeMod:
+            ImGui::Columns(2, nullptr, false);
+            drawFloatEditor("Depth", selNode->p0, 0.0f, 2.0f,
+                            0.005f, 0.01f, 0.1f, "%.3f", densityScale_);
+            ImGui::NextColumn();
+            drawFloatEditor("Bias", selNode->p1, 0.0f, 1.0f,
+                            0.005f, 0.01f, 0.1f, "%.3f", densityScale_);
+            ImGui::Columns(1);
+            break;
+        case NodeKind::OpPhaseMod:
+            ImGui::Columns(2, nullptr, false);
+            drawFloatEditor("Depth", selNode->p0, 0.0f, 4.0f,
+                            0.005f, 0.01f, 0.1f, "%.3f", densityScale_);
+            ImGui::NextColumn();
+            drawFloatEditor("Cycles", selNode->p1, 0.0f, 16.0f,
+                            0.005f, 0.01f, 0.1f, "%.3f", densityScale_);
+            ImGui::NextColumn();
+            drawFloatEditor("Offset", selNode->p2, 0.0f, 1.0f,
+                            0.005f, 0.01f, 0.1f, "%.3f", densityScale_);
+            ImGui::Columns(1);
+            break;
+        case NodeKind::OpBeatOsc:
+            ImGui::Columns(2, nullptr, false);
+            drawFloatEditor("Cycles A", selNode->p0, 0.0f, 32.0f,
+                            0.005f, 0.01f, 0.1f, "%.3f", densityScale_);
+            ImGui::NextColumn();
+            drawFloatEditor("Cycles B", selNode->p1, 0.0f, 32.0f,
+                            0.005f, 0.01f, 0.1f, "%.3f", densityScale_);
+            ImGui::NextColumn();
+            drawFloatEditor("Offset", selNode->p2, 0.0f, 1.0f,
+                            0.005f, 0.01f, 0.1f, "%.3f", densityScale_);
+            ImGui::Columns(1);
             break;
         default:
             break;

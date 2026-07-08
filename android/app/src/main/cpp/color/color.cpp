@@ -365,8 +365,10 @@ Classification classify(const std::vector<Tile>& tiles,
             }
         } else {
             const std::vector<float> rings = tileRingsForClassification(tiles, cs);
-            std::vector<float> minRing(classCount, std::numeric_limits<float>::infinity());
-            std::vector<float> maxRing(classCount, -std::numeric_limits<float>::infinity());
+            // Finite sentinels: -ffast-math makes infinity (and isfinite) UB,
+            // so an untouched class is detected by min > max instead.
+            std::vector<float> minRing(classCount, std::numeric_limits<float>::max());
+            std::vector<float> maxRing(classCount, std::numeric_limits<float>::lowest());
             for (size_t i = 0; i < n; ++i) {
                 const int cls = std::clamp(static_cast<int>(tiles[i].type), 0, classCount - 1);
                 minRing[cls] = std::min(minRing[cls], rings[i]);
@@ -374,8 +376,9 @@ Classification classify(const std::vector<Tile>& tiles,
             }
             for (size_t i = 0; i < n; ++i) {
                 const int cls = std::clamp(static_cast<int>(tiles[i].type), 0, classCount - 1);
-                const float lo = std::isfinite(minRing[cls]) ? minRing[cls] : 0.0f;
-                const float hi = std::isfinite(maxRing[cls]) ? maxRing[cls] : lo;
+                const bool touched = minRing[cls] <= maxRing[cls];
+                const float lo = touched ? minRing[cls] : 0.0f;
+                const float hi = touched ? maxRing[cls] : lo;
                 const float progress = std::clamp((rings[i] - lo) / std::max(1e-6f, hi - lo), 0.0f, 1.0f);
                 c.bucket[i] = (static_cast<float>(cls) + progress) / static_cast<float>(classCount);
             }

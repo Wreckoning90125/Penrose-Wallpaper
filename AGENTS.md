@@ -21,7 +21,8 @@ support it.
   `npm run typecheck && npm run ts:policy && npm run js:policy && npm run web:build && npm run graph:contract`.
 - Commit gates run mechanically via **lefthook** (`lefthook.yml`; installed by
   `npm install`). Staged files select which gates fire — native changes trigger
-  `cpp:build`, a full NDK-toolchain compile of `libpenrose.so` matching CI
+  `cpp:build:tidy`, an NDK-toolchain compile of `libpenrose.so` plus the same
+  clang-tidy + static-analysis-budget ratchet CI enforces
   (`tools/check_native_build.sh` prints NDK setup if it's missing). Never
   commit with `--no-verify`.
 

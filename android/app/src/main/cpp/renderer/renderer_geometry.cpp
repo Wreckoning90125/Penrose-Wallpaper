@@ -1405,7 +1405,7 @@ std::pair<float, float> shortAngleSpan(float thetaA, float thetaB) {
 std::vector<Point2> circleArc(Point2 center, float radius, Point2 startThrough, Point2 endThrough, int steps) {
     std::vector<Point2> points;
     const int n = std::max(2, steps);
-    points.reserve(static_cast<size_t>(n + 1));
+    points.reserve(static_cast<size_t>(n) + 1u);
     const float a0 = std::atan2(startThrough.y - center.y, startThrough.x - center.x);
     const float a1 = std::atan2(endThrough.y - center.y, endThrough.x - center.x);
     const std::pair<float, float> span = shortAngleSpan(a0, a1);

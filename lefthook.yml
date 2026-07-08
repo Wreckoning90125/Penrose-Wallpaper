@@ -9,7 +9,7 @@ pre-commit:
   jobs:
     - name: native-build
       glob: "android/app/src/main/cpp/**"
-      run: npm run cpp:build
+      run: npm run cpp:build:tidy
     - name: native-tiling
       glob: "android/app/src/main/cpp/tiling/**"
       run: npm run tilings:verify && npm run cpp:tidy

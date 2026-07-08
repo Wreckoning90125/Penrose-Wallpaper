@@ -39,9 +39,22 @@ if [[ "$found_version" != "$NDK_VERSION" ]]; then
     echo "warning: local NDK is $found_version, CI pins $NDK_VERSION — diagnostics may drift" >&2
 fi
 
+# With PENROSE_TIDY=1, mirror CI's clang-tidy job as well: build with
+# -DPENROSE_TIDY=ON using the NDK's clang-tidy, capture the diagnostics, and
+# enforce the same static-analysis budget (tools/static_analysis_ratchet.py)
+# that CI's "Enforce total static-analysis budget" step applies.
+TIDY="${PENROSE_TIDY:-0}"
 ABI="${PENROSE_NATIVE_ABI:-arm64-v8a}"
-BUILD_DIR="$ROOT/.cache/native-build/$ABI"
-CONFIGURE_LOG="$ROOT/.cache/native-build/configure-$ABI.log"
+SUFFIX=""
+EXTRA_ARGS=()
+if [[ "$TIDY" == "1" ]]; then
+    SUFFIX="-tidy"
+    EXTRA_ARGS+=(-DPENROSE_TIDY=ON)
+    export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+fi
+BUILD_DIR="$ROOT/.cache/native-build/$ABI$SUFFIX"
+CONFIGURE_LOG="$ROOT/.cache/native-build/configure-$ABI$SUFFIX.log"
+TIDY_LOG="$ROOT/.cache/native-build/clang-tidy-$ABI.log"
 mkdir -p "$ROOT/.cache/native-build"
 
 # Mirror the externalNativeBuild arguments in android/app/build.gradle.kts.
@@ -51,11 +64,26 @@ if ! cmake -S "$ROOT/android/app/src/main/cpp" -B "$BUILD_DIR" -G Ninja \
     -DANDROID_PLATFORM=latest \
     -DANDROID_STL=c++_static \
     -DCMAKE_BUILD_TYPE=Debug \
+    "${EXTRA_ARGS[@]}" \
     > "$CONFIGURE_LOG" 2>&1; then
     cat "$CONFIGURE_LOG" >&2
     echo "error: CMake configure failed (log: $CONFIGURE_LOG)" >&2
     exit 1
 fi
 
-cmake --build "$BUILD_DIR"
-echo "native build OK: $ABI (NDK $found_version)"
+if [[ "$TIDY" == "1" ]]; then
+    # Incremental runs only re-tidy files ninja rebuilds. That is sound while
+    # every prior run passed (unchanged files are already proven clean), but
+    # after a failure the flagged file compiles anyway and would be skipped on
+    # the next run — so a missing success marker forces a full rebuild.
+    MARKER="$BUILD_DIR/.tidy-clean"
+    CLEAN_ARG=()
+    [[ -f "$MARKER" ]] || CLEAN_ARG=(--clean-first)
+    rm -f "$MARKER"
+    cmake --build "$BUILD_DIR" "${CLEAN_ARG[@]}" 2>&1 | tee "$TIDY_LOG"
+    python3 "$ROOT/tools/static_analysis_ratchet.py" --clang-tidy-log "$TIDY_LOG"
+    touch "$MARKER"
+else
+    cmake --build "$BUILD_DIR"
+fi
+echo "native build OK: $ABI$SUFFIX (NDK $found_version)"

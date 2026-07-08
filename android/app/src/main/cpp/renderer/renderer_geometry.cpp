@@ -25,6 +25,11 @@ namespace penrose {
 
 namespace {
 
+struct Point2 {
+    float x;
+    float y;
+};
+
 Point2 d4Orientation(uint8_t type) {
     switch (type & 7u) {
         case 1: return { 0.0f,  1.0f };
@@ -289,11 +294,6 @@ std::vector<TriIdx> triangulatePolygon(const Tile& t) {
     return out;
 }
 
-struct Point2 {
-    float x;
-    float y;
-};
-
 struct Bounds2 {
     float minX;
     float minY;
@@ -335,6 +335,7 @@ struct BoundarySample {
 
 float signedArea(const std::vector<Point2>& pts);
 inline float cross(Point2 a, Point2 b);
+std::vector<TriIdx> triangulatePointPolygonByArea(const std::vector<Point2>& pts);
 
 float distanceToSegment(float px, float py, float ax, float ay, float bx, float by) {
     const float dx = bx - ax;
@@ -390,10 +391,6 @@ BoundarySample nearestBoundaryDistanceSample(const Tile& t, float px, float py) 
     }
     if (best.distance >= 1e29f) return { 0.0f, 0.0f, 0.0f };
     return best;
-}
-
-float smootherStep(float t) {
-    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
 }
 
 float smootherStepDerivative(float t) {

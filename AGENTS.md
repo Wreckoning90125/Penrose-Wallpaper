@@ -16,9 +16,17 @@ support it.
 - `npm run web:preview` — production preview (port-owned; what the user usually runs).
 - **Gate** (run before claiming work is done): `npm run quality:local` — runs
   `js:policy · ts:policy · typecheck · atlas:verify · border:verify ·
-  tilings:verify · shaders:validate · cpp:tidy · web:build · graph:contract`.
+  tilings:verify · shaders:validate · cpp:tidy · cpp:build · web:build · graph:contract`.
   The fast inner loop for web changes is
   `npm run typecheck && npm run ts:policy && npm run js:policy && npm run web:build && npm run graph:contract`.
+- **Any change under `android/app/src/main/cpp/` MUST pass `npm run cpp:build`
+  before it is committed — no exceptions.** It compiles the full native library
+  with the same NDK toolchain CI uses (NDK 29.0.14206865, unpacked at
+  `~/.local/share/android-ndk/android-ndk-r29`; `tools/check_native_build.sh`
+  prints download instructions if missing). The build dir is cached under
+  `.cache/native-build/`, so reruns take seconds. `cpp:tidy` and
+  `tilings:verify` do NOT compile the renderer — passing them proves nothing
+  about whether CI's native build will succeed.
 
 ## Hard rules (these bite — they caused real regressions)
 

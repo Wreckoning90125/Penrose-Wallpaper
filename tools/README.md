@@ -15,6 +15,7 @@ assets or verify contracts across the web and Android implementations.
 | `check_plain_js.py` | web/source policy | Keeps owned source out of plain JavaScript. |
 | `validate_shaders.sh` | Android Vulkan | Compiles and validates GLSL/SPIR-V shader assets. |
 | `run_clang_tidy.sh` | Android/native | Runs clang-tidy over native tiling/export sources. |
+| `check_native_build.sh` | Android/native | Compiles the full native renderer (`libpenrose.so`) with the CI-pinned NDK toolchain via CMake+Ninja — the local equivalent of CI's `buildCMakeDebug`. Mandatory before committing any `android/app/src/main/cpp/` change. |
 | `verify_tilings.cpp` | shared/native tiling | Links the production C++ tiling core and checks area, sampled coverage, overlap, and finite chamber topology. |
 | `tiling_dsymbols.h` | shared/native tiling | Extracts a finite chamber graph and canonical vertex-configuration classes from generated tile patches. |
 | `export_tiling_geometry.cpp` | shared/native tiling | Host exporter used by web geometry generation. |

@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "atlas:verify": "python3 tools/verify_atlas.py",
+    "cpp:build": "bash tools/check_native_build.sh",
     "cpp:tidy": "bash tools/run_clang_tidy.sh",
     "js:policy": "python3 tools/check_plain_js.py",
     "quality:web": "npm run js:policy && npm run ts:policy && npm run typecheck && npm run atlas:verify && npm run render-geometry:verify && npm run order-five-ifs:verify && npm run truchet:verify && npm run border:verify && npm run web:build && npm run graph:contract",
-    "quality:native": "npm run tilings:verify && npm run cpp:tidy",
+    "quality:native": "npm run tilings:verify && npm run cpp:tidy && npm run cpp:build",
     "quality:android": "npm run shaders:validate",
     "quality:local": "npm run quality:web && npm run quality:native && npm run quality:android",
     "shaders:validate": "bash tools/validate_shaders.sh",

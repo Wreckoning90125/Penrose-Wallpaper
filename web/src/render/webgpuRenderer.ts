@@ -74,7 +74,9 @@ import {
   finiteModulation,
   modulationTargetDelta,
 } from '../flow/modulationTargetRuntime';
+import { audioTargetRange } from '../flow/audioTargets';
 import penroseSurfaceMaterialX from './materialx/penrose-surface.mtlx?raw';
+import { D4_DIAGONAL_STATES } from './truchetLaws';
 import { sourceOverlayActiveForStyle } from '../tiling/capabilities';
 
 type RendererUniforms = ReturnType<typeof createRendererUniforms>;
@@ -480,6 +482,12 @@ export class WallpaperRenderer {
   // wire IS the source — clock/audio/operator); no wire means a static pose.
   private choreoPhase: number;
   private choreoPhaseConnected: boolean;
+  // Light settings with live audio modulation applied, refreshed by
+  // setAudioDrive each tick while any light_* target is modulated. Every
+  // other applyLights caller resolves through effectiveLightSettings() so a
+  // per-frame tick (choreography, pan) cannot clobber active modulation with
+  // the unmodulated baseline.
+  private audioLightSettings: Partial<Settings> | null;
   initialized: boolean;
   renderFrame: number;
   renderRequested: boolean;
@@ -607,6 +615,7 @@ export class WallpaperRenderer {
     this.fieldWavePhaseAccum = 0;
     this.choreoPhase = 0;
     this.choreoPhaseConnected = false;
+    this.audioLightSettings = null;
     this.slotPhasePrev = this.uniforms.fieldSlots.map(() => 0);
     this.slotPhaseAccum = this.uniforms.fieldSlots.map(() => 0);
     this.slotHasPhase = this.uniforms.fieldSlots.map(() => false);
@@ -1076,10 +1085,6 @@ export class WallpaperRenderer {
     const parityY = cellY.sub(floor(cellY.mul(0.5)).mul(2));
     const latticeBit = abs(parityX.sub(parityY)).lessThan(float(0.5)).select(float(0), float(1));
     const d4State = clamp(tileType.mul(7.0).round(), 0.0, 7.0);
-    const d4Rot1 = d4State.greaterThan(float(0.5)).and(d4State.lessThan(float(1.5)));
-    const d4Rot3 = d4State.greaterThan(float(2.5)).and(d4State.lessThan(float(3.5)));
-    const d4MirrorX = d4State.greaterThan(float(3.5)).and(d4State.lessThan(float(4.5)));
-    const d4MirrorY = d4State.greaterThan(float(4.5)).and(d4State.lessThan(float(5.5)));
     const useD4 = abs(this.uniforms.familyId.sub(float(18))).lessThan(float(0.5));
     const baseU = tileLocal.x;
     const baseV = tileLocal.y;
@@ -1092,7 +1097,11 @@ export class WallpaperRenderer {
     const mirrorReverse = transformChoice.greaterThanEqual(float(1.5));
     const u = inverseReverse.select(rawU.negate(), mirrorReverse.select(rawU.negate(), rawU));
     const v = mirrorReverse.select(rawV.negate(), rawV);
-    const d4TurnsDiagonal = d4Rot1.or(d4Rot3).or(d4MirrorX).or(d4MirrorY);
+    // Membership in D4_DIAGONAL_STATES — shared production data that the
+    // truchet-sources gate cross-checks against the D4 matrix table.
+    const d4TurnsDiagonal = D4_DIAGONAL_STATES
+      .map(state => abs(d4State.sub(float(state))).lessThan(float(0.5)))
+      .reduce((acc, term) => acc.or(term));
     const d4StateBit = d4TurnsDiagonal.select(float(1), float(0));
     const classBit = useD4.select(d4StateBit, tileType.lessThan(float(0.5)).select(float(0), float(1)));
     const bit = inverseReverse.select(float(1).sub(classBit), classBit);
@@ -2310,7 +2319,7 @@ export class WallpaperRenderer {
     this.uniforms.fieldPhaseMix.value = fieldPhaseMix;
     this.uniforms.borderMix.value = borderMix;
     this.applyRenderConnected();
-    this.applyLights(this.settings);
+    this.applyLights(this.effectiveLightSettings());
     this.render();
   }
 
@@ -2386,7 +2395,7 @@ export class WallpaperRenderer {
     if (this.choreoPhase === next) return;
     this.choreoPhase = next;
     if (!this.choreoPhaseConnected) return;
-    this.applyLights(this.settings);
+    this.applyLights(this.effectiveLightSettings());
     this.render();
   }
 
@@ -2563,6 +2572,13 @@ export class WallpaperRenderer {
     const hasLightChoreography = intSetting(this.settings, 'light_choreo_amount', 0, 100) > 0;
     if (!hasLiveModulation && !this.audioDriveActive && !hasLightChoreography) {
       this.audioEditMode = editState.dragMode;
+      if (this.audioLightSettings !== null) {
+        // Modulation ended entirely: drop the modulated light snapshot and
+        // restore the baseline pose.
+        this.audioLightSettings = null;
+        this.applyLights(this.settings);
+        this.render();
+      }
       return;
     }
     const hadProjectionModulation = this.audioProjectionActive;
@@ -2572,73 +2588,85 @@ export class WallpaperRenderer {
       return finiteModulation(modulations[key]) !== null
         && !editHoldsParam(editState.dragMode, editState.heldParams, key);
     };
-    const modulatedValue = (key: keyof Settings, min: number, max: number): number => {
+    // Single source of truth for modulation ranges: AUDIO_TARGET_RANGES (the
+    // same schema the graph validates wires against). Restating (min, max)
+    // literals here is how proj_blend forked to (0, 100) after the schema
+    // went signed. A missing entry throws on the first audio tick — loud by
+    // design, and the graph-contract gate also asserts it statically.
+    const targetRange = (key: keyof Settings): readonly [number, number] => {
+      const range = audioTargetRange(key);
+      if (!range) throw new Error(`setAudioDrive: '${String(key)}' has no AUDIO_TARGET_RANGES entry`);
+      return range;
+    };
+    const modulatedValue = (key: keyof Settings): number => {
+      const [min, max] = targetRange(key);
       const baseline = intSetting(this.settings, key, min, max);
       return editHoldsParam(editState.dragMode, editState.heldParams, key)
         ? baseline
         : applyModulationTargetRange(baseline, modulations[key], min, max);
     };
-    const modulatedDelta = (key: keyof Settings, min: number, max: number): number | null => {
+    const modulatedDelta = (key: keyof Settings): number | null => {
+      const [min, max] = targetRange(key);
       return editHoldsParam(editState.dragMode, editState.heldParams, key)
         ? null
         : modulationTargetDelta(modulations[key], min, max);
     };
     const audioSettings: Partial<Settings> = {
       ...this.settings,
-      brightness: modulatedValue('brightness', 0, 100),
-      field_displace: modulatedValue('field_displace', 0, 100),
-      hyp_boost_x: modulatedValue('hyp_boost_x', 0, 100),
-      hyp_boost_y: modulatedValue('hyp_boost_y', 0, 100),
-      hyp_scale: modulatedValue('hyp_scale', 0, 100),
-      proj_blend: modulatedValue('proj_blend', 0, 100),
-      light_ambient: modulatedValue('light_ambient', 0, 100),
-      light_angle: modulatedValue('light_angle', 0, 360),
-      light_elevation: modulatedValue('light_elevation', 0, 90),
-      light_intensity: modulatedValue('light_intensity', 0, 200),
-      light_warmth: modulatedValue('light_warmth', 0, 100),
-      light_choreo_amount: modulatedValue('light_choreo_amount', 0, 100),
-      mat_clearcoat: modulatedValue('mat_clearcoat', 0, 100),
-      mat_anisotropy: modulatedValue('mat_anisotropy', 0, 100),
-      mat_emissive: modulatedValue('mat_emissive', 0, 100),
-      mat_iridescence: modulatedValue('mat_iridescence', 0, 100),
-      mat_metal_mod: modulatedValue('mat_metal_mod', 0, 100),
-      mat_metalness: modulatedValue('mat_metalness', 0, 100),
-      mat_relief: modulatedValue('mat_relief', 0, 200),
-      mat_facet_curve: modulatedValue('mat_facet_curve', 0, 100),
-      mat_relief_guide: modulatedValue('mat_relief_guide', 0, 100),
-      mat_ring_relief: modulatedValue('mat_ring_relief', 0, 100),
-      mat_rough_mod: modulatedValue('mat_rough_mod', 0, 100),
-      mat_roughness: modulatedValue('mat_roughness', 0, 100),
-      mat_sheen: modulatedValue('mat_sheen', 0, 100),
-      surface_contour_amount: modulatedValue('surface_contour_amount', 0, 100),
-      surface_contour_source: modulatedValue('surface_contour_source', 0, 7),
-      surface_contour_spacing: modulatedValue('surface_contour_spacing', 1, 64),
-      surface_contour_width: modulatedValue('surface_contour_width', 1, 50),
-      surface_contour_feature: modulatedValue('surface_contour_feature', 0, 100),
-      surface_stripe: modulatedValue('surface_stripe', 0, 100),
-      surface_contour_phase: modulatedValue('surface_contour_phase', 0, 100),
-      surface_contour_l: modulatedValue('surface_contour_l', 0, 100),
-      surface_contour_c: modulatedValue('surface_contour_c', 0, 40),
-      surface_contour_h: modulatedValue('surface_contour_h', 0, 360),
-      source_mark_a_l: modulatedValue('source_mark_a_l', 0, 100),
-      source_mark_a_c: modulatedValue('source_mark_a_c', 0, 40),
-      source_mark_a_h: modulatedValue('source_mark_a_h', 0, 360),
-      source_mark_b_l: modulatedValue('source_mark_b_l', 0, 100),
-      source_mark_b_c: modulatedValue('source_mark_b_c', 0, 40),
-      source_mark_b_h: modulatedValue('source_mark_b_h', 0, 360),
-      source_mark_c_l: modulatedValue('source_mark_c_l', 0, 100),
-      source_mark_c_c: modulatedValue('source_mark_c_c', 0, 40),
-      source_mark_c_h: modulatedValue('source_mark_c_h', 0, 360),
-      ornament_amount: modulatedValue('ornament_amount', 0, 100),
-      ornament_density: modulatedValue('ornament_density', 0, 100),
-      ornament_phase: modulatedValue('ornament_phase', 0, 100),
-      ornament_style: modulatedValue('ornament_style', 0, 4),
-      ornament_twist: modulatedValue('ornament_twist', 0, 100),
-      ornament_width: modulatedValue('ornament_width', 0, 100),
-      field_relief: modulatedValue('field_relief', 0, 100),
-      field_color: modulatedValue('field_color', 0, 100),
-      field_speed: modulatedValue('field_speed', 0, 200),
-      field_pattern: modulatedValue('field_pattern', 0, 7),
+      brightness: modulatedValue('brightness'),
+      field_displace: modulatedValue('field_displace'),
+      hyp_boost_x: modulatedValue('hyp_boost_x'),
+      hyp_boost_y: modulatedValue('hyp_boost_y'),
+      hyp_scale: modulatedValue('hyp_scale'),
+      proj_blend: modulatedValue('proj_blend'),
+      light_ambient: modulatedValue('light_ambient'),
+      light_angle: modulatedValue('light_angle'),
+      light_elevation: modulatedValue('light_elevation'),
+      light_intensity: modulatedValue('light_intensity'),
+      light_warmth: modulatedValue('light_warmth'),
+      light_choreo_amount: modulatedValue('light_choreo_amount'),
+      mat_clearcoat: modulatedValue('mat_clearcoat'),
+      mat_anisotropy: modulatedValue('mat_anisotropy'),
+      mat_emissive: modulatedValue('mat_emissive'),
+      mat_iridescence: modulatedValue('mat_iridescence'),
+      mat_metal_mod: modulatedValue('mat_metal_mod'),
+      mat_metalness: modulatedValue('mat_metalness'),
+      mat_relief: modulatedValue('mat_relief'),
+      mat_facet_curve: modulatedValue('mat_facet_curve'),
+      mat_relief_guide: modulatedValue('mat_relief_guide'),
+      mat_ring_relief: modulatedValue('mat_ring_relief'),
+      mat_rough_mod: modulatedValue('mat_rough_mod'),
+      mat_roughness: modulatedValue('mat_roughness'),
+      mat_sheen: modulatedValue('mat_sheen'),
+      surface_contour_amount: modulatedValue('surface_contour_amount'),
+      surface_contour_source: modulatedValue('surface_contour_source'),
+      surface_contour_spacing: modulatedValue('surface_contour_spacing'),
+      surface_contour_width: modulatedValue('surface_contour_width'),
+      surface_contour_feature: modulatedValue('surface_contour_feature'),
+      surface_stripe: modulatedValue('surface_stripe'),
+      surface_contour_phase: modulatedValue('surface_contour_phase'),
+      surface_contour_l: modulatedValue('surface_contour_l'),
+      surface_contour_c: modulatedValue('surface_contour_c'),
+      surface_contour_h: modulatedValue('surface_contour_h'),
+      source_mark_a_l: modulatedValue('source_mark_a_l'),
+      source_mark_a_c: modulatedValue('source_mark_a_c'),
+      source_mark_a_h: modulatedValue('source_mark_a_h'),
+      source_mark_b_l: modulatedValue('source_mark_b_l'),
+      source_mark_b_c: modulatedValue('source_mark_b_c'),
+      source_mark_b_h: modulatedValue('source_mark_b_h'),
+      source_mark_c_l: modulatedValue('source_mark_c_l'),
+      source_mark_c_c: modulatedValue('source_mark_c_c'),
+      source_mark_c_h: modulatedValue('source_mark_c_h'),
+      ornament_amount: modulatedValue('ornament_amount'),
+      ornament_density: modulatedValue('ornament_density'),
+      ornament_phase: modulatedValue('ornament_phase'),
+      ornament_style: modulatedValue('ornament_style'),
+      ornament_twist: modulatedValue('ornament_twist'),
+      ornament_width: modulatedValue('ornament_width'),
+      field_relief: modulatedValue('field_relief'),
+      field_color: modulatedValue('field_color'),
+      field_speed: modulatedValue('field_speed'),
+      field_pattern: modulatedValue('field_pattern'),
     };
     const mat = materialSettings(audioSettings);
     this.uniforms.roughness.value = mat.roughness;
@@ -2653,58 +2681,58 @@ export class WallpaperRenderer {
       intSetting(this.settings, 'mat_sheen_color_b', 0, 255) / 255,
       LinearSRGBColorSpace,
     );
-    this.uniforms.reliefScale.value = modulatedValue('mat_relief', 0, 200) / 200;
-    this.uniforms.facetCurve.value = modulatedValue('mat_facet_curve', 0, 100) / 100;
-    this.uniforms.reliefGuide.value = modulatedValue('mat_relief_guide', 0, 100) / 100;
-    this.uniforms.ringRelief.value = modulatedValue('mat_ring_relief', 0, 100) / 100;
-    this.uniforms.latticeSpline.value = modulatedValue('mat_lattice_spline', 0, 100) / 100;
-    this.uniforms.harnack.value = modulatedValue('mat_harnack', 0, 100) / 100;
-    this.uniforms.brightness.value = modulatedValue('brightness', 0, 100) / 100;
+    this.uniforms.reliefScale.value = modulatedValue('mat_relief') / 200;
+    this.uniforms.facetCurve.value = modulatedValue('mat_facet_curve') / 100;
+    this.uniforms.reliefGuide.value = modulatedValue('mat_relief_guide') / 100;
+    this.uniforms.ringRelief.value = modulatedValue('mat_ring_relief') / 100;
+    this.uniforms.latticeSpline.value = modulatedValue('mat_lattice_spline') / 100;
+    this.uniforms.harnack.value = modulatedValue('mat_harnack') / 100;
+    this.uniforms.brightness.value = modulatedValue('brightness') / 100;
     this.uniforms.emissive.value = mat.emissive;
     this.uniforms.iridescence.value = Math.min(1, mat.iridescence);
     this.uniforms.metalness.value = Math.min(1, mat.metalness);
-    this.uniforms.rippleAmp.value = modulatedValue('field_relief', 0, 100) / 100 * 0.075;
-    this.uniforms.rippleColorAmp.value = modulatedValue('field_color', 0, 100) / 100 * 0.22;
-    this.uniforms.undulateAmp.value = modulatedValue('field_undulate', 0, 100) / 100 * 0.075;
-    this.uniforms.rippleFreq.value = modulatedValue('field_freq', 0, 100) / 10;
-    this.uniforms.undulateFreq.value = modulatedValue('field_undulate_freq', 0, 100) / 10;
-    this.uniforms.fieldSpeed.value = modulatedValue('field_speed', 0, 200) / 50;
-    this.uniforms.fieldPattern.value = modulatedValue('field_pattern', 0, 7);
-    this.uniforms.ornamentStyle.value = modulatedValue('ornament_style', 0, 4);
-    this.uniforms.ornamentAmount.value = modulatedValue('ornament_amount', 0, 100) / 100;
-    this.uniforms.ornamentWidth.value = modulatedValue('ornament_width', 0, 100) / 100;
-    this.uniforms.ornamentDensity.value = modulatedValue('ornament_density', 0, 100) / 100;
-    this.uniforms.ornamentPhase.value = modulatedValue('ornament_phase', 0, 100) / 100;
-    this.uniforms.ornamentTwist.value = modulatedValue('ornament_twist', 0, 100) / 100;
-    this.uniforms.surfaceContourAmount.value = modulatedValue('surface_contour_amount', 0, 100) / 100;
-    this.uniforms.surfaceContourSource.value = modulatedValue('surface_contour_source', 0, 7);
-    this.uniforms.surfaceContourSpacing.value = modulatedValue('surface_contour_spacing', 1, 64);
-    this.uniforms.surfaceContourWidth.value = modulatedValue('surface_contour_width', 1, 50) / 100;
-    this.uniforms.surfaceContourFeature.value = modulatedValue('surface_contour_feature', 0, 100) / 100;
-    this.uniforms.surfaceStripe.value = modulatedValue('surface_stripe', 0, 100) / 100;
-    this.uniforms.surfaceContourPhase.value = modulatedValue('surface_contour_phase', 0, 100) / 100;
+    this.uniforms.rippleAmp.value = modulatedValue('field_relief') / 100 * 0.075;
+    this.uniforms.rippleColorAmp.value = modulatedValue('field_color') / 100 * 0.22;
+    this.uniforms.undulateAmp.value = modulatedValue('field_undulate') / 100 * 0.075;
+    this.uniforms.rippleFreq.value = modulatedValue('field_freq') / 10;
+    this.uniforms.undulateFreq.value = modulatedValue('field_undulate_freq') / 10;
+    this.uniforms.fieldSpeed.value = modulatedValue('field_speed') / 50;
+    this.uniforms.fieldPattern.value = modulatedValue('field_pattern');
+    this.uniforms.ornamentStyle.value = modulatedValue('ornament_style');
+    this.uniforms.ornamentAmount.value = modulatedValue('ornament_amount') / 100;
+    this.uniforms.ornamentWidth.value = modulatedValue('ornament_width') / 100;
+    this.uniforms.ornamentDensity.value = modulatedValue('ornament_density') / 100;
+    this.uniforms.ornamentPhase.value = modulatedValue('ornament_phase') / 100;
+    this.uniforms.ornamentTwist.value = modulatedValue('ornament_twist') / 100;
+    this.uniforms.surfaceContourAmount.value = modulatedValue('surface_contour_amount') / 100;
+    this.uniforms.surfaceContourSource.value = modulatedValue('surface_contour_source');
+    this.uniforms.surfaceContourSpacing.value = modulatedValue('surface_contour_spacing');
+    this.uniforms.surfaceContourWidth.value = modulatedValue('surface_contour_width') / 100;
+    this.uniforms.surfaceContourFeature.value = modulatedValue('surface_contour_feature') / 100;
+    this.uniforms.surfaceStripe.value = modulatedValue('surface_stripe') / 100;
+    this.uniforms.surfaceContourPhase.value = modulatedValue('surface_contour_phase') / 100;
     const contourColor = oklchToClampedLinearSrgb([
-      modulatedValue('surface_contour_l', 0, 100) / 100,
-      modulatedValue('surface_contour_c', 0, 40) / 100,
-      modulatedValue('surface_contour_h', 0, 360),
+      modulatedValue('surface_contour_l') / 100,
+      modulatedValue('surface_contour_c') / 100,
+      modulatedValue('surface_contour_h'),
     ]);
     this.uniforms.surfaceContourR.value = contourColor[0];
     this.uniforms.surfaceContourG.value = contourColor[1];
     this.uniforms.surfaceContourB.value = contourColor[2];
     const markA = oklchToLinearSrgb([
-      modulatedValue('source_mark_a_l', 0, 100) / 100,
-      modulatedValue('source_mark_a_c', 0, 40) / 100,
-      modulatedValue('source_mark_a_h', 0, 360),
+      modulatedValue('source_mark_a_l') / 100,
+      modulatedValue('source_mark_a_c') / 100,
+      modulatedValue('source_mark_a_h'),
     ]);
     const markB = oklchToLinearSrgb([
-      modulatedValue('source_mark_b_l', 0, 100) / 100,
-      modulatedValue('source_mark_b_c', 0, 40) / 100,
-      modulatedValue('source_mark_b_h', 0, 360),
+      modulatedValue('source_mark_b_l') / 100,
+      modulatedValue('source_mark_b_c') / 100,
+      modulatedValue('source_mark_b_h'),
     ]);
     const markC = oklchToLinearSrgb([
-      modulatedValue('source_mark_c_l', 0, 100) / 100,
-      modulatedValue('source_mark_c_c', 0, 40) / 100,
-      modulatedValue('source_mark_c_h', 0, 360),
+      modulatedValue('source_mark_c_l') / 100,
+      modulatedValue('source_mark_c_c') / 100,
+      modulatedValue('source_mark_c_h'),
     ]);
     this.uniforms.overlayColorA.value.setRGB(markA[0], markA[1], markA[2], LinearSRGBColorSpace);
     this.uniforms.overlayColorB.value.setRGB(markB[0], markB[1], markB[2], LinearSRGBColorSpace);
@@ -2714,50 +2742,54 @@ export class WallpaperRenderer {
       this.uniforms.ornamentAmount.value,
       this.uniforms.ornamentDensity.value,
     );
-    const depthScale = modulatedValue('field_displace', 0, 100) / 100;
+    const depthScale = modulatedValue('field_displace') / 100;
     this.uniforms.depthScale.value = Math.min(1.5, depthScale);
     const borderRgb = oklchToClampedLinearSrgb([
-      modulatedValue('border_l', 0, 100) / 100,
-      modulatedValue('border_c', 0, 37) / 100,
-      modulatedValue('border_h', 0, 359),
+      modulatedValue('border_l') / 100,
+      modulatedValue('border_c') / 100,
+      modulatedValue('border_h'),
     ]);
     this.edgeMaterial.color.setRGB(borderRgb[0], borderRgb[1], borderRgb[2], LinearSRGBColorSpace);
-    this.edgeMaterial.opacity = modulatedValue('border_a', 0, 100) / 100;
+    this.edgeMaterial.opacity = modulatedValue('border_a') / 100;
     this.uniforms.borderR.value = borderRgb[0];
     this.uniforms.borderG.value = borderRgb[1];
     this.uniforms.borderB.value = borderRgb[2];
     this.uniforms.borderA.value = this.edgeMaterial.opacity;
     const edgeProfile = oklchToClampedLinearSrgb([
-      modulatedValue('edge_profile_l', 0, 100) / 100,
-      modulatedValue('edge_profile_c', 0, 37) / 100,
-      modulatedValue('edge_profile_h', 0, 359),
+      modulatedValue('edge_profile_l') / 100,
+      modulatedValue('edge_profile_c') / 100,
+      modulatedValue('edge_profile_h'),
     ]);
-    this.uniforms.edgeProfileWidth.value = modulatedValue('edge_profile_width', 0, 100) / 100;
-    this.uniforms.edgeProfileGlow.value = modulatedValue('edge_profile_glow', 0, 100) / 100;
+    this.uniforms.edgeProfileWidth.value = modulatedValue('edge_profile_width') / 100;
+    this.uniforms.edgeProfileGlow.value = modulatedValue('edge_profile_glow') / 100;
     this.uniforms.edgeProfileR.value = edgeProfile[0];
     this.uniforms.edgeProfileG.value = edgeProfile[1];
     this.uniforms.edgeProfileB.value = edgeProfile[2];
-    if (
-      hasModulation('light_ambient')
+    const hasLightModulation = hasModulation('light_ambient')
       || hasModulation('light_angle')
       || hasModulation('light_elevation')
       || hasModulation('light_intensity')
       || hasModulation('light_warmth')
-      || hasModulation('light_choreo_amount')
-      || intSetting(audioSettings, 'light_choreo_amount', 0, 100) > 0
-    ) {
-      this.applyLights(audioSettings);
+      || hasModulation('light_choreo_amount');
+    const hadLightModulation = this.audioLightSettings !== null;
+    // Publish (or retire) the modulated snapshot BEFORE applying, so the
+    // per-frame choreography/pan ticks resolve to the same values instead of
+    // clobbering them with the unmodulated baseline a moment later.
+    this.audioLightSettings = hasLightModulation ? audioSettings : null;
+    if (hasLightModulation || hadLightModulation
+      || intSetting(audioSettings, 'light_choreo_amount', 0, 100) > 0) {
+      this.applyLights(this.effectiveLightSettings());
     }
     const hasProjectionModulation = hasModulation('hyp_scale')
       || hasModulation('proj_blend')
       || hasModulation('hyp_boost_x')
       || hasModulation('hyp_boost_y');
     this.audioProjectionActive = hasProjectionModulation;
-    this.audioBoostX = hasModulation('hyp_boost_x') ? modulatedDelta('hyp_boost_x', 0, 100) : null;
-    this.audioBoostY = hasModulation('hyp_boost_y') ? modulatedDelta('hyp_boost_y', 0, 100) : null;
+    this.audioBoostX = hasModulation('hyp_boost_x') ? modulatedDelta('hyp_boost_x') : null;
+    this.audioBoostY = hasModulation('hyp_boost_y') ? modulatedDelta('hyp_boost_y') : null;
     if (hasProjectionModulation || hadProjectionModulation) {
       this.projectionScale = displayScaleFromSettings(audioSettings);
-      this.uniforms.projBlend.value = intSetting(audioSettings, 'proj_blend', -100, 100) / 100;
+      this.uniforms.projBlend.value = modulatedValue('proj_blend') / 100;
       this.uniforms.projScale.value = poincareScaleFromSettings(audioSettings);
       this.applyGroupScale();
       if (this.drag?.mode === 'boost') {
@@ -2769,8 +2801,8 @@ export class WallpaperRenderer {
         );
       } else {
         this.setProjectionBoost(
-          modulatedValue('hyp_boost_x', 0, 100),
-          modulatedValue('hyp_boost_y', 0, 100),
+          modulatedValue('hyp_boost_x'),
+          modulatedValue('hyp_boost_y'),
           String(audioSettings.projection) === '1',
           false,
         );
@@ -2794,7 +2826,7 @@ export class WallpaperRenderer {
     this.uniforms.fieldPhase.value = 0;
     this.uniforms.fieldWavePhase.value = 0;
     this.uniforms.fieldSlots.forEach(slot => { slot.phase.value = 0; });
-    this.applyLights(this.settings);
+    this.applyLights(this.effectiveLightSettings());
     this.render();
   }
 
@@ -2811,6 +2843,12 @@ export class WallpaperRenderer {
     void now;
     if (shouldRender) this.renderNow();
     this.flushRetiredGeometries();
+  }
+
+  // The light settings every non-modulation caller must apply: the live
+  // modulated snapshot while audio drives any light_* target, else the base.
+  private effectiveLightSettings(): Settings | Partial<Settings> {
+    return this.audioLightSettings ?? this.settings;
   }
 
   applyLights(settings: Settings | Partial<Settings>): void {
@@ -2948,7 +2986,7 @@ export class WallpaperRenderer {
     this.viewPanY = 0;
     this.group.rotation.set(0, 0, 0);
     this.applyGroupScale();
-    this.applyLights(this.settings);
+    this.applyLights(this.effectiveLightSettings());
     this.notifyViewWindowChange();
     this.render();
   }
@@ -3005,7 +3043,7 @@ export class WallpaperRenderer {
       this.viewPanX = this.drag.panX - worldDx / scale;
       this.viewPanY = this.drag.panY - worldDy / scale;
       this.applyGroupPan();
-      this.applyLights(this.settings);
+      this.applyLights(this.effectiveLightSettings());
       this.notifyViewWindowChange();
       this.render();
       return;

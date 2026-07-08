@@ -10,7 +10,7 @@ import type { Edge, Node } from '@xyflow/react';
 import { InterleavedBufferAttribute, type BufferGeometry } from 'three/webgpu';
 import { EFFECT_CATALOG } from '../web/src/render/postFxCatalog.ts';
 import { fxBuilder } from '../web/src/render/postFxRegistry.ts';
-import { AUDIO_TARGET_RANGES } from '../web/src/flow/audioTargets.ts';
+import { AUDIO_TARGET_RANGES, audioTargetRange } from '../web/src/flow/audioTargets.ts';
 import { renderInputsFromEdges } from '../web/src/flow/renderInputs.ts';
 import { spliceMaterialFieldBypasses } from '../web/src/flow/materialLanes.ts';
 import { evaluateSignals, type AudioOperatorRuntimeState } from '../web/src/flow/signalEval.ts';
@@ -102,6 +102,37 @@ for (const match of setAudioDriveBody.matchAll(/modulatedValue\('([^']+)'/g)) {
   const setting = match[1] ?? '';
   if (setting && !rendererAudioKeys.has(setting)) {
     violations.push(`renderer-contract: '${setting}' is modulated in setAudioDrive but is missing from RENDERER_AUDIO_SETTING_KEYS, so isolated audio wiring can early-return`);
+  }
+}
+// Modulation ranges live ONLY in AUDIO_TARGET_RANGES. A (min, max) literal at
+// a modulatedValue/modulatedDelta call site is a second source of truth —
+// that is exactly how proj_blend forked to (0, 100) after the schema went
+// signed to (-100, 100).
+if (/modulated(?:Value|Delta)\('[^']+'\s*,/.test(setAudioDriveBody)) {
+  violations.push('renderer-contract: modulatedValue/modulatedDelta must not restate (min, max) literals — ranges come from AUDIO_TARGET_RANGES only');
+}
+for (const match of setAudioDriveBody.matchAll(/modulated(?:Value|Delta)\('([^']+)'/g)) {
+  const setting = match[1] ?? '';
+  if (setting && !Object.getOwnPropertyDescriptor(AUDIO_TARGET_RANGES, setting)?.value) {
+    violations.push(`renderer-contract: '${setting}' is modulated in setAudioDrive but has no AUDIO_TARGET_RANGES entry (targetRange would throw on the first audio tick)`);
+  }
+}
+// Wherever a setting is both a node control and a modulation target, the two
+// schemas must agree on its range.
+const controlListsForRangeCheck: readonly (readonly [string, readonly ControlSpec[]])[] = [
+  ['CLOCK_CONTROLS', CLOCK_CONTROLS],
+  ['BORDER_CONTROLS', BORDER_CONTROLS],
+  ['LIGHT_CONTROLS', LIGHT_CONTROLS],
+  ['MATERIAL_CONTROLS', MATERIAL_CONTROLS],
+  ['PROJECTION_CONTROLS', PROJECTION_CONTROLS],
+  ['RIPPLE_TARGET_CONTROLS', RIPPLE_TARGET_CONTROLS],
+];
+for (const [listName, list] of controlListsForRangeCheck) {
+  for (const [key, , min, max] of list) {
+    const range = audioTargetRange(key);
+    if (range && (range[0] !== min || range[1] !== max)) {
+      violations.push(`range-contract: '${key}' is [${min}, ${max}] in ${listName} but [${range[0]}, ${range[1]}] in AUDIO_TARGET_RANGES — one schema must own the range`);
+    }
   }
 }
 for (const match of renderer.matchAll(/attribute(?:<[^>]+>)?\(\s*['"](\w+)['"]/g)) {
@@ -468,7 +499,12 @@ const amFeatures = {
   cwtTransient: 0,
   crestFactor: 0,
   beat: 0,
+  beatPhase: 0,
+  pulseLfo: 0,
+  pulseConfidence: 0,
   beatConfidence: 0,
+  tempoConfidence: 0,
+  beatStrength: 0,
   tempo: 0,
   bpm: 120,
 };
@@ -519,7 +555,12 @@ const pmFeatures = {
   cwtTransient: 0,
   crestFactor: 0,
   beat: 0,
+  beatPhase: 0,
+  pulseLfo: 0,
+  pulseConfidence: 0,
   beatConfidence: 0,
+  tempoConfidence: 0,
+  beatStrength: 0,
   tempo: 0,
   bpm: 120,
 };

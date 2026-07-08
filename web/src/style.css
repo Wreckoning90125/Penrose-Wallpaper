@@ -833,9 +833,12 @@ h1 {
   row-gap: 8px;
 }
 
-/* Slider grids directly after a button group (e.g. the Border node's join buttons
-   above the Width/Light row) need the same gap other slider/label combos get. */
-.segmented + .control-grid {
+/* Anything directly after a segmented button group needs the same gap other
+   slider/label combos get — both wrapped grids (Border node's join buttons
+   above the Width/Light row) and bare sliders (Clock node's rate below the
+   waveform buttons). */
+.segmented + .control-grid,
+.segmented + .range-row {
   margin-top: 10px;
 }
 

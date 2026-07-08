@@ -74,7 +74,8 @@ for (const item of CASES) {
     if (Math.abs(x) > 1.05 || Math.abs(y) > 1.05) fail(`${label}: normalized point outside expected bounds`);
     centroidX += x;
     centroidY += y;
-    quadrants[(x >= 0 ? 1 : 0) + (y >= 0 ? 2 : 0)] += 1;
+    const quadrant = (x >= 0 ? 1 : 0) + (y >= 0 ? 2 : 0);
+    quadrants[quadrant] = (quadrants[quadrant] ?? 0) + 1;
   }
   if (Math.max(maxX - minX, maxY - minY) < 0.5) fail(`${label}: attractor bounds collapsed`);
   centroidX /= expected;

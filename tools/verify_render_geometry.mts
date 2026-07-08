@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { BufferAttribute, InterleavedBufferAttribute, type BufferGeometry } from 'three/webgpu';
-import { DEFAULT_SETTINGS, normalizeSettings, type SettingValue, type Settings } from '../web/src/settings/androidSettings.ts';
+import { normalizeSettings, type SettingValue, type Settings } from '../web/src/settings/androidSettings.ts';
 import type { Patch, Point, Tile } from '../web/src/types.ts';
 import {
   buildEdgeGeometryForPatch,
@@ -51,35 +51,9 @@ const SPECTRE_LOGICAL_SIDES = 14;
 const SPECTRE_BORDER_SAMPLES_PER_SIDE = 12;
 const PROJECTED_AREA_EPS = 2e-9;
 const WINDING_AREA_EPS = 1e-8;
-const SOURCE_MARK_RELIEF_TOLERANCE = 0.018;
-const SOURCE_MARK_SLOPE_TOLERANCE = 0.12;
 const CACHE_DIR = '.cache/render-geometry-check';
 const ATLAS_DIR = 'web/public/generated/atlas';
 const failures: string[] = [];
-
-type SurfaceVertex = {
-  x: number;
-  y: number;
-  relief: number;
-};
-
-type SurfaceTri = {
-  a: SurfaceVertex;
-  b: SurfaceVertex;
-  c: SurfaceVertex;
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
-  slopeX: number;
-  slopeY: number;
-};
-
-type SurfaceSample = {
-  relief: number;
-  slopeX: number;
-  slopeY: number;
-};
 
 function fail(message: string): void {
   failures.push(message);

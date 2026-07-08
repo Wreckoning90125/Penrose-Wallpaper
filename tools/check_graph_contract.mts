@@ -92,29 +92,42 @@ function requiredAnchor(source: string, pattern: RegExp, label: string): RegExpM
 }
 const rendererAudioKeysMatch = requiredAnchor(renderer, /const RENDERER_AUDIO_SETTING_KEYS:[\s\S]*?=\s*\[(?<body>[\s\S]*?)\];/, 'RENDERER_AUDIO_SETTING_KEYS');
 const rendererAudioKeys = new Set<string>();
-const rendererAudioKeyBody = rendererAudioKeysMatch.groups?.body ?? '';
+const rendererAudioKeyBody = rendererAudioKeysMatch.groups?.['body'] ?? '';
 for (const match of rendererAudioKeyBody.matchAll(/'([^']+)'/g)) {
   rendererAudioKeys.add(match[1] ?? '');
 }
-const setAudioDriveMatch = requiredAnchor(renderer, /  setAudioDrive\([\s\S]*?\n  applyLights\(/, 'setAudioDrive..applyLights');
-const setAudioDriveBody = setAudioDriveMatch[0];
-for (const match of setAudioDriveBody.matchAll(/modulatedValue\('([^']+)'/g)) {
-  const setting = match[1] ?? '';
-  if (setting && !rendererAudioKeys.has(setting)) {
-    violations.push(`renderer-contract: '${setting}' is modulated in setAudioDrive but is missing from RENDERER_AUDIO_SETTING_KEYS, so isolated audio wiring can early-return`);
+// The renderer consumes modulation through ONE path: setAudioDrive builds a
+// per-key overlay over RENDERER_AUDIO_SETTING_KEYS using audioTargetRange,
+// and applyDynamicState() writes every dynamic value from the resolved
+// effective settings. Anchor both so a refactor cannot silently fork them.
+const setAudioDriveBody = requiredAnchor(renderer, /  setAudioDrive\([\s\S]*?\n  \}\n/, 'setAudioDrive')[0];
+requiredAnchor(renderer, /private applyDynamicState\(\): void \{/, 'applyDynamicState');
+if (!setAudioDriveBody.includes('audioTargetRange(')) {
+  violations.push('renderer-contract: setAudioDrive must derive every modulation range from audioTargetRange (AUDIO_TARGET_RANGES is the only range schema)');
+}
+if (!setAudioDriveBody.includes('this.applyDynamicState()')) {
+  violations.push('renderer-contract: setAudioDrive must apply through applyDynamicState() — a separate uniform-write path reintroduces the settings/modulation clobber');
+}
+// Every renderer-side overlay key needs a range entry (the overlay builder
+// throws at runtime otherwise), and every modulation target that is not a
+// known App-side key must be consumed by the renderer overlay — a target
+// missing from RENDERER_AUDIO_SETTING_KEYS is wireable in the UI but dead.
+// Parsed from App.tsx so the allowlist cannot drift from the code that
+// actually implements the App-side modulation path.
+const appSrc = readFileSync('web/src/App.tsx', 'utf8');
+const liveModulatedMatch = requiredAnchor(appSrc, /const LIVE_MODULATED_SETTING_KEYS[\s\S]*?=\s*\[(?<body>[\s\S]*?)\];/, 'LIVE_MODULATED_SETTING_KEYS');
+const APP_SIDE_TARGETS = new Set(['luminance']);
+for (const match of (liveModulatedMatch.groups?.['body'] ?? '').matchAll(/'([^']+)'/g)) {
+  APP_SIDE_TARGETS.add(match[1] ?? '');
+}
+for (const setting of rendererAudioKeys) {
+  if (!audioTargetRange(setting)) {
+    violations.push(`renderer-contract: '${setting}' is in RENDERER_AUDIO_SETTING_KEYS but has no AUDIO_TARGET_RANGES entry (setAudioDrive throws on the first tick)`);
   }
 }
-// Modulation ranges live ONLY in AUDIO_TARGET_RANGES. A (min, max) literal at
-// a modulatedValue/modulatedDelta call site is a second source of truth —
-// that is exactly how proj_blend forked to (0, 100) after the schema went
-// signed to (-100, 100).
-if (/modulated(?:Value|Delta)\('[^']+'\s*,/.test(setAudioDriveBody)) {
-  violations.push('renderer-contract: modulatedValue/modulatedDelta must not restate (min, max) literals — ranges come from AUDIO_TARGET_RANGES only');
-}
-for (const match of setAudioDriveBody.matchAll(/modulated(?:Value|Delta)\('([^']+)'/g)) {
-  const setting = match[1] ?? '';
-  if (setting && !Object.getOwnPropertyDescriptor(AUDIO_TARGET_RANGES, setting)?.value) {
-    violations.push(`renderer-contract: '${setting}' is modulated in setAudioDrive but has no AUDIO_TARGET_RANGES entry (targetRange would throw on the first audio tick)`);
+for (const setting of Object.keys(AUDIO_TARGET_RANGES)) {
+  if (!APP_SIDE_TARGETS.has(setting) && !rendererAudioKeys.has(setting)) {
+    violations.push(`renderer-contract: modulation target '${setting}' is wireable but absent from RENDERER_AUDIO_SETTING_KEYS — it would be silently dead in the renderer`);
   }
 }
 // Wherever a setting is both a node control and a modulation target, the two
@@ -195,8 +208,8 @@ for (const contract of rendererUniformContracts) {
   if (!renderer.includes(`this.uniforms.${contract.uniform}.value = intSetting(settings, '${contract.setting}'`)) {
     violations.push(`renderer-contract: '${contract.setting}' is not loaded from settings into '${contract.uniform}'`);
   }
-  if (contract.modulated && !renderer.includes(`this.uniforms.${contract.uniform}.value = modulatedValue('${contract.setting}'`)) {
-    violations.push(`renderer-contract: '${contract.setting}' is not consumed by audio modulation`);
+  if (contract.modulated && !rendererAudioKeys.has(contract.setting)) {
+    violations.push(`renderer-contract: '${contract.setting}' is not in RENDERER_AUDIO_SETTING_KEYS, so the modulation overlay never carries it`);
   }
 }
 if (!renderer.includes('ornamentMaskNode(')) {
@@ -239,8 +252,8 @@ for (const setting of ['edge_profile_l', 'edge_profile_c', 'edge_profile_h']) {
   if (!renderer.includes(`intSetting(settings, '${setting}'`)) {
     violations.push(`renderer-contract: '${setting}' is not loaded from settings into the edge profile colour`);
   }
-  if (!renderer.includes(`modulatedValue('${setting}'`)) {
-    violations.push(`renderer-contract: '${setting}' is not consumed by audio modulation`);
+  if (!rendererAudioKeys.has(setting)) {
+    violations.push(`renderer-contract: '${setting}' is not in RENDERER_AUDIO_SETTING_KEYS, so the modulation overlay never carries it`);
   }
 }
 if (

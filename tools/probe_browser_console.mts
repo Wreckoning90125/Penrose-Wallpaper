@@ -6,8 +6,12 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
-type CdpResponse = { id?: number; result?: JsonValue; error?: { message?: string; data?: string } };
+type CdpResponse = { id: number; result?: JsonValue; error?: { message?: string; data?: string } };
 type CdpEvent = { method?: string; params?: JsonValue };
+
+function isCdpResponse(message: CdpResponse | CdpEvent): message is CdpResponse {
+  return typeof Reflect.get(message, 'id') === 'number';
+}
 type ConsoleEntry = {
   source: string;
   level: string;
@@ -150,7 +154,7 @@ class CdpSocket {
 
   constructor(socket: import('node:net').Socket) {
     this.socket = socket;
-    socket.on('data', chunk => this.onData(chunk));
+    socket.on('data', chunk => this.onData(typeof chunk === 'string' ? Buffer.from(chunk) : chunk));
   }
 
   static async connect(webSocketDebuggerUrl: string): Promise<CdpSocket> {
@@ -249,11 +253,10 @@ class CdpSocket {
   }
 
   private handleMessage(message: CdpResponse | CdpEvent): void {
-    const id = Reflect.get(message, 'id');
-    if (typeof id === 'number') {
-      const resolve = this.pending.get(id);
+    if (isCdpResponse(message)) {
+      const resolve = this.pending.get(message.id);
       if (resolve) {
-        this.pending.delete(id);
+        this.pending.delete(message.id);
         resolve(message);
       }
       return;

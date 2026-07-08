@@ -27,7 +27,7 @@ import type { AtlasCategory, AtlasItem, AtlasManifest, BoostPosition, DragMode, 
 import type { ViewGestureMode, WallpaperRenderer } from './render/webgpuRenderer';
 import { isOrderFiveIfsSettings, orderFiveIfsPointCount } from './tiling/orderFiveIfs';
 import { sourceOverlayActiveForStyle } from './tiling/capabilities';
-import { supportsWindowedPatchGeneration, windowedPatchKey } from './tiling/windowedGeneration';
+import { supportsWindowedPatchGeneration, windowCovered, windowInsensitiveGeneration, windowedPatchKey } from './tiling/windowedGeneration';
 
 // Loaded with the renderer chunk (see the renderer-init effect): the wrapper
 // touches three/webgpu, and a static import would drag three into the entry
@@ -366,6 +366,7 @@ export function App() {
   const previewGeometryModeRef = useRef<PreviewGeometryMode>('border');
   const previewPaletteFrameRef = useRef(0);
   const viewWindowChangeTimeoutRef = useRef(0);
+  const generatedWindowRef = useRef<TilingWindow | null>(null);
   const liveModulatedSettingBasesRef = useRef<LiveModulatedSettingBases>({});
   const luminanceModBaseRef = useRef<LuminanceModulationBase | null>(null);
   const luminanceModActiveRef = useRef(false);
@@ -935,18 +936,24 @@ export function App() {
   const handleViewWindowChange = useCallback(() => {
     const renderer = rendererRef.current;
     const family = intSetting(renderSettingsRef.current, 'family', 0, 19);
-    if (renderer && supportsWindowedPatchGeneration(family)) {
-      if (viewWindowChangeTimeoutRef.current) window.clearTimeout(viewWindowChangeTimeoutRef.current);
-      viewWindowChangeTimeoutRef.current = window.setTimeout(() => {
-        viewWindowChangeTimeoutRef.current = 0;
-        const activeRenderer = rendererRef.current;
-        if (!activeRenderer) return;
-        const activeFamily = intSetting(renderSettingsRef.current, 'family', 0, 19);
-        if (!supportsWindowedPatchGeneration(activeFamily)) return;
-        const key = windowedPatchKey(activeRenderer.currentTilingWindow());
-        setViewWindowPatchKey(current => current === key ? current : key);
-      }, 180);
-    }
+    // Regenerate only when the view actually escapes the last generated
+    // coverage: zoom-in and small pans stay inside the overscanned patch, and
+    // multigrid families produce the identical patch for any window.
+    if (!renderer || !supportsWindowedPatchGeneration(family) || windowInsensitiveGeneration(family)) return;
+    if (windowCovered(generatedWindowRef.current, renderer.currentTilingWindow())) return;
+    if (viewWindowChangeTimeoutRef.current) window.clearTimeout(viewWindowChangeTimeoutRef.current);
+    viewWindowChangeTimeoutRef.current = window.setTimeout(() => {
+      viewWindowChangeTimeoutRef.current = 0;
+      const activeRenderer = rendererRef.current;
+      if (!activeRenderer) return;
+      const activeFamily = intSetting(renderSettingsRef.current, 'family', 0, 19);
+      if (!supportsWindowedPatchGeneration(activeFamily) || windowInsensitiveGeneration(activeFamily)) return;
+      const activeWindow = activeRenderer.currentTilingWindow();
+      if (windowCovered(generatedWindowRef.current, activeWindow)) return;
+      generatedWindowRef.current = activeWindow;
+      const key = windowedPatchKey(activeWindow);
+      setViewWindowPatchKey(current => current === key ? current : key);
+    }, 180);
   }, []);
 
   useEffect(() => {
@@ -1034,6 +1041,7 @@ export function App() {
         const rendererWindow = currentPatch && rendererRef.current && supportsWindowedPatchGeneration(family)
           ? rendererRef.current.currentTilingWindow()
           : null;
+        generatedWindowRef.current = rendererWindow;
         const nextPatch = await loadPatchForSettings(renderSettings, activeItem, rendererWindow);
         if (cancelled) return;
         setPatch(nextPatch);
@@ -1092,6 +1100,12 @@ export function App() {
       framedPatchRef.current = currentPatch;
       appliedBorderGeometryRef.current = { key: borderGeometryKey(current), patch: currentPatch };
       activeEdgeGeometry = null;
+      // setSettings above re-applied the un-modulated baseline for every
+      // renderer uniform; re-apply the live audio drive in the same tick like
+      // every sibling setSettings caller does, so a geometry rebuild (incl.
+      // pan/zoom-triggered windowed-patch reloads) cannot strand the render at
+      // the baseline until the next audio tick.
+      applyAudioDriveRef.current();
     }
     void buildGeometry().catch(caught => {
       const message = caught instanceof Error ? caught.message : String(caught);

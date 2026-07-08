@@ -27,11 +27,11 @@ function fail(message: string): never {
 // ---------------------------------------------------------------- 1. C++ parity
 const penroseSrc = readFileSync('android/app/src/main/cpp/tiling/penrose.cpp', 'utf8');
 const tableMatch = penroseSrc.match(/kD4Matrices = \{\{(?<body>[\s\S]*?)\}\};/);
-if (!tableMatch?.groups?.body) {
+if (!tableMatch?.groups?.['body']) {
   fail('anchor kD4Matrices no longer matches penrose.cpp — update this gate, do not let the parity check go vacuous');
 }
 const cppMatrices: D4Matrix[] = [];
-for (const row of tableMatch.groups.body.matchAll(/\{\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\}/g)) {
+for (const row of tableMatch.groups['body'].matchAll(/\{\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\}/g)) {
   cppMatrices.push([Number(row[1]), Number(row[2]), Number(row[3]), Number(row[4])]);
 }
 if (cppMatrices.length !== 8) fail(`parsed ${cppMatrices.length} matrices from penrose.cpp kD4Matrices, expected 8`);

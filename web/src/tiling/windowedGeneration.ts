@@ -78,6 +78,26 @@ export function supportsWindowedPatchGeneration(family: number): boolean {
   return WINDOWED_GENERATION_FAMILIES.has(family);
 }
 
+// The renderer overscans the view by this factor when it asks for a window,
+// so a generated patch stays valid until the view escapes that slack.
+export const WINDOW_OVERSCAN = 1.55;
+
+// Multigrid families generate the full gen-N rosette regardless of the
+// window, so view movement can never require a regeneration.
+export function windowInsensitiveGeneration(family: number): boolean {
+  return family === 3 || family === 5 || family === 6;
+}
+
+export function windowCovered(generated: TilingWindow | null, current: TilingWindow): boolean {
+  if (!generated) return false;
+  const viewHalfWidth = current.halfWidth / WINDOW_OVERSCAN;
+  const viewHalfHeight = current.halfHeight / WINDOW_OVERSCAN;
+  return current.centerX - viewHalfWidth >= generated.centerX - generated.halfWidth
+    && current.centerX + viewHalfWidth <= generated.centerX + generated.halfWidth
+    && current.centerY - viewHalfHeight >= generated.centerY - generated.halfHeight
+    && current.centerY + viewHalfHeight <= generated.centerY + generated.halfHeight;
+}
+
 export function windowedPatchKey(window: TilingWindow | null): string {
   if (!window) return 'full';
   const basis = Math.max(Math.min(window.halfWidth, window.halfHeight), 1e-3);

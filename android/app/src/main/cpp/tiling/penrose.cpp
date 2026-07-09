@@ -2345,6 +2345,12 @@ inline SocolarTaylorChildSymbol stSym(uint8_t letter, bool barred, bool right) {
 
 using SocolarTaylorRule = std::array<SocolarTaylorChildSymbol, 4>;
 
+// Substitution table for the Socolar-Taylor half-hex hierarchy: one parent
+// state (letter A-G, barred or plain, left or right chirality) maps to its
+// four child symbols in child-slot order. The switch enumerates every
+// (letter, barred, right) combination explicitly — these rows are the
+// tiling's defining data (see docs/tilings/socolar-taylor.md), so they stay
+// as literal tuples rather than being compressed into clever index math.
 SocolarTaylorRule socolarTaylorRule(const SocolarTaylorState& state) {
     switch (state.letter) {
         case stA:

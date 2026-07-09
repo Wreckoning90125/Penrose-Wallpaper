@@ -274,6 +274,13 @@ void GraphUi::drawSpawnPopup(Graph& graph) {
     }
 }
 
+// Bottom parameter sheet for the selected node. A fixed, undraggable ImGui
+// window is pinned above the bottom inset, sized per node kind (taller for
+// multi-param operators like Map/Envelope/Gate), and the switch below draws
+// the kind-specific editors: one drawFloatEditor per parameter, laid out in
+// two columns when a kind has parameter pairs, plus selector rows for the
+// enum-like params (waveform, gate mode). Editing writes straight into the
+// node's p0..pN fields — the graph reads them live on the next evaluate.
 void GraphUi::drawParameterSheet(FlowNode* selNode) {
     if (!selNode || selNode->toDestroy() || !hasEditableParams(selNode->kind())) return;
 

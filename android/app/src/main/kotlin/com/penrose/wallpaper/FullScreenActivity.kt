@@ -242,7 +242,8 @@ class FullScreenActivity : AppCompatActivity(),
             if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
                 touchRouteGraph = false
             }
-            return super.onTouchEvent(event) || true
+            super.onTouchEvent(event)
+            return true
         }
         handlePreviewTransformEvent(event)
         return true

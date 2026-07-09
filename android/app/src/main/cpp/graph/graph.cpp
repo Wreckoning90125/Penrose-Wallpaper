@@ -481,12 +481,12 @@ private:
                     }
                 }
                 if (flag0 && value > p1) state1 = now;
-                const float target = flag0 ? 1.0f : clamp01(p5);
+                const float envTarget = flag0 ? 1.0f : clamp01(p5);
                 const float dt = std::max(0.0f, graph_->context().dtSeconds);
-                const float alpha = target > state0
+                const float alpha = envTarget > state0
                     ? smoothingAlpha(std::max(0.0f, p3), dt)
                     : smoothingAlpha(std::max(0.0f, p4), dt);
-                state0 += (target - state0) * alpha;
+                state0 += (envTarget - state0) * alpha;
                 return value * state0;
             }
             case NodeKind::OpMath: {
@@ -1220,7 +1220,7 @@ bool Graph::fromJson(const std::string& text) {
             if (!R.match('[')) return fail();
             while (!R.peek(']') && !R.atEnd()) {
                 if (!R.match('{')) return fail();
-                PendingLink l{};
+                PendingLink link{};
                 double src = 0.0, dst = 0.0;
                 bool hasSrc = false, hasDst = false;
                 while (!R.peek('}') && !R.atEnd()) {
@@ -1235,8 +1235,8 @@ bool Graph::fromJson(const std::string& text) {
                     } else if (k == "srcPin" || k == "dstPin") {
                         std::string s;
                         if (!R.readString(s)) return fail();
-                        if (k == "srcPin") l.srcPin = std::move(s);
-                        else               l.dstPin = std::move(s);
+                        if (k == "srcPin") link.srcPin = std::move(s);
+                        else               link.dstPin = std::move(s);
                     } else {
                         if (!R.skipValue()) return fail();
                     }
@@ -1251,9 +1251,9 @@ bool Graph::fromJson(const std::string& text) {
                     ++droppedLinkCount;
                     continue;
                 }
-                l.src = static_cast<uint64_t>(src);
-                l.dst = static_cast<uint64_t>(dst);
-                pending.push_back(std::move(l));
+                link.src = static_cast<uint64_t>(src);
+                link.dst = static_cast<uint64_t>(dst);
+                pending.push_back(std::move(link));
             }
             R.match(']');
         } else {
@@ -1272,9 +1272,9 @@ bool Graph::fromJson(const std::string& text) {
         return fail();
     }
 
-    for (const auto& l : pending) {
-        const auto sit = remap.find(l.src);
-        const auto dit = remap.find(l.dst);
+    for (const auto& link : pending) {
+        const auto sit = remap.find(link.src);
+        const auto dit = remap.find(link.dst);
         if (sit == remap.end() || dit == remap.end()) {
             ++droppedLinkCount;
             continue;
@@ -1286,8 +1286,8 @@ bool Graph::fromJson(const std::string& text) {
             ++droppedLinkCount;
             continue;
         }
-        ImFlow::Pin* op = findPinByNameOrAlias(sn->second->getOuts(), l.srcPin);
-        ImFlow::Pin* ip = findPinByNameOrAlias(dn->second->getIns(),  l.dstPin);
+        ImFlow::Pin* op = findPinByNameOrAlias(sn->second->getOuts(), link.srcPin);
+        ImFlow::Pin* ip = findPinByNameOrAlias(dn->second->getIns(),  link.dstPin);
         if (op && ip && !ip->isConnected() && canConnect(op, ip)) {
             ip->createLink(op);
         } else {

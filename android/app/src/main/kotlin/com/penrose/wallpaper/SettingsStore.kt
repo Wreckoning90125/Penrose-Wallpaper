@@ -14,6 +14,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.SharedPreferencesMigration
 import androidx.datastore.preferences.preferencesDataStoreFile
 import androidx.preference.PreferenceDataStore
 import java.util.concurrent.CopyOnWriteArraySet
@@ -89,6 +90,14 @@ internal class SettingsStore private constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val dataStore: DataStore<Preferences> = PreferenceDataStoreFactory.create(
         scope = scope,
+        // The working store's name matches the legacy SharedPreferences file,
+        // so upgrades from pre-DataStore builds adopt the saved settings
+        // instead of starting from an empty snapshot.
+        migrations = if (name == Settings.PREFS_NAME) {
+            listOf(SharedPreferencesMigration(context, Settings.PREFS_NAME))
+        } else {
+            emptyList()
+        },
         produceFile = { context.preferencesDataStoreFile(name) },
     )
     private val mainHandler = Handler(Looper.getMainLooper())

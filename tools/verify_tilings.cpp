@@ -80,10 +80,9 @@ bool segmentsIntersect(
     const double o2 = orient2(ax, ay, bx, by, dx, dy);
     const double o3 = orient2(cx, cy, dx, dy, ax, ay);
     const double o4 = orient2(cx, cy, dx, dy, bx, by);
-    if (((o1 > eps && o2 < -eps) || (o1 < -eps && o2 > eps)) &&
-        ((o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps))) {
-        return true;
-    }
+    const bool cdStraddlesAb = (o1 > eps && o2 < -eps) || (o1 < -eps && o2 > eps);
+    const bool abStraddlesCd = (o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps);
+    if (cdStraddlesAb && abStraddlesCd) return true;
     return pointOnSegment(ax, ay, bx, by, cx, cy)
         || pointOnSegment(ax, ay, bx, by, dx, dy)
         || pointOnSegment(cx, cy, dx, dy, ax, ay)

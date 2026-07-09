@@ -136,9 +136,9 @@ internal class FftTapProcessor(
                     val chunk = minOf(remaining, monoScratch.size)
                     for (f in 0 until chunk) {
                         var sum = 0f
-                        val sampleBase = frameBase + f * channelCount * java.lang.Float.BYTES
+                        val sampleBase = frameBase + (f * channelCount * java.lang.Float.BYTES)
                         for (c in 0 until channelCount) {
-                            sum += readPcmFloatLe(buffer, sampleBase + c * java.lang.Float.BYTES)
+                            sum += readPcmFloatLe(buffer, sampleBase + (c * java.lang.Float.BYTES))
                         }
                         monoScratch[f] = sum * inv
                     }

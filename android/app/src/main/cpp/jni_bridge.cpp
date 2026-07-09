@@ -142,10 +142,8 @@ Settings decodeSettings(const jint* ints, const jfloat* floats) {
     s.rippleKind = rk;
     int pj = ints[14]; if (pj < 0 || pj > 1) pj = 0;
     s.projection = static_cast<Projection>(pj);
-    int bsub = ints[15]; if (bsub < 1) bsub = 1; if (bsub > 32) bsub = 32;
-    s.hypBorderSubdiv = bsub;
-    int fsub = ints[16]; if (fsub < 1) fsub = 1; if (fsub > 8)  fsub = 8;
-    s.hypFillSubdiv = fsub;
+    s.hypBorderSubdiv = std::clamp(ints[15], 1, 32);
+    s.hypFillSubdiv   = std::clamp(ints[16], 1, 8);
     int cwave = ints[17]; if (cwave < 0 || cwave > 3) cwave = 0;
     s.clockWaveform = cwave;
 

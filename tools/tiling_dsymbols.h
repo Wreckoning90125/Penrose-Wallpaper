@@ -231,6 +231,16 @@ inline bool containsInt(const std::vector<int>& values, int needle) {
 
 } // namespace detail
 
+// Build the finite Delaney chamber complex for a generated tile patch.
+// Every directed tile edge contributes two chambers (one per endpoint
+// corner), and the three involutions are filled as: op[0] pairs the two
+// chambers of the same edge, op[1] walks around the tile to the adjacent
+// edge at the same corner, and op[2] (matched below via the quantized
+// edge-endpoint map) crosses to the chamber of the neighbouring tile that
+// shares the edge — boundary edges keep -1. Alongside the involutions each
+// chamber records its tile, corner, interior angle, side count and tile
+// type, which downstream classification uses to derive canonical
+// vertex-configuration classes and the patch summary.
 inline FiniteDelaneyPatch extractFiniteDelaneyPatch(const std::vector<Tile>& tiles) {
     FiniteDelaneyPatch patch{};
     std::vector<int> tileBase(tiles.size(), 0);

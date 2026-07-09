@@ -2288,6 +2288,7 @@ export class WallpaperRenderer {
       this.attractorConnected !== inputs.attractor ||
       this.borderConnected !== inputs.border ||
       this.lightingConnected !== inputs.lighting ||
+      this.choreoPhaseConnected !== inputs.choreoPhase ||
       this.uniforms.colorMix.value !== colorMix ||
       this.uniforms.materialMix.value !== materialMix ||
       this.uniforms.materialReliefMix.value !== materialReliefMix ||

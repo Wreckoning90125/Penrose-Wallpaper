@@ -607,8 +607,8 @@ void AudioAnalyzer::analyzeFrame(float dtSeconds) {
                 static_cast<int>(std::ceil (fps * 60.0f / kMinBpm)));
             if (minLag < maxLag) {
                 float peakVal = 0.0f;
-                float rawPeak = 0.0f;
-                const float lagF = peakLagParabolic(minLag, maxLag, peakVal, rawPeak);
+                float acfRawPeak = 0.0f;
+                const float lagF = peakLagParabolic(minLag, maxLag, peakVal, acfRawPeak);
                 if (lagF > 0.5f) {
                     rawBpm_ = fps * 60.0f / lagF;
                 }

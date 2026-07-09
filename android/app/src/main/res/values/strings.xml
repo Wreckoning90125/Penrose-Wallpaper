@@ -35,7 +35,27 @@
 
     <string name="preset_load_title">Load preset…</string>
     <string name="preset_load_summary">Writes a built-in graph + slider set into the current settings. Edit freely afterward.</string>
+    <string name="preset_save_user_title">Save current preset…</string>
+    <string name="preset_save_user_summary">Stores the current settings and modulation graph in app storage.</string>
+    <string name="preset_save_user_hint">Preset name</string>
+    <string name="preset_saved_user_toast">Saved %1$s</string>
+    <string name="preset_save_failed_toast">Could not save preset.</string>
+    <string name="preset_load_user_title">Load saved preset…</string>
+    <string name="preset_load_user_summary">Restores one of your saved settings and graph snapshots.</string>
+    <string name="preset_apply_failed_toast">Could not apply preset.</string>
+    <string name="graph_save_failed_toast">Could not save graph.</string>
+    <string name="preset_no_saved_user_toast">No saved presets.</string>
+    <string name="preset_delete_user_title">Delete saved preset…</string>
+    <string name="preset_delete_user_summary">Remove one of your saved settings and graph snapshots.</string>
+    <string name="preset_deleted_user_toast">Deleted %1$s</string>
+    <string name="reset_view_title">Reset view</string>
+    <string name="reset_view_summary">Return zoom, rotation, and pan to the exact centered default.</string>
+    <string name="tiling_generation_title">Generation</string>
+    <string name="tiling_generation_summary">More generations = more tiles</string>
+    <string name="tiling_layer_title">Layer</string>
+    <string name="tiling_layer_summary">Monotile corona/supertile layer; raw seed systems are skipped.</string>
 
     <string name="apply_wallpaper_title">Apply as wallpaper…</string>
-    <string name="apply_wallpaper_summary">Opens the system live-wallpaper preview.</string>
+    <string name="apply_wallpaper_summary">Snapshots the current settings, then opens the system live-wallpaper preview.</string>
+    <string name="wallpaper_snapshot_failed_toast">Could not prepare wallpaper preview.</string>
 </resources>

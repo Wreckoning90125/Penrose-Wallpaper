@@ -4,7 +4,6 @@ import android.app.WallpaperManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
@@ -15,6 +14,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
+import android.widget.EditText
 import android.widget.GridView
 import android.widget.ImageView
 import android.widget.Toast
@@ -22,7 +22,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.TooltipCompat
 import androidx.core.content.ContextCompat
-import androidx.core.content.edit
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -31,6 +30,8 @@ import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.SeekBarPreference
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.penrose.wallpaper.atlas.AtlasCategory
 import com.penrose.wallpaper.atlas.AtlasStore
@@ -40,7 +41,11 @@ import com.penrose.wallpaper.audio.AudioPlaybackService
 import com.penrose.wallpaper.preset.MaterialPreset
 import com.penrose.wallpaper.preset.MaterialPresets
 import com.penrose.wallpaper.preset.PresetStore
-import com.penrose.wallpaper.preset.StaticValue
+import com.penrose.wallpaper.preset.SettingsSnapshotStore
+import com.penrose.wallpaper.preset.toStoredSetting
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Settings UI hosted inside the BottomSheetDialogFragment. The root
@@ -50,10 +55,12 @@ import com.penrose.wallpaper.preset.StaticValue
  * reachable from the "Node editor" action.
  */
 class SettingsFragment : PreferenceFragmentCompat(),
-                         SharedPreferences.OnSharedPreferenceChangeListener {
+                         SettingsStore.Listener {
 
     private var currentScreen: ScreenKey = ScreenKey.Main
     private var applyingAtlasTarget = false
+    private lateinit var settingsStore: SettingsStore
+    private var settingsListenerRegistered = false
 
     private enum class ScreenKey(val resId: Int) {
         Main(R.xml.preferences),
@@ -90,8 +97,16 @@ class SettingsFragment : PreferenceFragmentCompat(),
     }
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
-        preferenceManager.sharedPreferencesName = Settings.PREFS_NAME
-        loadScreen(currentScreen)
+        preferenceScreen = preferenceManager.createPreferenceScreen(requireContext())
+        SettingsStore.working(requireContext()).openAsync { store ->
+            if (!isAdded) return@openAsync
+            settingsStore = store
+            preferenceManager.preferenceDataStore = SettingsPreferenceDataStore(store)
+            loadScreen(currentScreen)
+            if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                registerSettingsListener()
+            }
+        }
     }
 
     private fun loadScreen(screen: ScreenKey) {
@@ -139,8 +154,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
 
     override fun onResume() {
         super.onResume()
-        preferenceManager.sharedPreferences
-            ?.registerOnSharedPreferenceChangeListener(this)
+        registerSettingsListener()
         if (currentScreen == ScreenKey.Audio) {
             updateAudioSummary()
             connectMediaController()
@@ -149,8 +163,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
 
     override fun onPause() {
         super.onPause()
-        preferenceManager.sharedPreferences
-            ?.unregisterOnSharedPreferenceChangeListener(this)
+        unregisterSettingsListener()
         // Release the audio MediaController so the binder doesn't leak
         // while the fragment is off-screen. The audio service itself
         // keeps playing; only the in-app UI loses its tap into the
@@ -158,13 +171,25 @@ class SettingsFragment : PreferenceFragmentCompat(),
         releaseMediaController()
     }
 
-    override fun onSharedPreferenceChanged(sp: SharedPreferences?, key: String?) {
+    private fun registerSettingsListener() {
+        if (!::settingsStore.isInitialized || settingsListenerRegistered) return
+        settingsStore.registerListener(this)
+        settingsListenerRegistered = true
+    }
+
+    private fun unregisterSettingsListener() {
+        if (!::settingsStore.isInitialized || !settingsListenerRegistered) return
+        settingsStore.unregisterListener(this)
+        settingsListenerRegistered = false
+    }
+
+    override fun onSettingChanged(key: String?) {
         if (applyingAtlasTarget) return
         if (currentScreen == ScreenKey.Tiling && key == Settings.KEY_FAMILY) {
             applyFamilySpecificTilingControls(resetSeed = true)
         }
         if (key != null && key !in atlasSelectionKeys) {
-            clearAtlasTargetSelection(sp)
+            clearAtlasTargetSelection()
         }
     }
 
@@ -187,6 +212,22 @@ class SettingsFragment : PreferenceFragmentCompat(),
         }
         findPreference<Preference>("action_load_preset")?.setOnPreferenceClickListener {
             showPresetLoaderDialog()
+            true
+        }
+        findPreference<Preference>("action_save_user_preset")?.setOnPreferenceClickListener {
+            showSaveUserPresetDialog()
+            true
+        }
+        findPreference<Preference>("action_load_user_preset")?.setOnPreferenceClickListener {
+            showUserPresetLoaderDialog()
+            true
+        }
+        findPreference<Preference>("action_delete_user_preset")?.setOnPreferenceClickListener {
+            showUserPresetDeleteDialog()
+            true
+        }
+        findPreference<Preference>("action_reset_view")?.setOnPreferenceClickListener {
+            (activity as? SettingsActivity)?.resetPreviewView()
             true
         }
         findPreference<Preference>("nav_tiling")?.setOnPreferenceClickListener {
@@ -350,7 +391,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
     private fun bindAtlasControls() {
         val categoryPref = findPreference<ListPreference>(Settings.KEY_ATLAS_CATEGORY) ?: return
         val targetPref = findPreference<ListPreference>(Settings.KEY_ATLAS_TARGET) ?: return
-        val prefs = preferenceManager.sharedPreferences ?: return
+        val snapshot = settingsStore.snapshot()
         val categories = AtlasStore(requireContext()).categories()
         if (categories.isEmpty()) {
             categoryPref.isEnabled = false
@@ -365,11 +406,11 @@ class SettingsFragment : PreferenceFragmentCompat(),
         categoryPref.isEnabled = true
         targetPref.isEnabled = true
 
-        val savedCategoryId = prefs.getString(Settings.KEY_ATLAS_CATEGORY, null)
+        val savedCategoryId = snapshot.stringOrNull(Settings.KEY_ATLAS_CATEGORY)
         val category = categories.firstOrNull { it.id == savedCategoryId } ?: categories.first()
         categoryPref.value = category.id
 
-        bindAtlasTargetList(targetPref, category, prefs)
+        bindAtlasTargetList(targetPref, category, snapshot)
 
         categoryPref.setOnPreferenceChangeListener { _, value ->
             val nextCategory = categories.firstOrNull { it.id == value as? String }
@@ -391,7 +432,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
     private fun bindAtlasTargetList(
         targetPref: ListPreference,
         category: AtlasCategory,
-        prefs: SharedPreferences,
+        snapshot: SettingsSnapshot,
     ) {
         targetPref.entries = category.targets.map { it.name }.toTypedArray()
         targetPref.entryValues = category.targets.map { it.id }.toTypedArray()
@@ -401,7 +442,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
             targetPref.summary = "No targets"
             return
         }
-        val savedTargetId = prefs.getString(Settings.KEY_ATLAS_TARGET, null)
+        val savedTargetId = snapshot.stringOrNull(Settings.KEY_ATLAS_TARGET)
         val target = savedTargetId?.let { id -> category.targets.firstOrNull { it.id == id } }
         if (target == null) {
             targetPref.value = null
@@ -413,33 +454,29 @@ class SettingsFragment : PreferenceFragmentCompat(),
     }
 
     private fun applyAtlasTarget(categoryId: String, target: AtlasTarget) {
-        val prefs = preferenceManager.sharedPreferences ?: return
         applyingAtlasTarget = true
-        try {
-            prefs.edit(commit = true) {
-                putString(Settings.KEY_ATLAS_CATEGORY, categoryId)
-                putString(Settings.KEY_ATLAS_TARGET, target.id)
-                for ((key, value) in target.settings) {
-                    when (value) {
-                        is StaticValue.IntValue -> putInt(key, value.v)
-                        is StaticValue.StringValue -> putString(key, value.v)
-                        is StaticValue.BoolValue -> putBoolean(key, value.v)
-                        is StaticValue.FloatValue -> putFloat(key, value.v)
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    settingsStore.updateAwait {
+                        this[Settings.KEY_ATLAS_CATEGORY] = StoredSetting.StringValue(categoryId)
+                        this[Settings.KEY_ATLAS_TARGET] = StoredSetting.StringValue(target.id)
+                        for ((key, value) in target.settings) {
+                            this[key] = value.toStoredSetting()
+                        }
                     }
                 }
+                loadScreen(ScreenKey.Tiling)
+                Toast.makeText(requireContext(), target.name, Toast.LENGTH_SHORT).show()
+            } finally {
+                applyingAtlasTarget = false
             }
-        } finally {
-            applyingAtlasTarget = false
         }
-        loadScreen(ScreenKey.Tiling)
-        Toast.makeText(requireContext(), target.name, Toast.LENGTH_SHORT).show()
     }
 
-    private fun clearAtlasTargetSelection(sp: SharedPreferences?) {
-        if (sp?.contains(Settings.KEY_ATLAS_TARGET) != true) return
-        sp.edit {
-            remove(Settings.KEY_ATLAS_TARGET)
-        }
+    private fun clearAtlasTargetSelection() {
+        if (!settingsStore.snapshot().contains(Settings.KEY_ATLAS_TARGET)) return
+        settingsStore.removeAsync(Settings.KEY_ATLAS_TARGET)
         if (currentScreen == ScreenKey.Tiling) {
             findPreference<ListPreference>(Settings.KEY_ATLAS_TARGET)?.let { targetPref ->
                 targetPref.value = null
@@ -454,7 +491,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
      * tile-shaped fill). Each cell IS the tile: no label, no
      * rectangular container, no chrome around it. The tile is a
      * keyboard-key whose "hole" is the tile shape, and tapping it
-     * applies the preset — a one-shot write to SharedPreferences,
+     * applies the preset — a one-shot write to the settings store,
      * the Material screen re-inflates so every slider re-binds to the
      * new values, and the dialog dismisses. There is no stored
      * "active preset" state.
@@ -495,16 +532,23 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 .show()
 
             grid.adapter = PresetPickerAdapter(ctx, presets) { which ->
-                val prefs = preferenceManager.sharedPreferences
-                    ?: return@PresetPickerAdapter
-                prefs.edit {
-                    for ((key, value) in presets[which].values) {
-                        putInt(key, value)
+                val preset = presets[which]
+                viewLifecycleOwner.lifecycleScope.launch {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            settingsStore.updateAwait {
+                                for ((key, value) in preset.values) {
+                                    this[key] = StoredSetting.IntValue(value)
+                                }
+                            }
+                        }
+                        loadScreen(ScreenKey.Material)
+                        Toast.makeText(ctx, preset.name, Toast.LENGTH_SHORT).show()
+                        dialog.dismiss()
+                    } catch (e: Exception) {
+                        Toast.makeText(ctx, R.string.preset_apply_failed_toast, Toast.LENGTH_LONG).show()
                     }
                 }
-                loadScreen(ScreenKey.Material)
-                Toast.makeText(ctx, presets[which].name, Toast.LENGTH_SHORT).show()
-                dialog.dismiss()
             }
             true
         }
@@ -557,7 +601,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
 
     /**
      * Hook the bottom-sheet dialog calls when the system back button
-     * fires. Returns true if a sub-pref-screen was popped to the main
+     * fires. Returns true if a sub-settings screen was popped to the main
      * screen (the dialog should stay open); false when we're already
      * on the main screen (the dialog handles back itself by
      * dismissing).
@@ -570,49 +614,154 @@ class SettingsFragment : PreferenceFragmentCompat(),
 
     private fun launchSystemWallpaperPicker() {
         val ctx = requireContext()
+        val host = activity as? SettingsActivity
         val component = ComponentName(ctx, PenroseWallpaperService::class.java)
         val intent = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
             putExtra(WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT, component)
         }
-        try { startActivity(intent) } catch (_: Exception) {
-            Toast.makeText(ctx, R.string.launcher_no_picker, Toast.LENGTH_LONG).show()
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    host?.commitPreviewViewToSettingsAwait()
+                    SettingsSnapshotStore.saveWallpaperSnapshot(ctx, settingsStore, host?.currentGraphJson())
+                }
+            } catch (e: Exception) {
+                Toast.makeText(ctx, R.string.wallpaper_snapshot_failed_toast, Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            try { startActivity(intent) } catch (_: Exception) {
+                Toast.makeText(ctx, R.string.launcher_no_picker, Toast.LENGTH_LONG).show()
+            }
         }
     }
 
     private fun showPresetLoaderDialog() {
         val ctx = requireContext()
         val store = PresetStore(ctx)
-        val presets = store.list()
-        if (presets.isEmpty()) {
-            Toast.makeText(ctx, "No presets bundled.", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val labels = presets.map { it.name }.toTypedArray()
-        AlertDialog.Builder(ctx)
-            .setTitle(R.string.preset_load_title)
-            .setItems(labels) { _, which ->
-                val preset = presets[which]
-                val prefs = preferenceManager.sharedPreferences ?: return@setItems
-                store.applyToPrefs(preset, prefs)
-                // Push the graph straight into the host activity's
-                // active Renderer too — applyToPrefs only wrote it to
-                // filesDir, which the live preview wouldn't reflect
-                // until a teardown + relaunch. Only when the preset
-                // actually ships a graph: a colours-only preset must
-                // leave the user's current graph untouched, both on
-                // disk (handled in applyToPrefs) and live here.
-                preset.graphJson?.let { graphJson ->
-                    (activity as? SettingsActivity)
-                        ?.applyPresetGraph(graphJson)
+        viewLifecycleOwner.lifecycleScope.launch {
+            val presets = withContext(Dispatchers.IO) { store.list() }
+            if (presets.isEmpty()) {
+                Toast.makeText(ctx, "No presets bundled.", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val labels = presets.map { it.name }.toTypedArray()
+            AlertDialog.Builder(ctx)
+                .setTitle(R.string.preset_load_title)
+                .setItems(labels) { _, which ->
+                    val preset = presets[which]
+                    val host = activity as? SettingsActivity
+                    val previousGraph = host?.currentGraphJson()
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        try {
+                            preset.graphJson?.let { graphJson ->
+                                val loaded = host?.applyPresetGraph(graphJson) ?: false
+                                if (!loaded) throw IllegalStateException("graph load failed for preset ${preset.id}")
+                            }
+                            withContext(Dispatchers.IO) { store.applyToSettings(preset, settingsStore) }
+                            loadScreen(currentScreen)
+                            Toast.makeText(ctx, preset.name, Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            if (preset.graphJson != null && previousGraph != null) host?.applyPresetGraph(previousGraph)
+                            Toast.makeText(ctx, R.string.preset_apply_failed_toast, Toast.LENGTH_LONG).show()
+                        }
+                    }
                 }
-                // Rebuild the prefs UI so SeekBarPreference /
-                // ListPreference widgets re-bind to the new pref
-                // values instead of showing stale slider positions.
-                loadScreen(currentScreen)
-                Toast.makeText(ctx, preset.name, Toast.LENGTH_SHORT).show()
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+        }
+    }
+
+    private fun showSaveUserPresetDialog() {
+        val ctx = requireContext()
+        val input = EditText(ctx).apply {
+            setSingleLine(true)
+            setText("")
+            hint = getString(R.string.preset_save_user_hint)
+        }
+        MaterialAlertDialogBuilder(ctx)
+            .setTitle(R.string.preset_save_user_title)
+            .setView(input)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val host = activity as? SettingsActivity
+                val name = input.text.toString()
+                viewLifecycleOwner.lifecycleScope.launch {
+                    try {
+                        val preset = withContext(Dispatchers.IO) {
+                            host?.commitPreviewViewToSettingsAwait()
+                            SettingsSnapshotStore.saveUserPreset(
+                                ctx,
+                                settingsStore,
+                                name,
+                                host?.currentGraphJson(),
+                            )
+                        }
+                        Toast.makeText(ctx, getString(R.string.preset_saved_user_toast, preset.name), Toast.LENGTH_SHORT).show()
+                    } catch (e: Exception) {
+                        Toast.makeText(ctx, R.string.preset_save_failed_toast, Toast.LENGTH_LONG).show()
+                    }
+                }
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    private fun showUserPresetLoaderDialog() {
+        val ctx = requireContext()
+        viewLifecycleOwner.lifecycleScope.launch {
+            val presets = withContext(Dispatchers.IO) { SettingsSnapshotStore.listUserPresets(ctx) }
+            if (presets.isEmpty()) {
+                Toast.makeText(ctx, R.string.preset_no_saved_user_toast, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val labels = presets.map { it.name }.toTypedArray()
+            AlertDialog.Builder(ctx)
+                .setTitle(R.string.preset_load_user_title)
+                .setItems(labels) { _, which ->
+                    val preset = presets[which]
+                    val host = activity as? SettingsActivity
+                    val previousGraph = host?.currentGraphJson()
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        try {
+                            val graphJson = withContext(Dispatchers.IO) { SettingsSnapshotStore.readUserPresetGraph(preset) }
+                            val loaded = host?.applyPresetGraph(graphJson) ?: false
+                            if (!loaded) throw IllegalStateException("graph load failed for user preset ${preset.id}")
+                            withContext(Dispatchers.IO) { SettingsSnapshotStore.loadUserPreset(preset, settingsStore) }
+                            loadScreen(currentScreen)
+                            Toast.makeText(ctx, preset.name, Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            if (previousGraph != null) host?.applyPresetGraph(previousGraph)
+                            Toast.makeText(ctx, R.string.preset_apply_failed_toast, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+        }
+    }
+
+    private fun showUserPresetDeleteDialog() {
+        val ctx = requireContext()
+        viewLifecycleOwner.lifecycleScope.launch {
+            val presets = withContext(Dispatchers.IO) { SettingsSnapshotStore.listUserPresets(ctx) }
+            if (presets.isEmpty()) {
+                Toast.makeText(ctx, R.string.preset_no_saved_user_toast, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val labels = presets.map { it.name }.toTypedArray()
+            AlertDialog.Builder(ctx)
+                .setTitle(R.string.preset_delete_user_title)
+                .setItems(labels) { _, which ->
+                    val preset = presets[which]
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        val deleted = withContext(Dispatchers.IO) { SettingsSnapshotStore.deleteUserPreset(preset) }
+                        if (deleted) {
+                            Toast.makeText(ctx, getString(R.string.preset_deleted_user_toast, preset.name), Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+        }
     }
 
     private fun applyFamilySpecificTilingControls(resetSeed: Boolean) {
@@ -637,6 +786,12 @@ class SettingsFragment : PreferenceFragmentCompat(),
             10 -> R.array.seed_danzer_entries to R.array.seed_danzer_values
             11 -> R.array.seed_hat_entries to R.array.seed_hat_values
             12 -> R.array.seed_spectre_entries to R.array.seed_spectre_values
+            13 -> R.array.seed_equithirds_entries to R.array.seed_equithirds_values
+            14 -> R.array.seed_cromwell_krt_entries to R.array.seed_cromwell_krt_values
+            15 -> R.array.seed_gailiunas_spiral_entries to R.array.seed_gailiunas_spiral_values
+            16 -> R.array.seed_cairo_entries to R.array.seed_cairo_values
+            17 -> R.array.seed_socolar_taylor_entries to R.array.seed_socolar_taylor_values
+            18 -> R.array.seed_d4_substitution_entries to R.array.seed_d4_substitution_values
             else -> R.array.seed_p3_entries to R.array.seed_p3_values
         }
         val entries = resources.getStringArray(entriesId)
@@ -652,11 +807,22 @@ class SettingsFragment : PreferenceFragmentCompat(),
         val generationPref = findPreference<SeekBarPreference>(Settings.KEY_GENERATION) ?: return
         val familyPref = findPreference<ListPreference>(Settings.KEY_FAMILY) ?: return
         val family = familyPref.value?.toIntOrNull() ?: 0
+        val layeredMonotile = family == 11 || family == 12
+        generationPref.title = getString(
+            if (layeredMonotile) R.string.tiling_layer_title else R.string.tiling_generation_title
+        )
+        generationPref.summary = getString(
+            if (layeredMonotile) R.string.tiling_layer_summary else R.string.tiling_generation_summary
+        )
         val maxGen = when (family) {
             2 -> 7       // Chair
             4 -> 6       // Pinwheel
-            9, 10 -> 7   // P1, Danzer
-            11, 12 -> 5  // Hat, Spectre
+            9, 10, 17 -> 7   // P1, Danzer, Socolar-Taylor
+            13 -> 10     // Equithirds
+            12 -> 3      // Spectre
+            11 -> 4      // Hat
+            14 -> 5      // Cromwell KRT
+            15, 16, 18 -> 8  // Gailiunas spirals, Cairo pentagons, experimental D4 square weave
             else -> 8
         }
         generationPref.max = maxGen

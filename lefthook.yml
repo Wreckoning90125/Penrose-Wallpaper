@@ -1,0 +1,30 @@
+# Deterministic commit gates. `npm install` (lefthook postinstall) or
+# `npx lefthook install` wires this into .git/hooks/pre-commit.
+#
+# Each job runs only when a staged file matches its glob, so commit cost stays
+# proportional to the change. These are the CI-breaking checks; the full suite
+# (including web:build) remains `npm run quality:local`.
+pre-commit:
+  parallel: true
+  jobs:
+    - name: native-build
+      glob: "android/app/src/main/cpp/**"
+      run: npm run cpp:build:tidy
+    - name: native-tiling
+      glob: "android/app/src/main/cpp/tiling/**"
+      run: npm run tilings:verify && npm run cpp:tidy
+    - name: shaders
+      glob: "android/app/src/main/shaders/**"
+      run: npm run shaders:validate
+    - name: web-policy
+      glob: "*.{ts,tsx,mts,js,jsx,mjs,cjs}"
+      run: npm run ts:policy && npm run js:policy
+    - name: web-typecheck
+      glob: "*.{ts,tsx,mts}"
+      run: npm run typecheck
+    - name: graph-contract
+      glob: "web/src/**"
+      run: npm run graph:contract
+    - name: atlas
+      glob: "atlas/**"
+      run: npm run atlas:verify

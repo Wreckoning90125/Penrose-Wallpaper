@@ -12,75 +12,75 @@
 
 #include "color/color.h"  // kMaxColors lives there
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 namespace penrose {
 
 // Per-vertex layout of the fill mesh. Mirrors fill.vert:
 //   location 0: vec2  inPos
-//   location 1: uint  inColorIdx
-//   location 2: vec2  inCenter  (tile centroid)
+//   location 1: float inColorSlot
+//   location 2: vec2  inCenter  (tile center; Spectre uses its key-frame center)
 //   location 3: vec2  inBulge   (parallax-bulge normal-tilt direction)
 //   location 4: vec3  inBary    (edge-distance basis — see buildGeometry)
 //   location 5: vec4  inTileMat (per-tile material identity — see buildGeometry)
+//   location 6: vec4  inTopology
+//   location 7: vec3  inEdgeDist (metric scales for the barycentric edge basis)
 //
-// inBulge is the unit model-space gradient direction of the parallax-depth
-// field over the triangle — constant per triangle because that field is
-// linear. The fragment shader tilts the shading normal along it, so the
-// per-tile bulge is real shading relief, not a brightness fake. Zero when
-// the triangle has no depth gradient (the flat Chair family).
+// inBulge is the model-space height gradient used by the material normal.
+// Most families emit a constant triangle-local parallax-depth gradient.
+// Curved Spectre tiles instead emit a sampled curved-edge rolloff gradient
+// so higher fill subdivision improves the raised-plate surface without a
+// shader-side radial bucket or a new vertex-buffer slot.
 //
-// inBary is a per-triangle barycentric basis (vertex k → unit component k).
-// The fragment shader takes min(bary) as the distance to the nearest tile
-// boundary edge and lifts a bevel height field from it. Triangulation
-// diagonals that are interior to a tile (fan splits, centroid spokes) are
-// neutralised by pinning their component to 1 at every vertex so the bevel
-// never creases along a seam that is not a real tile edge.
+// inBary is retained as a per-triangle barycentric basis for geometry/debug
+// checks. inEdgeDist is the material-facing metric scale for each barycentric
+// edge coordinate, normalized by tile scale, so triangulation diagonals and
+// centroid spokes cannot create false seams.
 //
 // inTileMat carries per-tile identity, constant across the tile's vertices:
 //   x — type, normalised to [0,1] over the family's distinct tile kinds
 //   y,z — orientation, the unit (cos,sin) of the family's classifier edge
-//   w — centroid distance from the tiling origin (model space)
+//   w — approximate tile scale, used by analytic tile-local ornament masks
+// topology.xy stores real shared-edge adjacency degree and motif hash scalars.
 // The fragment shader keys physical channels off these: metalness off type,
-// anisotropy off orientation, iridescence thickness off the radius.
+// anisotropy off orientation, ornament coordinates off orientation + scale.
 struct FillVertex {
     float    x, y;
-    uint32_t colorIdx;
+    float    colorSlot;
     float    cx, cy;
     float    bgx, bgy;
     float    bx, by, bz;
     float    mtype, mox, moy, mring;
+    float    tdegree, tmotif, topology2, topology3;
+    float    edgeDistX, edgeDistY, edgeDistZ;
 };
+static_assert(sizeof(FillVertex) == 84, "FillVertex layout drift");
+static_assert(offsetof(FillVertex, x) == 0, "FillVertex position offset drift");
+static_assert(offsetof(FillVertex, colorSlot) == 8, "FillVertex color slot offset drift");
+static_assert(offsetof(FillVertex, cx) == 12, "FillVertex center offset drift");
+static_assert(offsetof(FillVertex, bgx) == 20, "FillVertex bulge offset drift");
+static_assert(offsetof(FillVertex, bx) == 28, "FillVertex bary offset drift");
+static_assert(offsetof(FillVertex, mtype) == 40, "FillVertex material offset drift");
+static_assert(offsetof(FillVertex, tdegree) == 56, "FillVertex topology offset drift");
+static_assert(offsetof(FillVertex, edgeDistX) == 72, "FillVertex edge distance offset drift");
 
-// Vertex-shader-expanded border mesh. Each unique edge emits a stroked
-// quad; each convex endpoint sector can emit a small joint fan from the
-// shared graph vertex through the neighbouring edge offsets. The shader
-// extrudes each vertex by halfWidth × miterScale along the per-corner
-// mitered direction, so adjacent edges meeting at a non-90° vertex join
-// flush instead of stopping as independent perpendicular butt ends. The
-// mitered direction is already signed for this vertex's world side, so
-// no per-vertex side flag is needed. In disk mode the shader projects
-// (mx, my) through the same
-// projTangentRadial+boostTangent Jacobian as a tangent vector would
-// see — conformality preserves the local join angle, so the joint
-// closes in disk space at the same miterScale.
-//
-// Stride padded to 32 bytes (8 floats = 2 vec4). The five live
-// fields only need 20 bytes, but several mobile Vulkan drivers
-// (older Adreno especially) silently misfetch vertex attributes
-// when the binding stride isn't a multiple of 16 — perpendicular
-// butt-end output regardless of what the source CPU data carries.
-// The Vulkan spec doesn't require vec4-multiple stride, but in
-// practice every reliable layout I've seen does it. Cost is 12 extra
-// bytes per border vertex, still comfortably below a megabyte for the
-// current generation caps.
+// Baked border-ring mesh. Location 0 stores the geometry-space border position:
+// Euclidean source coordinates in Euclidean mode, projected disk coordinates in
+// Poincare mode. Location 1 stores the source/model coordinate corresponding to
+// that vertex; the border shader samples the ripple field there so wave
+// displacement stays in the same coordinate system as fill.vert.
 struct BorderVertex {
     float x, y;
-    float mx, my;       // mitered corner direction (already signed for the world side)
-    float miterScale;   // halfWidth multiplier to the offset-line intersection
-    float _pad0, _pad1, _pad2;  // stride → 32 bytes for vec4-multiple alignment
+    float sx, sy;
+    float role;
 };
+static_assert(sizeof(BorderVertex) == 20, "BorderVertex layout drift");
+static_assert(offsetof(BorderVertex, x) == 0, "BorderVertex position offset drift");
+static_assert(offsetof(BorderVertex, sx) == 8, "BorderVertex source offset drift");
+static_assert(offsetof(BorderVertex, role) == 16, "BorderVertex role offset drift");
 
 // Vertex push constants.
 //
@@ -141,7 +141,7 @@ struct PaletteUbo {
     float    bgColor[4];
     uint32_t flags[4];
     float    anim[4];         // x=time, y=rippleAmount, z=family, w=pageOffset
-    float    borderGeom[4];   // x=borderHalfWidth (world-space)
+    float    borderGeom[4];   // edge-profile width/glow; border width is baked into BorderVertex positions
     float    effects[4];      // x=brightness, y=depth, z=rippleSpeed, w=rippleKind
     float    audioBands[2][4];
     float    audioBeat[4];
@@ -157,7 +157,35 @@ struct PaletteUbo {
     float    fillLight[4];    // fillDir.xyz, fillIntensity
     float    fillColor[4];    // fillColor.rgb, --
     float    ambient[4];      // ambientColor.rgb, ambientAmount
+    float    ornament[4];     // style, amount, width, phase
+    float    ornamentExtra[4]; // coverage, axis-swap, legacy-zero, family
+    float    contour[4];      // amount, source, spacing, width
+    float    contourColor[4]; // phase, lineColor.rgb
+    float    sourceMarkA[4];  // rgb, alpha
+    float    sourceMarkB[4];  // rgb, alpha
+    float    sourceMarkC[4];  // rgb, alpha
+    float    edgeProfileColor[4]; // rgb, --
 };
+static_assert(sizeof(PaletteUbo) == 736, "PaletteUbo std140 row layout drift");
+static_assert(offsetof(PaletteUbo, palette) == 0, "PaletteUbo palette offset drift");
+static_assert(offsetof(PaletteUbo, borderColor) == 288, "PaletteUbo borderColor offset drift");
+static_assert(offsetof(PaletteUbo, anim) == 336, "PaletteUbo anim offset drift");
+static_assert(offsetof(PaletteUbo, matNormal) == 432, "PaletteUbo material offset drift");
+static_assert(offsetof(PaletteUbo, ambient) == 592, "PaletteUbo ambient offset drift");
+static_assert(offsetof(PaletteUbo, ornament) == 608, "PaletteUbo ornament offset drift");
+static_assert(offsetof(PaletteUbo, ornamentExtra) == 624, "PaletteUbo ornamentExtra offset drift");
+static_assert(offsetof(PaletteUbo, contour) == 640, "PaletteUbo contour offset drift");
+static_assert(offsetof(PaletteUbo, contourColor) == 656, "PaletteUbo contourColor offset drift");
+static_assert(offsetof(PaletteUbo, sourceMarkA) == 672, "PaletteUbo sourceMarkA offset drift");
+static_assert(offsetof(PaletteUbo, sourceMarkB) == 688, "PaletteUbo sourceMarkB offset drift");
+static_assert(offsetof(PaletteUbo, sourceMarkC) == 704, "PaletteUbo sourceMarkC offset drift");
+static_assert(offsetof(PaletteUbo, edgeProfileColor) == 720, "PaletteUbo edgeProfileColor offset drift");
+
+inline float sourceOverlayAlpha(float style, float amount, float density) {
+    const bool active = style >= 3.5f;
+    if (!active) return 0.0f;
+    return std::clamp(amount * density * 0.82f, 0.0f, 0.92f);
+}
 
 // Pack a MaterialParams into the 11 trailing PaletteUbo rows. `d` points at
 // PaletteUbo::matNormal[0]; the rows are contiguous, so 44 floats are
@@ -216,6 +244,70 @@ inline void applyLightControls(MaterialParams& m, float angleDeg, float elevDeg,
     m.fillColor[1] = 0.91f - 0.01f * w;
     m.fillColor[2] = 1.00f;
     m.ambient = ambient;
+}
+
+// Waveform shaping for the choreography clock (parity with the web Clock
+// node's clock_waveform). Input/output normalized 0..1; saw is the identity.
+inline float shapeClockPhase(float phase01, int waveform) {
+    const float kTau = 6.28318530718f;
+    switch (waveform) {
+        case 1: return 0.5f - 0.5f * std::cos(kTau * phase01);  // sine
+        case 2: return 1.0f - std::fabs(2.0f * phase01 - 1.0f); // triangle
+        case 3: return phase01 < 0.5f ? 0.0f : 1.0f;            // square, 50% duty
+        default: return phase01;                                // saw
+    }
+}
+
+inline void applyLightChoreography(MaterialParams& m, float angleDeg, float elevDeg,
+                                   float intensity, float warmth, float ambient,
+                                   float amount, float speed, float source,
+                                   float timeSec, float pageOffset, float beat,
+                                   float beatPhase, float transient, int waveform = 0) {
+    const float kPi = 3.14159265358979f;
+    const float kTau = 2.0f * kPi;
+    const float clampedAmount = std::clamp(amount, 0.0f, 1.0f);
+    const float clampedSpeed = std::clamp(speed, 0.0f, 2.0f);
+    const int mode = std::clamp(static_cast<int>(source + 0.5f), 0, 3);
+    // Qualitative parity with the web clock (rate-gated + shaped at source).
+    // Saw keeps the raw unbounded ramp — bit-identical to the pre-waveform
+    // behaviour, and folding it would break drift continuity (drift scales the
+    // phase by 0.73 before the cosine, so dropping whole cycles shifts it).
+    const float clockRamp = timeSec * clampedSpeed * 0.085f;
+    const float clockPhase = waveform == 0
+        ? clockRamp
+        : shapeClockPhase(clockRamp - std::floor(clockRamp), waveform);
+    const float panPhase = (pageOffset - 0.5f) * 1.35f;
+    const float beatPulse = std::clamp(std::max(beat, transient), 0.0f, 1.0f);
+    const float clockPulse = 0.5f - 0.5f * std::cos(clockPhase * kTau);
+    const float panPulse = 0.5f + 0.5f * std::sin(panPhase * kTau);
+    float phase = clockPhase;
+    float pulse = clockPulse;
+    if (mode == 1) {
+        phase = panPhase;
+        pulse = panPulse;
+    } else if (mode == 2) {
+        phase = beatPhase;
+        pulse = beatPulse;
+    } else if (mode == 3) {
+        phase = clockPhase * 0.62f + panPhase * 0.38f + beatPhase * 0.5f;
+        pulse = std::max(clockPulse * 0.35f + panPulse * 0.25f, beatPulse);
+    }
+    const float orbit = std::sin(phase * kTau);
+    const float drift = std::cos((phase * 0.73f + 0.19f) * kTau);
+    const float nextAngle = angleDeg + clampedAmount * orbit * 41.0f
+                          + clampedAmount * panPhase * 23.0f;
+    const float nextElevation = std::clamp(elevDeg + clampedAmount * drift * 13.5f, 3.0f, 86.0f);
+    const float nextIntensity = intensity * (1.0f + clampedAmount * pulse * 0.32f);
+    const float nextWarmth = std::clamp(warmth + clampedAmount * (pulse - 0.5f) * 0.34f, 0.0f, 1.0f);
+    const float nextAmbient = std::clamp(ambient + clampedAmount * (0.5f - pulse) * 0.14f, 0.0f, 1.0f);
+    applyLightControls(m, nextAngle, nextElevation, nextIntensity, nextWarmth, nextAmbient);
+    const float fillAz = (nextAngle + 180.0f + clampedAmount * drift * 15.0f) * kPi / 180.0f;
+    const float fillEl = std::max(3.0f, nextElevation * (0.48f + clampedAmount * 0.16f)) * kPi / 180.0f;
+    const float fillCe = std::cos(fillEl);
+    m.fillDir[0] = fillCe * std::cos(fillAz);
+    m.fillDir[1] = fillCe * std::sin(fillAz);
+    m.fillDir[2] = std::sin(fillEl);
+    m.fillIntensity = nextIntensity * (0.27f + clampedAmount * 0.10f);
 }
 
 } // namespace penrose

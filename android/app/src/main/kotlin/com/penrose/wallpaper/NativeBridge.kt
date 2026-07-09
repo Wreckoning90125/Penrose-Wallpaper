@@ -18,7 +18,7 @@ internal object NativeBridge {
      * the handler appends a textual backtrace there AND to logcat under
      * the tag `PenroseCrash`. Grab logs with
      *   adb logcat -s PenroseCrash:*
-     * or pull the on-disk copy from
+     * or pull the crash log file from
      *   /data/data/com.penrose.wallpaper/files/crash.log
      * (run-as required on user builds).
      */
@@ -36,9 +36,19 @@ internal object NativeBridge {
      * Push the current Settings to the renderer. Encoded as two flat arrays:
      *
      *   ints   = [family, seedIdx, generation, preset, colorCount, colorMode,
-     *             borderOn, bgMode, rippleMode, panMode, rippleKind,
+     *             colorSpread, colorSpectral,
+     *             borderOn, borderJoin, bgMode, rippleMode, panMode, rippleKind,
      *             projection, hypBorderSubdiv, hypFillSubdiv]
-     *   floats = [border/material/background/motion/projection controls,
+     *   floats = [borderWidth, borderFill, borderPoint, borderGap,
+     *             borderL, borderC, borderH, borderAlpha,
+     *             bgL, bgC, bgH, rippleAmount,
+     *             zoom, rotation, panX, panY,
+     *             brightness, depthAmount, rippleSpeed,
+     *             material sliders, light sliders, material colour sliders,
+     *             matRoughMod, matMetalMod,
+     *             ornament sliders, hypScale, hypBoostX, hypBoostY,
+     *             surface contour sliders, source-mark colour sliders,
+     *             inner edge-profile sliders,
      *             followed by custom OKLCH palette triples]
      *
      * Both must match the layout the JNI bridge expects (jni_bridge.cpp).
@@ -48,7 +58,7 @@ internal object NativeBridge {
     /** Pinch gesture: relative scale + rotation delta. */
     external fun touchPinch(nativePtr: Long, scale: Float, rotDelta: Float)
 
-    /** Single-finger drag delta. In Locked pan mode this is ignored. */
+    /** Single-finger drag delta. In Free pan mode this translates the live view. */
     external fun touchMove(nativePtr: Long, dx: Float, dy: Float)
 
     /** Read back the current live view transform for persistence on touch-end. */
@@ -71,32 +81,41 @@ internal object NativeBridge {
                                  screenW: Int, screenH: Int)
 
     /**
-     * Push the home-screen horizontal scroll offset (0..1, 0.5 = centered)
-     * so the quasicrystal ripple can phase-shift with page swipes.
+     * Push the home-screen horizontal scroll offset. xOffset is normalized
+     * phase (0..1); xPixelOffset is the launcher's real surface-window
+     * translation in pixels for Endless pan mode.
      */
-    external fun setPageOffset(nativePtr: Long, xOffset: Float)
+    external fun setPageOffset(nativePtr: Long, xOffset: Float, xPixelOffset: Int)
+
+    /** Configure analyzer kernels from Media3's format callback. */
+    external fun configureAudio(sampleRate: Int)
 
     /**
-     * Forward PCM samples to the process-wide audio analyzer. Called
-     * from the AudioPlaybackService's Media3 AudioProcessor tap.
-     * Lock-free SPSC ring; safe to call from the audio thread.
+     * Forward PCM samples to the process-wide audio analyzer. Direct Media3
+     * buffers call this directly; heap-backed buffers are downmixed by
+     * FftTapProcessor into a reusable direct mono scratch buffer and then call
+     * this with float PCM and one channel.
      */
-    external fun pushAudio(samples: FloatArray, count: Int, sampleRate: Int)
+    external fun pushAudioBuffer(buffer: java.nio.ByteBuffer, position: Int, bytes: Int,
+                                 format: Int, channels: Int)
 
     /**
-     * Read the latest smoothed bands + beat envelope from the global
-     * analyzer. `out` must have length ≥ 9 (8 bands + 1 beat). Used
-     * by the modulation matrix evaluator each Choreographer frame.
+     * Read the latest analyzer features from the global analyzer. `out`
+     * must have length >= 9 for 8 bands + beat; length >= 18 also receives
+     * RMS, spectral flux, onset strength, CWT transient, crest factor, beat
+     * confidence, bass, mid, and high.
+     * Used by the modulation matrix evaluator each Choreographer frame.
      */
     external fun readAudio(out: FloatArray)
 
-    /** Force the global analyzer to fade its smoothed state toward zero. */
+    /** Clear the global analyzer's temporal state after playback stops. */
     external fun clearAudio()
 
     /** Toggle the ImGui-based node graph editor overlay on/off. */
     external fun graphSetVisible(nativePtr: Long, visible: Boolean)
     external fun graphIsVisible(nativePtr: Long): Boolean
-    /** Serialize the current node graph to JSON (for filesDir persistence). */
+    external fun graphNeedsFrameLoop(nativePtr: Long): Boolean
+    /** Serialize the current node graph to JSON for profile persistence. */
     external fun graphSave(nativePtr: Long): String
     external fun graphLoad(nativePtr: Long, json: String): Boolean
     external fun graphReset(nativePtr: Long)

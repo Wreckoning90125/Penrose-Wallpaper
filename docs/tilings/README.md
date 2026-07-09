@@ -32,8 +32,8 @@ baseline.
    template: `catalogue.md` (the flat list of every known aperiodic prototile
    set), `bibliography.md` (the master source list, structured by this tree),
    `hyperbolic-and-tooling.md` (the H²/Escher/crystallographic overlap and the
-   external-tooling boundary), and `local-corpus-audit.md` (the `.local/**`
-   source inventory). They are listed in the Index.
+   external-tooling boundary), and `local-corpus-audit.md` (the repository
+   reference policy). They are listed in the Index.
 
 ## Document template
 
@@ -132,11 +132,12 @@ These terms have a fixed meaning across all documents here. Use them exactly.
 | [`pinwheel.md`](pinwheel.md) | none (∞ orientations) | Conway–Radin pinwheel tiling; Sadun generalisation |
 | [`periodic-reference.md`](periodic-reference.md) | periodic | Cairo tiling; conventional periodic tilings and the 17 wallpaper groups; the 15 monohedral convex pentagonal tilings (contrast baseline) |
 | [`einstein.md`](einstein.md) | none | Smith-Myers-Kaplan-Goodman-Strauss Hat and Spectre monotiles |
+| [`socolar-taylor.md`](socolar-taylor.md) | 6-fold | Taylor-Socolar half-hex substitution tiling |
 | [`catalogue.md`](catalogue.md) | reference | Flat catalogue of every known aperiodic prototile set (E²/H²/E³), and which the renderer covers |
 | [`atlas.md`](atlas.md) | reference | Shared curated render-target atlas consumed by the Android live wallpaper |
 | [`bibliography.md`](bibliography.md) | reference | Master source list for the whole tree, structured by these files |
 | [`hyperbolic-and-tooling.md`](hyperbolic-and-tooling.md) | reference | Hyperbolic (H²) tilings, the Escher / hyperbolic-crochet lineage, EPINET, and the crystallographic-tooling boundary |
-| [`local-corpus-audit.md`](local-corpus-audit.md) | reference | File-level audit of `.local/**` docs and their tiling usefulness |
+| [`local-corpus-audit.md`](local-corpus-audit.md) | reference | Public citation policy |
 | [`ROADMAP.md`](ROADMAP.md) | reference | Ranked candidate additions for future work — families, docs, tooling |
 
 ## Conventions
@@ -147,7 +148,7 @@ These terms have a fixed meaning across all documents here. Use them exactly.
   describe, or link to a source.
 - **Renderer mapping is mandatory.** Every system says, explicitly, whether
   it is implemented in the renderer and what a `Family` entry would cost. The
-  app currently implements thirteen families — P3, P2 and P1 (see
+  app currently implements eighteen families — P3, P2 and P1 (see
   `pentagonal-penrose.md`), the Chair L-tromino tiling (a 4-fold substitution
   not covered by the source PDFs; documented as a renderer note only), the
   de Bruijn rhomb-square dodecagonal, Ammann–Beenker and heptagonal tilings
@@ -156,7 +157,8 @@ These terms have a fixed meaning across all documents here. Use them exactly.
   `pinwheel.md`), the Godrèche–Lançon binary and Tübingen-triangle tilings
   (see `pentagonal-binary.md`), and the Danzer sevenfold triangle substitution
   (see `heptagonal.md`), plus the Hat and Spectre monotiles (see
-  `einstein.md`).
+  `einstein.md`), Equithirds, Cromwell KRT, Gailiunas spiral families, Cairo,
+  and the Taylor-Socolar half-hex substitution (see `socolar-taylor.md`).
 - **Primary source.** Most of this material is synthesised from John Savard's
   tiling series at `http://www.quadibloc.com/math` (page IDs are cited per
   system), cross-checked against the primary academic literature each page

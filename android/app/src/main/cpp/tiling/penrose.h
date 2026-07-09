@@ -28,14 +28,34 @@ namespace penrose {
 //   Hat          — 13-vertex hat monotiles generated from the H/T/P/F
 //                  metatile hierarchy in Kaplan's `hatviz`; type identifies
 //                  the leaf role (H, H1, T, P, F).
-//   Spectre      — 14-vertex straight-edged Spectre / Tile(1,1) monotiles
-//                  generated from Kaplan's nine-supertile generator; type
-//                  identifies the substitution label.
+//   Spectre      — 14 Bezier-anchor curved Spectre monotiles generated from
+//                  Kaplan's nine-supertile generator; type identifies the
+//                  substitution label. Renderers flatten the cubic sides.
+//   Equithirds   — Kalahurka's two-triangle Bielefeld substitution. type 0 =
+//                  equilateral triangle; type 1 = 30-30-120 wide triangle.
+//   CromwellKRT  — Peter Cromwell's kite/rhombus/trapezium tiling, built as
+//                  KRT supertiles derived from the red+green+black connected
+//                  subgraph of Robinson triangles. type 0=kite, 1=rhombus,
+//                  2=trapezium.
+//   GailiunasSpiral — Gailiunas's spiral tilings from intersecting regular
+//                  polygons. Each seed selects one {arms,n,k} triple; generation
+//                  selects the spiral level.
+//   Cairo        — periodic Cairo pentagonal tiling from the Wolfram
+//                  Demonstrations polycairo construction. type = one of the
+//                  eight pentagon roles in the 4x4 translation cell.
+//   SocolarTaylor — Akiyama-Lee half-hexagonal substitution for the
+//                  Taylor-Socolar tiling. Exposed seeds are the paper's
+//                  generating triad and a single A full-hex supertile; type =
+//                  letter/bar/side role and orientation is classified
+//                  geometrically.
+//   D4Substitution — experimental bounded 2x2 square subdivision driven by
+//                  dihedral D4 state composition. The tile geometry stays
+//                  square while type stores the local symmetry state.
 // We pack every shape into the same struct so the renderer can iterate
-// uniformly. `vcount` ranges 3..14.
+// uniformly. `vcount` is bounded by kMaxTileVerts.
 // =============================================================================
 
-constexpr int kMaxTileVerts = 16;
+constexpr int kMaxTileVerts = 128;
 
 struct Tile {
     float x[kMaxTileVerts];
@@ -44,16 +64,33 @@ struct Tile {
     uint8_t type;     // family-defined tile class for color classification
 };
 
+struct TilePoint {
+    double x;
+    double y;
+};
+
+struct WindowBounds {
+    float minX;
+    float maxX;
+    float minY;
+    float maxY;
+};
+
+double tileSignedArea(const Tile& tile);
+TilePoint tileAreaCentroid(const Tile& tile);
+
 enum class Family : int {
     P3 = 0, P2 = 1, Chair = 2, Dodecagonal = 3, Pinwheel = 4,
     AmmannBeenker = 5, Heptagonal = 6, Binary = 7, Tuebingen = 8,
-    P1 = 9, Danzer = 10, Hat = 11, Spectre = 12,
+    P1 = 9, Danzer = 10, Hat = 11, Spectre = 12, Equithirds = 13,
+    CromwellKRT = 14, GailiunasSpiral = 15, Cairo = 16,
+    SocolarTaylor = 17, D4Substitution = 18,
 };
 
 // Number of Family enumerators. The JNI layer validates the incoming family
 // index against this; keep it in step with the enum above and with the
 // kFamilyInfo[] table in penrose.cpp.
-constexpr int kFamilyCount = 13;
+constexpr int kFamilyCount = 19;
 
 // Per-family edge classification used by the border seam-hiding rule.
 //   For Penrose: Leg = the two equal-length sides, Base = the third.
@@ -84,6 +121,10 @@ enum class SeedSpectre : int {
     Gamma = 0, Delta = 1, Theta = 2, Lambda = 3, Xi = 4,
     Pi = 5, Sigma = 6, Phi = 7, Psi = 8,
 };
+enum class SeedEquithirds : int { Equilateral = 0, Wide = 1 };
+enum class SeedCromwellKRT : int { Kite = 0, Rhombus = 1, Trapezium = 2, Star = 3 };
+enum class SeedCairo : int { Standard = 0 };
+enum class SeedSocolarTaylor : int { GeneratingTriad = 0, AHex = 1 };
 
 std::vector<Tile> seedP3(SeedP3 seed);
 std::vector<Tile> seedP2(SeedP2 seed);
@@ -91,8 +132,14 @@ std::vector<Tile> seedChair(SeedChair seed);
 std::vector<Tile> seedPinwheel(SeedPinwheel seed);
 std::vector<Tile> seedTuebingen(SeedTuebingen seed);
 std::vector<Tile> seedDanzer(SeedDanzer seed);
+std::vector<Tile> seedEquithirds(SeedEquithirds seed);
 std::vector<Tile> generateHat(int seedIdx, int generations);
 std::vector<Tile> generateSpectre(int seedIdx, int generations);
+std::vector<Tile> generateCromwellKRT(int seedIdx, int generations);
+std::vector<Tile> generateGailiunasSpiral(int seedIdx, int generations);
+std::vector<Tile> generateCairo(int seedIdx, int generations);
+std::vector<Tile> generateSocolarTaylor(int seedIdx, int generations);
+std::vector<Tile> generateD4Substitution(int seedIdx, int generations);
 
 // =============================================================================
 // Substitutions
@@ -116,6 +163,7 @@ std::vector<Tile> subdivideTuebingen(const std::vector<Tile>& in);
 // dissection written in the parent's barycentric frame so the chiral rule
 // reaches reflected tiles through the vertex winding.
 std::vector<Tile> subdivideDanzer(const std::vector<Tile>& in);
+std::vector<Tile> subdivideEquithirds(const std::vector<Tile>& in);
 
 // Pinwheel deflation: each 1:2:sqrt(5) triangle becomes five at 1/sqrt(5)
 // scale (Conway / Radin). Reflected tiles arise naturally and are kept.
@@ -143,6 +191,11 @@ std::vector<Tile> generateBinary(int seedIdx, int generations);
 // star / boat / diamond gaps, recovered as the closed loops of un-shared
 // pentagon edges. `seedIdx` is unused (the entry is the fixed five-fold sun).
 std::vector<Tile> generateP1(int seedIdx, int generations);
+
+// Kalahurka Equithirds. Inflation is sqrt(3). The equilateral supertile
+// deflates into three wide triangles at its centroid; the wide supertile
+// deflates into two wide triangles plus one equilateral triangle.
+std::vector<Tile> generateEquithirds(int seedIdx, int generations);
 
 // =============================================================================
 // Edge extraction (one entry per side of every tile)
@@ -185,8 +238,10 @@ struct FamilyInfo {
     int       waveSymmetry;  // ripple plane-wave fold count; 0 = radial
     uint8_t   hideSeamMode;  // 0 none, 1 P3 (Base+Base), 2 P2 (Leg+Leg)
     bool      depthParallax; // per-tile parallax depth shading is enabled
-    bool      centroidFan;   // true: triangulate fills from the centroid
-                             // (concave P1 star/boat); false: fan from vertex 0
+    bool      centroidFan;   // true: render fills with center-depth topology:
+                             // use a contained centroid fan when possible,
+                             // otherwise contained simple-polygon triangles.
+                             // false: fan convex polygons from vertex 0
     uint8_t   depthVertex;   // triangle families: vertex index carrying the
                              // apex depth bulge. Unused by the rhomb families
                              // (bulge runs along the long diagonal) and the
@@ -204,6 +259,14 @@ inline const FamilyInfo& familyInfo(Family f) {
 // Generate a full tiling: seed + N deflations, or N-grid dualization.
 // Family-erased entry point.
 std::vector<Tile> generate(Family family, int seedIdx, int generations);
+
+// Direct substitution families can be pruned between deflation generations:
+// every child lies inside its parent, so a parent outside an expanded view
+// window cannot later produce visible descendants. Other family generators stay
+// on the full path until their own canonical generation stages expose the same
+// containment guarantee.
+bool supportsWindowedGeneration(Family family);
+std::vector<Tile> generateWindowed(Family family, int seedIdx, int generations, const WindowBounds& window);
 
 // Linear deflation rate — the renderer scales border width by it per
 // generation and skips borders once edges shrink below sub-pixel.

@@ -6,10 +6,10 @@ import com.penrose.wallpaper.Settings
 
 /**
  * A built-in material + lighting bundle. Selecting one is a one-shot apply:
- * its values are written straight into SharedPreferences, the sliders
+ * its values are written straight into the settings store, the sliders
  * re-bind to show them, and the preset is then done — there is no stored
- * "active preset" state, no toggle. The user tunes the sliders from there.
- * (User-saveable presets are a separate, later feature.)
+ * "active preset" state, no toggle. The user tunes the sliders from there,
+ * or stores the complete current renderer state through saved presets.
  *
  * `thumbnailRes` is the baked PNG drawable rendered from these same
  * `values` by `tools/bake_preset_thumbnails.py`, so the picker shows the
@@ -20,7 +20,7 @@ import com.penrose.wallpaper.Settings
  */
 internal data class MaterialPreset(
     val name: String,
-    @DrawableRes val thumbnailRes: Int,
+    @field:DrawableRes val thumbnailRes: Int,
     val values: Map<String, Int>,
 )
 

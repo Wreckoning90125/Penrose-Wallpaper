@@ -1,10 +1,9 @@
 package com.penrose.wallpaper.preset
 
 import android.content.Context
-import android.content.SharedPreferences
 import android.util.Log
-import androidx.core.content.edit
-import com.penrose.wallpaper.Settings
+import com.penrose.wallpaper.SettingsStore
+import com.penrose.wallpaper.StoredSetting
 import org.json.JSONObject
 
 /**
@@ -34,30 +33,16 @@ internal class PresetStore(private val context: Context) {
     }
 
     /**
-     * Writes preset.staticSettings into [prefs]. If the preset ships a graph
-     * block, the persisted modulation graph is overwritten with it.
+     * Writes preset.staticSettings into [settings]. If the preset ships a
+     * graph block, the persisted modulation graph is overwritten with it.
      */
-    fun applyToPrefs(preset: Preset, prefs: SharedPreferences) {
-        val graphJson = preset.graphJson
-        if (graphJson != null) {
-            try {
-                java.io.File(context.filesDir, "modulation_graph.json")
-                    .writeText(graphJson)
-            } catch (e: Exception) {
-                Log.w(TAG, "graph write failed for preset ${preset.id}", e)
-            }
-        }
-        prefs.edit {
+    suspend fun applyToSettings(preset: Preset, settings: SettingsStore) {
+        SettingsSnapshotStore.updateWorkingSettingsAndGraph(
+            settings = settings,
+            graphJson = preset.graphJson,
+        ) {
             for ((key, value) in preset.staticSettings) {
-                when (value) {
-                    is StaticValue.IntValue    -> putInt(key, value.v)
-                    is StaticValue.StringValue -> putString(key, value.v)
-                    is StaticValue.BoolValue   -> putBoolean(key, value.v)
-                    is StaticValue.FloatValue  -> putFloat(key, value.v)
-                }
-            }
-            if (graphJson != null) {
-                putLong(Settings.KEY_GRAPH_REVISION, System.currentTimeMillis())
+                this[key] = value.toStoredSetting()
             }
         }
     }
@@ -80,3 +65,11 @@ internal class PresetStore(private val context: Context) {
         const val TAG = "PresetStore"
     }
 }
+
+internal fun StaticValue.toStoredSetting(): StoredSetting =
+    when (this) {
+        is StaticValue.IntValue -> StoredSetting.IntValue(v)
+        is StaticValue.StringValue -> StoredSetting.StringValue(v)
+        is StaticValue.BoolValue -> StoredSetting.BoolValue(v)
+        is StaticValue.FloatValue -> StoredSetting.FloatValue(v)
+    }

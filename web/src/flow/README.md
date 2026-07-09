@@ -15,8 +15,10 @@ them — nothing imports from `ControlGraph.tsx`, so there are no cycles.
 ```
 jsonUtil ─ flowLayout ─ nodeData ─ controlSpecs ─ settingKeys ─ audioTargets
         │                                                          │
-        ├─ operatorSpecs ─ signalUtils ─ signalEval                │
-        ├─ fieldSourceSpec ─ materialLanes ─ renderInputs          │
+        ├─ operatorSpecs ─ signalUtils ─ signalEval ─ operatorSignals
+        │                                                          │
+        ├─ fieldSourceSpec ─ materialLanes ─ renderInputs
+        ├─ graphTopology ─ (fieldSourceSpec, materialLanes, nodeData, signalUtils)
         ├─ graphPreset ── (jsonUtil, flowLayout, nodeData, operatorSpecs, settingKeys)
         ├─ graphNodeData ─ (graphPreset, operatorSpecs)
         ├─ nodeFrame ─ RangeControl ─ MultiSwitch
@@ -42,7 +44,7 @@ jsonUtil ─ flowLayout ─ nodeData ─ controlSpecs ─ settingKeys ─ audioT
 
 | Module | Role |
 |---|---|
-| `ControlGraph.tsx` | Orchestrator: state/refs, effects, connection validation, auto-layout driving, save/load wiring, and the `ReactFlow` render with its `nodeTypes`/`edgeTypes`. |
+| `ControlGraph.tsx` | Orchestrator: state/refs, effects, auto-layout driving, save/load wiring, and the `ReactFlow` render with its `nodeTypes`/`edgeTypes`. |
 | `graphNodes.tsx` | One memo'd presentational component per node kind (`AtlasNode` … `DisplayNode`), each rendering a `NodeFrame` with its controls. |
 | `graphEdges.tsx` | Per-node-kind colours, the gradient bezier edge component, and `edgeTypes`. |
 | `graphLayout.ts` | Default graph column packing, measured layout, and fit-to-view math. |
@@ -57,8 +59,10 @@ jsonUtil ─ flowLayout ─ nodeData ─ controlSpecs ─ settingKeys ─ audioT
 | `settingKeys.ts` | The setting-key groups + the preset round-trip key set. |
 | `fieldSourceSpec.ts` | Field Source parameter/outlet definitions and edge-derived field slot derivation. |
 | `materialLanes.ts` | Material color/relief lane helpers, including Field Source deletion bypass splicing. |
-| `renderInputs.ts` | Derives the per-input render connectivity from the edges. |
+| `renderInputs.ts` | Derives the per-input render connectivity from the graph topology. |
+| `graphTopology.ts` | Pure graph topology policy: valid handles, single-wire conflicts, signal/frame DAG checks, material-lane fanout rules, and the post-FX frame-chain derivation. |
 | `signalEval.ts` | The modulation engine: analysis → operators → targets, per frame. |
+| `operatorSignals.ts` | Passive operator-output signal snapshots for UI metering, derived from evaluated graph signals without rewriting node data. |
 | `signalUtils.ts` | Signal handle/feature helpers shared by the eval engine. |
 | `operatorSpecs.ts` | The modulation-operator library + lookups. |
 | `audioTargets.ts` | Audio-modulation target ranges. |

@@ -19,7 +19,7 @@ function unit2(x: number, y: number): Point {
 // corner→corner; consecutive edges share a corner), a per-edge visible flag, the
 // projected centroid (for the inward direction), and per-tile shading attributes.
 export type TileBorder = {
-  edges: { pts: Point[]; visible: boolean }[];
+  edges: { pts: Point[]; visible: boolean; curved?: boolean }[];
   centroid: Point;
   ring: number;
   orient: Point;
@@ -36,7 +36,7 @@ export function buildTileRing(
   fill: number,
   point: number,
   gap: number,
-  pushTri: (p0: Point, p1: Point, p2: Point, ring: number, orient: Point, center: Point) => void,
+  pushTri: (p0: Point, p1: Point, p2: Point, ring: number, orient: Point, center: Point, surfaceHint?: readonly number[]) => void,
 ): void {
   const { centroid, ring, orient, center } = tile;
   const k = tile.edges.length;
@@ -71,21 +71,24 @@ export function buildTileRing(
     reflex.push(ccw ? turn < -1e-9 : turn > 1e-9);
   }
   const anyReflex = reflex.some(Boolean);
+  const edgeSurfaceHints: readonly number[][] = Array.from({ length: k }, (_, e) => [(e - 1 + k) % k, e, (e + 1) % k]);
+  const cornerSurfaceHints: readonly number[][] = Array.from({ length: k }, (_, i) => [(i - 1 + k) % k, i]);
 
-  // Width cap: never fold the ring. For convex tiles that's the incircle; for any tile
-  // a fraction of the shortest edge keeps the inset local feature size positive.
-  let inradius = Infinity;
+  // Width cap: never fold the ring. The centroid clearance is a conservative
+  // local limit, and the shortest-edge fraction keeps reflex/skinny features
+  // positive without pretending this is a true polygon inradius.
+  let centroidClearance = Infinity;
   let minEdge = Infinity;
   for (let e = 0; e < k; e++) {
     const a = corners[e]!;
     const b = corners[(e + 1) % k]!;
     const dist = (centroid[0] - a[0]) * inward[e]![0] + (centroid[1] - a[1]) * inward[e]![1];
-    if (dist > 0) inradius = Math.min(inradius, dist);
+    if (dist > 0) centroidClearance = Math.min(centroidClearance, dist);
     minEdge = Math.min(minEdge, Math.hypot(b[0] - a[0], b[1] - a[1]));
   }
   const cap = anyReflex
     ? minEdge * 0.2
-    : Math.min(minEdge * 0.42, Number.isFinite(inradius) ? inradius * 0.92 : minEdge * 0.42);
+    : Math.min(minEdge * 0.42, Number.isFinite(centroidClearance) ? centroidClearance * 0.92 : minEdge * 0.42);
   const h = Math.min(halfWidth, cap);
   if (h <= 1e-7) return;
 
@@ -168,11 +171,14 @@ export function buildTileRing(
   // the long edge, and is independent of Fill. Reflex notches are left alone.
   const trim = Math.max(0, Math.min(1, point)) * h * 2.2;
 
-  // Band per visible edge: outer = outline points; inner = the straight inset segment
-  // innerStart→innerEnd, sampled per outline point (a convex inset-polygon edge).
+  // Band per visible edge: outer = outline points; inner follows the same projected
+  // edge polyline offset inward, then is corrected to hit the corner inset endpoints.
+  // Curved tiles must not collapse their inner edge to a straight chord: that exposes
+  // sampled curve points as fake corners and opens sliver gaps at the joins.
   for (let e = 0; e < k; e++) {
     if (!tile.edges[e]!.visible) continue;
     const ep = tile.edges[e]!.pts;
+    const useCurveOffset = tile.edges[e]!.curved === true;
     const a0 = innerStart[e]!;
     const a1 = innerEnd[e]!;
     const last = ep.length - 1;
@@ -189,6 +195,24 @@ export function buildTileRing(
       const f = s - j;
       return [ep[j]![0] + (ep[j + 1]![0] - ep[j]![0]) * f, ep[j]![1] + (ep[j + 1]![1] - ep[j]![1]) * f];
     };
+    const tangentAt = (t: number): Point => {
+      const s = Math.max(0, Math.min(last - 1e-9, t * last));
+      const j = Math.max(0, Math.min(last - 1, Math.floor(s)));
+      const a = ep[j]!;
+      const b = ep[j + 1]!;
+      return unit2(b[0] - a[0], b[1] - a[1]);
+    };
+    const normalAt = (t: number): Point => {
+      const d = tangentAt(t);
+      return ccw ? [-d[1], d[0]] : [d[1], -d[0]];
+    };
+    const offsetAt = (t: number): Point => {
+      const o = outerAt(t);
+      const n = normalAt(t);
+      return [o[0] + n[0] * h, o[1] + n[1] * h];
+    };
+    const baseStart = useCurveOffset ? offsetAt(0) : a0;
+    const baseEnd = useCurveOffset ? offsetAt(1) : a1;
     // Close gap: near each corner, pull the inner edge up toward the tile vertex over a
     // short zone (~1.5·halfWidth of the edge), tapering the band to a point at the
     // shared vertex while keeping full width in the middle. The tip then coincides with
@@ -196,8 +220,16 @@ export function buildTileRing(
     // skipped at a reflex corner. Extra knee samples localise it so the body is intact.
     const gapZone = g > 0 && edgeLen > 0 ? Math.min(0.45, (h * 1.5) / edgeLen) : 0;
     const innerAt = (t: number): Point => {
-      let px = a0[0] + (a1[0] - a0[0]) * t;
-      let py = a0[1] + (a1[1] - a0[1]) * t;
+      let px: number;
+      let py: number;
+      if (useCurveOffset) {
+        const base = offsetAt(t);
+        px = base[0] + (a0[0] - baseStart[0]) * (1 - t) + (a1[0] - baseEnd[0]) * t;
+        py = base[1] + (a0[1] - baseStart[1]) * (1 - t) + (a1[1] - baseEnd[1]) * t;
+      } else {
+        px = a0[0] + (a1[0] - a0[0]) * t;
+        py = a0[1] + (a1[1] - a0[1]) * t;
+      }
       if (gapZone > 1e-6) {
         if (!reflex[e]) {
           const w = g * Math.max(0, Math.min(1, (tA + gapZone - t) / gapZone));
@@ -222,8 +254,8 @@ export function buildTileRing(
       const o1 = outerAt(t1);
       const i0 = innerAt(t0);
       const i1 = innerAt(t1);
-      pushTri(o0, o1, i1, ring, orient, center);
-      pushTri(o0, i1, i0, ring, orient, center);
+      pushTri(o0, o1, i1, ring, orient, center, edgeSurfaceHints[e]);
+      pushTri(o0, i1, i0, ring, orient, center, edgeSurfaceHints[e]);
     }
   }
 
@@ -236,8 +268,9 @@ export function buildTileRing(
     const v = corners[i]!;
     const cIn = innerEnd[ip]!;   // incoming edge's inner endpoint at corner i
     const cOut = innerStart[i]!; // outgoing edge's inner endpoint at corner i
+    const surfaceHint = cornerSurfaceHints[i];
     if (reflex[i]) {
-      pushTri(v, cIn, cOut, ring, orient, center); // reflex notch (untouched by Point)
+      pushTri(v, cIn, cOut, ring, orient, center, surfaceHint); // reflex notch (untouched by Point)
     } else if (trim > 1e-9) {
       continue; // convex spike trimmed flat — no apex fill
     } else if (cut > 0 && joinStyle === 1) {
@@ -251,11 +284,11 @@ export function buildTileRing(
           it * it * cIn[0] + 2 * it * t * m[0] + t * t * cOut[0],
           it * it * cIn[1] + 2 * it * t * m[1] + t * t * cOut[1],
         ];
-        pushTri(v, prev, p, ring, orient, center);
+        pushTri(v, prev, p, ring, orient, center, surfaceHint);
         prev = p;
       }
     } else if (cut > 0) {
-      pushTri(v, cIn, cOut, ring, orient, center);
+      pushTri(v, cIn, cOut, ring, orient, center, surfaceHint);
     }
   }
 }

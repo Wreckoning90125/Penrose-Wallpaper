@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import struct
 import subprocess
 from pathlib import Path
@@ -14,6 +15,9 @@ ATLAS = ROOT / "atlas" / "tiling_atlas.json"
 ANDROID_BUILD = ROOT / "android" / "app" / "build.gradle.kts"
 COUNT_DIR = ROOT / ".cache" / "atlas-count-check"
 EXPORTER = ROOT / "tools" / "generate_web_geometry.py"
+WEB_FAMILIES = ROOT / "web" / "src" / "tiling" / "families.ts"
+WEB_GEOMETRY = ROOT / "web" / "src" / "tiling" / "geometry.ts"
+NATIVE_TILING = ROOT / "android" / "app" / "src" / "main" / "cpp" / "tiling" / "penrose.cpp"
 MAX_INITIAL_TILES = 600
 
 FAMILY_MAX_SEED = {
@@ -30,6 +34,12 @@ FAMILY_MAX_SEED = {
     10: 1,
     11: 3,
     12: 8,
+    13: 1,
+    14: 3,
+    15: 51,
+    16: 0,
+    17: 6,
+    18: 5,
 }
 
 FAMILY_MAX_GEN = {
@@ -37,8 +47,14 @@ FAMILY_MAX_GEN = {
     4: 6,
     9: 7,
     10: 7,
-    11: 5,
-    12: 5,
+    11: 4,
+    12: 3,
+    13: 10,
+    14: 5,
+    15: 8,
+    16: 8,
+    17: 7,
+    18: 8,
 }
 
 PREF_SCHEMA = {
@@ -48,13 +64,23 @@ PREF_SCHEMA = {
     "preset": str,
     "color_count": int,
     "color_mode": str,
+    "color_spread": int,
+    "color_spectral": int,
     "border_on": bool,
     "border_join": str,
     "border_width": int,
+    "border_fill": int,
+    "border_point": int,
+    "border_gap": int,
     "border_l": int,
     "border_c": int,
     "border_h": int,
     "border_a": int,
+    "edge_profile_width": int,
+    "edge_profile_glow": int,
+    "edge_profile_l": int,
+    "edge_profile_c": int,
+    "edge_profile_h": int,
     "bg_mode": str,
     "bg_l": int,
     "bg_c": int,
@@ -80,6 +106,20 @@ PREF_SCHEMA = {
     "mat_iridescence": int,
     "mat_emissive": int,
     "mat_relief": int,
+    "ornament_style": int,
+    "ornament_amount": int,
+    "ornament_width": int,
+    "ornament_density": int,
+    "ornament_phase": int,
+    "ornament_twist": int,
+    "surface_contour_amount": int,
+    "surface_contour_source": int,
+    "surface_contour_spacing": int,
+    "surface_contour_width": int,
+    "surface_contour_phase": int,
+    "surface_contour_l": int,
+    "surface_contour_c": int,
+    "surface_contour_h": int,
     "light_angle": int,
     "light_elevation": int,
     "light_intensity": int,
@@ -101,24 +141,31 @@ PREF_SCHEMA = {
 }
 
 STRING_VALUES = {
-    "family": {str(v) for v in range(13)},
-    "seed": {str(v) for v in range(9)},
+    "family": {str(v) for v in range(max(FAMILY_MAX_SEED) + 1)},
+    "seed": {str(v) for v in range(52)},
     "preset": {str(v) for v in range(12)},
-    "color_mode": {"0", "1", "2"},
+    "color_mode": {"0", "1", "2", "3"},
     "bg_mode": {"0", "1"},
     "border_join": {"0", "1", "2"},
-    "pan_mode": {"0", "1"},
+    "pan_mode": {"0", "1", "2"},
     "projection": {"0", "1"},
 }
 
 INT_RANGES = {
-    "generation": (0, 8),
-    "color_count": (2, 16),
+    "generation": (0, 10),
+    "color_count": (2, 18),
+    "color_spread": (0, 100),
+    "color_spectral": (0, 100),
     "border_width": (0, 600),
     "border_l": (0, 100),
     "border_c": (0, 37),
     "border_h": (0, 359),
     "border_a": (0, 100),
+    "edge_profile_width": (0, 100),
+    "edge_profile_glow": (0, 100),
+    "edge_profile_l": (0, 100),
+    "edge_profile_c": (0, 37),
+    "edge_profile_h": (0, 359),
     "bg_l": (0, 100),
     "bg_c": (0, 37),
     "bg_h": (0, 359),
@@ -137,6 +184,20 @@ INT_RANGES = {
     "mat_iridescence": (0, 100),
     "mat_emissive": (0, 200),
     "mat_relief": (0, 200),
+    "ornament_style": (0, 4),
+    "ornament_amount": (0, 100),
+    "ornament_width": (0, 100),
+    "ornament_density": (0, 100),
+    "ornament_phase": (0, 100),
+    "ornament_twist": (0, 100),
+    "surface_contour_amount": (0, 100),
+    "surface_contour_source": (0, 7),
+    "surface_contour_spacing": (1, 64),
+    "surface_contour_width": (1, 50),
+    "surface_contour_phase": (0, 100),
+    "surface_contour_l": (0, 100),
+    "surface_contour_c": (0, 40),
+    "surface_contour_h": (0, 360),
     "light_angle": (0, 360),
     "light_elevation": (0, 90),
     "light_intensity": (0, 200),
@@ -213,11 +274,48 @@ def exported_tile_count(item_id: str, family: int, seed: int, generation: int) -
     return tile_count
 
 
+def regex_int(path: Path, pattern: str, context: str) -> int:
+    match = re.search(pattern, path.read_text(encoding="utf-8"), re.S)
+    if match is None:
+        raise SystemExit(f"could not find {context} in {path}")
+    return int(match.group(1))
+
+
+def check_einstein_metadata_caps() -> None:
+    expected = {11: 4, 12: 3, 18: 8}
+    web_family_patterns = {
+        11: r"'11':\s*\{.*?maxGeneration:\s*(\d+)",
+        12: r"'12':\s*\{.*?maxGeneration:\s*(\d+)",
+        18: r"'18':\s*\{.*?maxGeneration:\s*(\d+)",
+    }
+    native_patterns = {
+        11: r"/\*\s*Hat\s*\*/\s*\{\s*(\d+)",
+        12: r"/\*\s*Spectre\s*\*/\s*\{\s*(\d+)",
+        18: r"/\*\s*D4Substitution\s*\*/\s*\{\s*(\d+)",
+    }
+    for family, max_gen in expected.items():
+        if FAMILY_MAX_GEN.get(family) != max_gen:
+            raise SystemExit(f"verify_atlas FAMILY_MAX_GEN[{family}]={FAMILY_MAX_GEN.get(family)} != {max_gen}")
+        web_family = regex_int(WEB_FAMILIES, web_family_patterns[family], f"web family {family} maxGeneration")
+        web_geometry = regex_int(
+            WEB_GEOMETRY,
+            rf"FAMILY_MAX_GENERATION_BY_ID[\s\S]*?\[{family},\s*(\d+)\]",
+            f"web geometry {family} max generation",
+        )
+        native = regex_int(NATIVE_TILING, native_patterns[family], f"native family {family} maxGen")
+        if web_family != max_gen or web_geometry != max_gen or native != max_gen:
+            raise SystemExit(
+                f"family {family}: max generation drift; expected {max_gen}, "
+                f"web families={web_family}, web geometry={web_geometry}, native={native}"
+            )
+
+
 def main() -> None:
+    check_einstein_metadata_caps()
     atlas = json.loads(ATLAS.read_text(encoding="utf-8"))
     categories = atlas.get("categories", [])
-    if len(categories) != 9:
-        raise SystemExit(f"expected 9 categories, found {len(categories)}")
+    if len(categories) != 10:
+        raise SystemExit(f"expected 10 categories, found {len(categories)}")
 
     ids: set[str] = set()
     total_items = 0

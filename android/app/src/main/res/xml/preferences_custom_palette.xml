@@ -87,4 +87,14 @@
         <SeekBarPreference android:key="custom_15_C" android:title="Chroma (×100)"    android:min="0" android:max="37"  android:defaultValue="5"  app:showSeekBarValue="true" />
         <SeekBarPreference android:key="custom_15_H" android:title="Hue (degrees)"    android:min="0" android:max="359" android:defaultValue="320" app:showSeekBarValue="true" />
     </PreferenceCategory>
+    <PreferenceCategory android:key="custom_slot_16" android:title="Color 17">
+        <SeekBarPreference android:key="custom_16_L" android:title="Lightness (×100)" android:min="0" android:max="100" android:defaultValue="70" app:showSeekBarValue="true" />
+        <SeekBarPreference android:key="custom_16_C" android:title="Chroma (×100)"    android:min="0" android:max="37"  android:defaultValue="15" app:showSeekBarValue="true" />
+        <SeekBarPreference android:key="custom_16_H" android:title="Hue (degrees)"    android:min="0" android:max="359" android:defaultValue="160" app:showSeekBarValue="true" />
+    </PreferenceCategory>
+    <PreferenceCategory android:key="custom_slot_17" android:title="Color 18">
+        <SeekBarPreference android:key="custom_17_L" android:title="Lightness (×100)" android:min="0" android:max="100" android:defaultValue="70" app:showSeekBarValue="true" />
+        <SeekBarPreference android:key="custom_17_C" android:title="Chroma (×100)"    android:min="0" android:max="37"  android:defaultValue="15" app:showSeekBarValue="true" />
+        <SeekBarPreference android:key="custom_17_H" android:title="Hue (degrees)"    android:min="0" android:max="359" android:defaultValue="240" app:showSeekBarValue="true" />
+    </PreferenceCategory>
 </PreferenceScreen>

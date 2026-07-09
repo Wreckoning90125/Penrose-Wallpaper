@@ -13,7 +13,7 @@
 #define PENROSE_UNIFORMS_GLSL
 
 layout(set = 0, binding = 0, std140) uniform Palette {
-    vec4  palette[16];
+    vec4  palette[18];
     vec4  borderColor;
     vec4  bgColor;
     uvec4 flags;
@@ -34,6 +34,14 @@ layout(set = 0, binding = 0, std140) uniform Palette {
     vec4  fillLight;     // fillDir.xyz, fillIntensity
     vec4  fillColor;     // fillColor.rgb, --
     vec4  ambient;       // ambientColor.rgb, ambientAmount
+    vec4  ornament;      // style, amount, width, phase
+    vec4  ornamentExtra; // density, twist, seed, family
+    vec4  contour;       // amount, source, spacing, width
+    vec4  contourColor;  // phase, lineColor.rgb
+    vec4  sourceMarkA;   // rgb, alpha
+    vec4  sourceMarkB;   // rgb, alpha
+    vec4  sourceMarkC;   // rgb, alpha
+    vec4  edgeProfileColor; // rgb, --
 } ubo;
 
 #endif // PENROSE_UNIFORMS_GLSL

@@ -1,10 +1,9 @@
 // Shared Poincaré-disk projection helpers — radial homeomorphism
-// E² → B² followed by the τ_b hyperbolic translation in B², plus the
-// analytical tangent decomposition border.vert needs to extrude in
-// disk space. Used by fill.vert (just the projection) and border.vert
-// (projection + tangent + boost rotation). Pulled in via #include
-// with GL_GOOGLE_include_directive, which must be enabled at the top
-// of each shader that pulls this file in.
+// E² → B² followed by the τ_b hyperbolic translation in B². fill.vert and
+// border.vert both use projectHyp(); the tangent helpers remain available to
+// shaders that need to transport a model-space tangent through the same disk
+// map. Pulled in via #include with GL_GOOGLE_include_directive, which must be
+// enabled at the top of each shader that pulls this file in.
 //
 // Projection params (b, s) come in as function args rather than as
 // references to a push-constant block, so this file stays decoupled
@@ -16,13 +15,17 @@
 #ifndef PENROSE_HYPERBOLIC_GLSL
 #define PENROSE_HYPERBOLIC_GLSL
 
-// Radial map z = x̂ · tanh(|x|·s/2) then τ_b in B². Reduces to the
-// identity at s = 0; reduces to the radial map at b = 0.
-vec2 projectHyp(vec2 world, vec2 b, float s) {
+// Radial map z = x̂ · tanh(|x|·s/2). Reduces to the identity derivative
+// scale s/2 at the origin and maps world-space radius into the unit disk.
+vec2 radialProjectHyp(vec2 world, float s) {
     float r = length(world);
     vec2 dir = (r > 1e-6) ? (world / r) : vec2(0.0);
     float d = tanh(r * s * 0.5);
-    vec2 z = dir * d;
+    return dir * d;
+}
+
+// Hyperbolic translation τ_b on a point already in B².
+vec2 boostHypDisk(vec2 z, vec2 b) {
     float bb = dot(b, b);
     float zz = dot(z, z);
     float zb = dot(z, b);
@@ -30,6 +33,12 @@ vec2 projectHyp(vec2 world, vec2 b, float s) {
     if (abs(denom) < 1e-6) denom = 1e-6;
     vec2 num = (1.0 - bb) * z + (zz + 2.0 * zb + 1.0) * b;
     return num / denom;
+}
+
+// Radial map z = x̂ · tanh(|x|·s/2) then τ_b in B². Reduces to the
+// identity at s = 0; reduces to the radial map at b = 0.
+vec2 projectHyp(vec2 world, vec2 b, float s) {
+    return boostHypDisk(radialProjectHyp(world, s), b);
 }
 
 // Analytical disk-space tangent of the radial map applied to world

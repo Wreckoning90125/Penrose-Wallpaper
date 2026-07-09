@@ -1,10 +1,9 @@
 package com.penrose.wallpaper
 
-import android.content.SharedPreferences
-import androidx.core.content.edit
+import kotlinx.coroutines.Deferred
 
 /**
- * Strongly-typed projection of our SharedPreferences, encoded into the
+ * Strongly-typed projection of our persisted settings, encoded into the
  * int/float arrays the C++ renderer reads in `decodeSettings()`
  * (jni_bridge.cpp). All modulation lives in the C++ node graph; this
  * struct only carries the user's slider baselines into the renderer.
@@ -16,8 +15,14 @@ internal class Settings(
     val preset: Int,
     val colorCount: Int,
     val colorMode: Int,
+    val colorSpread: Int,
+    val colorSpectral: Int,
     val borderOn: Boolean,
     val borderWidth: Float,
+    val borderJoin: Int,
+    val borderFill: Float,
+    val borderPoint: Float,
+    val borderGap: Float,
     val borderL: Float,
     val borderC: Float,
     val borderH: Float,
@@ -50,9 +55,15 @@ internal class Settings(
     val lightIntensity: Float,
     val lightWarmth: Float,
     val lightAmbient: Float,
-    // Per-preset characteristic colours. No slider UI today — these are
-    // seeded by the Material preset picker so each preset has its own
-    // sheen tint and iridescence band; defaults match MaterialParams.
+    val lightChoreoAmount: Float,
+    val lightChoreoSpeed: Float,
+    val lightChoreoSource: Float,
+    // 0 saw, 1 sine, 2 triangle, 3 square — shapes the choreography clock
+    // phase (web parity: the Clock node's clock_waveform setting).
+    val clockWaveform: Int,
+    // Per-preset characteristic colours. The Material screen exposes direct
+    // controls, and the preset picker seeds coherent sheen tint and
+    // iridescence-band defaults that match MaterialParams.
     val matSheenColorR: Float,
     val matSheenColorG: Float,
     val matSheenColorB: Float,
@@ -64,6 +75,35 @@ internal class Settings(
     // metalness from Phase B.
     val matRoughMod: Float,
     val matMetalMod: Float,
+    val ornamentStyle: Float,
+    val ornamentAmount: Float,
+    val ornamentWidth: Float,
+    val ornamentDensity: Float,
+    val ornamentPhase: Float,
+    val ornamentTwist: Float,
+    val ornamentSeed: Float,
+    val surfaceContourAmount: Float,
+    val surfaceContourSource: Float,
+    val surfaceContourSpacing: Float,
+    val surfaceContourWidth: Float,
+    val surfaceContourPhase: Float,
+    val surfaceContourL: Float,
+    val surfaceContourC: Float,
+    val surfaceContourH: Float,
+    val sourceMarkAL: Float,
+    val sourceMarkAC: Float,
+    val sourceMarkAH: Float,
+    val sourceMarkBL: Float,
+    val sourceMarkBC: Float,
+    val sourceMarkBH: Float,
+    val sourceMarkCL: Float,
+    val sourceMarkCC: Float,
+    val sourceMarkCH: Float,
+    val edgeProfileWidth: Float,
+    val edgeProfileGlow: Float,
+    val edgeProfileL: Float,
+    val edgeProfileC: Float,
+    val edgeProfileH: Float,
     // Hyperbolic projection mode (docs/hyperbolic/projection-design.md).
     // `projection` 0 = Euclidean (default; original affine view),
     //              1 = Poincaré disk.
@@ -83,22 +123,31 @@ internal class Settings(
 ) {
     fun toNative(): Pair<IntArray, FloatArray> {
         val ints = intArrayOf(
-            family, seedIdx, generation, preset, colorCount, colorMode,
-            if (borderOn) 1 else 0, bgMode, rippleMode, panMode, rippleKind,
-            projection, hypBorderSubdiv, hypFillSubdiv,
+            family, seedIdx, generation, preset, colorCount, colorMode, colorSpread, colorSpectral,
+            if (borderOn) 1 else 0, borderJoin, bgMode, rippleMode, panMode, rippleKind,
+            projection, hypBorderSubdiv, hypFillSubdiv, clockWaveform,
         )
         val baseFloats = floatArrayOf(
-            borderWidth, borderL, borderC, borderH, borderAlpha,
+            borderWidth, borderFill, borderPoint, borderGap, borderL, borderC, borderH, borderAlpha,
             bgL, bgC, bgH, rippleAmount,
             zoom, rotation, panX, panY,
             brightness, depthAmount, rippleSpeed,
             matRoughness, matMetalness, matSheen, matClearcoat,
             matAnisotropy, matIridescence, matEmissive, matRelief,
             lightAngle, lightElevation, lightIntensity, lightWarmth, lightAmbient,
+            lightChoreoAmount, lightChoreoSpeed, lightChoreoSource,
             matSheenColorR, matSheenColorG, matSheenColorB,
             matIridThickMin, matIridThickMax,
             matRoughMod, matMetalMod,
+            ornamentStyle, ornamentAmount, ornamentWidth, ornamentDensity,
+            ornamentPhase, ornamentTwist, ornamentSeed,
             hypScale, hypBoostX, hypBoostY,
+            surfaceContourAmount, surfaceContourSource, surfaceContourSpacing, surfaceContourWidth,
+            surfaceContourPhase, surfaceContourL, surfaceContourC, surfaceContourH,
+            sourceMarkAL, sourceMarkAC, sourceMarkAH,
+            sourceMarkBL, sourceMarkBC, sourceMarkBH,
+            sourceMarkCL, sourceMarkCC, sourceMarkCH,
+            edgeProfileWidth, edgeProfileGlow, edgeProfileL, edgeProfileC, edgeProfileH,
         )
         val floats = FloatArray(baseFloats.size + customOklch.size)
         baseFloats.copyInto(floats)
@@ -118,12 +167,23 @@ internal class Settings(
         const val KEY_PRESET        = "preset"
         const val KEY_COLOR_COUNT   = "color_count"
         const val KEY_COLOR_MODE    = "color_mode"
+        const val KEY_COLOR_SPREAD  = "color_spread"
+        const val KEY_COLOR_SPECTRAL = "color_spectral"
         const val KEY_BORDER_ON     = "border_on"
         const val KEY_BORDER_W      = "border_width"
+        const val KEY_BORDER_JOIN   = "border_join"
+        const val KEY_BORDER_FILL   = "border_fill"
+        const val KEY_BORDER_POINT  = "border_point"
+        const val KEY_BORDER_GAP    = "border_gap"
         const val KEY_BORDER_L      = "border_l"
         const val KEY_BORDER_C      = "border_c"
         const val KEY_BORDER_H      = "border_h"
         const val KEY_BORDER_A      = "border_a"
+        const val KEY_EDGE_PROFILE_WIDTH = "edge_profile_width"
+        const val KEY_EDGE_PROFILE_GLOW  = "edge_profile_glow"
+        const val KEY_EDGE_PROFILE_L     = "edge_profile_l"
+        const val KEY_EDGE_PROFILE_C     = "edge_profile_c"
+        const val KEY_EDGE_PROFILE_H     = "edge_profile_h"
         const val KEY_BG_MODE       = "bg_mode"
         const val KEY_BG_L          = "bg_l"
         const val KEY_BG_C          = "bg_c"
@@ -159,10 +219,14 @@ internal class Settings(
         const val KEY_LIGHT_INTENSITY = "light_intensity"
         const val KEY_LIGHT_WARMTH    = "light_warmth"
         const val KEY_LIGHT_AMBIENT   = "light_ambient"
+        const val KEY_LIGHT_CHOREO_AMOUNT = "light_choreo_amount"
+        const val KEY_LIGHT_CHOREO_SPEED  = "light_choreo_speed"
+        const val KEY_LIGHT_CHOREO_SOURCE = "light_choreo_source"
+        const val KEY_CLOCK_WAVEFORM      = "clock_waveform"
 
         // Per-preset characteristic colours (sheen tint + iridescent
-        // thin-film range). Set by the Material preset picker only;
-        // todo.md tracks adding picker / slider UI for direct tuning.
+        // thin-film range). The Material screen can tune them directly;
+        // the preset picker writes coherent defaults.
         const val KEY_MAT_SHEEN_COLOR_R  = "mat_sheen_color_r"
         const val KEY_MAT_SHEEN_COLOR_G  = "mat_sheen_color_g"
         const val KEY_MAT_SHEEN_COLOR_B  = "mat_sheen_color_b"
@@ -172,6 +236,30 @@ internal class Settings(
         // Variation knobs — opt-in seam roughness + per-tile metalness.
         const val KEY_MAT_ROUGH_MOD = "mat_rough_mod"
         const val KEY_MAT_METAL_MOD = "mat_metal_mod"
+        const val KEY_ORNAMENT_STYLE = "ornament_style"
+        const val KEY_ORNAMENT_AMOUNT = "ornament_amount"
+        const val KEY_ORNAMENT_WIDTH = "ornament_width"
+        const val KEY_ORNAMENT_DENSITY = "ornament_density"
+        const val KEY_ORNAMENT_PHASE = "ornament_phase"
+        const val KEY_ORNAMENT_TWIST = "ornament_twist"
+        const val KEY_ORNAMENT_SEED = "ornament_seed"
+        const val KEY_SURFACE_CONTOUR_AMOUNT = "surface_contour_amount"
+        const val KEY_SURFACE_CONTOUR_SOURCE = "surface_contour_source"
+        const val KEY_SURFACE_CONTOUR_SPACING = "surface_contour_spacing"
+        const val KEY_SURFACE_CONTOUR_WIDTH = "surface_contour_width"
+        const val KEY_SURFACE_CONTOUR_PHASE = "surface_contour_phase"
+        const val KEY_SURFACE_CONTOUR_L = "surface_contour_l"
+        const val KEY_SURFACE_CONTOUR_C = "surface_contour_c"
+        const val KEY_SURFACE_CONTOUR_H = "surface_contour_h"
+        const val KEY_SOURCE_MARK_A_L = "source_mark_a_l"
+        const val KEY_SOURCE_MARK_A_C = "source_mark_a_c"
+        const val KEY_SOURCE_MARK_A_H = "source_mark_a_h"
+        const val KEY_SOURCE_MARK_B_L = "source_mark_b_l"
+        const val KEY_SOURCE_MARK_B_C = "source_mark_b_c"
+        const val KEY_SOURCE_MARK_B_H = "source_mark_b_h"
+        const val KEY_SOURCE_MARK_C_L = "source_mark_c_l"
+        const val KEY_SOURCE_MARK_C_C = "source_mark_c_c"
+        const val KEY_SOURCE_MARK_C_H = "source_mark_c_h"
 
         // Hyperbolic projection. PROJECTION is a ListPreference ("0"=E²,
         // "1"=Poincaré disk); HYP_SCALE / HYP_BOOST_{X,Y} are 0..100
@@ -185,12 +273,11 @@ internal class Settings(
         const val KEY_HYP_BORDER_SUBDIV  = "hyp_border_subdiv"
         const val KEY_HYP_FILL_SUBDIV    = "hyp_fill_subdiv"
 
-        // Bumped by PresetStore.applyToPrefs whenever a preset writes a
-        // fresh modulation_graph.json, and by the node editor when it
-        // saves an edited graph. Read-only signal — listeners observe the
-        // value change and reload the graph from disk. Decoupling "static
-        // settings drift" from "graph file changed" means slider drags
-        // don't trip a full graph teardown.
+        // The modulation graph is persisted inside the same DataStore profile
+        // as its settings. GRAPH_REVISION is the publish signal: listeners
+        // reload the graph only when this value changes, so ordinary slider
+        // drags do not trip a full graph teardown.
+        const val KEY_GRAPH_JSON = "_graph_json"
         const val KEY_GRAPH_REVISION = "_graph_revision"
 
         // Set true by AudioPlaybackService while a track is playing, false
@@ -202,7 +289,7 @@ internal class Settings(
 
         // Must equal kMaxColors in cpp/color/color.h — the native float
         // array layout (jni_bridge kFloatCount) depends on the match.
-        const val CUSTOM_SLOTS  = 16
+        const val CUSTOM_SLOTS  = 18
 
         fun customSlotKey(slot: Int, channel: Char): String = "custom_${slot}_${channel}"
 
@@ -223,80 +310,107 @@ internal class Settings(
             0.40f, 0.08f, 270.0f,
             0.85f, 0.06f, 100.0f,
             0.30f, 0.05f, 320.0f,
+            0.70f, 0.15f, 160.0f,
+            0.70f, 0.15f, 240.0f,
         )
 
-        // All pref reads go through safeStr / safeInt / safeBool /
-        // safeFloat so a SharedPreferences entry stored under one type
-        // but later read as another (a real possibility if a build
-        // ever changes the type of a key in place) returns the default
-        // instead of throwing ClassCastException at launch.
-        private fun safeStr(prefs: SharedPreferences, key: String, default: String): String =
-            try { prefs.getString(key, default) ?: default } catch (_: ClassCastException) { default }
-        private fun safeInt(prefs: SharedPreferences, key: String, default: Int): Int =
-            try { prefs.getInt(key, default) } catch (_: ClassCastException) { default }
-        private fun safeBool(prefs: SharedPreferences, key: String, default: Boolean): Boolean =
-            try { prefs.getBoolean(key, default) } catch (_: ClassCastException) { default }
-        private fun safeFloat(prefs: SharedPreferences, key: String, default: Float): Float =
-            try { prefs.getFloat(key, default) } catch (_: ClassCastException) { default }
-
-        fun load(prefs: SharedPreferences): Settings {
+        fun load(snapshot: SettingsSnapshot): Settings {
             val custom = FloatArray(3 * CUSTOM_SLOTS)
             for (i in 0 until CUSTOM_SLOTS) {
                 val defL = defaultCustomOklch[3 * i + 0]
                 val defC = defaultCustomOklch[3 * i + 1]
                 val defH = defaultCustomOklch[3 * i + 2]
-                custom[3 * i + 0] = safeInt(prefs, customSlotKey(i, 'L'), (defL * 100f).toInt()) / 100f
-                custom[3 * i + 1] = safeInt(prefs, customSlotKey(i, 'C'), (defC * 100f).toInt()) / 100f
-                custom[3 * i + 2] = safeInt(prefs, customSlotKey(i, 'H'), defH.toInt()).toFloat()
+                custom[3 * i + 0] = snapshot.int(customSlotKey(i, 'L'), (defL * 100f).toInt()) / 100f
+                custom[3 * i + 1] = snapshot.int(customSlotKey(i, 'C'), (defC * 100f).toInt()) / 100f
+                custom[3 * i + 2] = snapshot.int(customSlotKey(i, 'H'), defH.toInt()).toFloat()
             }
             return Settings(
-                family       = safeStr(prefs, KEY_FAMILY, "0").toIntOrNull() ?: 0,
-                seedIdx      = safeStr(prefs, KEY_SEED, "0").toIntOrNull() ?: 0,
-                generation   = safeInt(prefs, KEY_GENERATION, 4),
-                preset       = safeStr(prefs, KEY_PRESET, "4").toIntOrNull() ?: 4,
-                colorCount   = safeInt(prefs, KEY_COLOR_COUNT, 2),
-                colorMode    = safeStr(prefs, KEY_COLOR_MODE, "0").toIntOrNull() ?: 0,
-                borderOn     = safeBool(prefs, KEY_BORDER_ON, true),
-                borderWidth  = safeInt(prefs, KEY_BORDER_W, 80) / 100f,
-                borderL      = safeInt(prefs, KEY_BORDER_L, 95) / 100f,
-                borderC      = safeInt(prefs, KEY_BORDER_C,  0) / 100f,
-                borderH      = safeInt(prefs, KEY_BORDER_H,  0).toFloat(),
-                borderAlpha  = safeInt(prefs, KEY_BORDER_A, 35) / 100f,
-                bgMode       = safeStr(prefs, KEY_BG_MODE, "0").toIntOrNull() ?: 0,
-                bgL          = safeInt(prefs, KEY_BG_L,   4) / 100f,
-                bgC          = safeInt(prefs, KEY_BG_C,   0) / 100f,
-                bgH          = safeInt(prefs, KEY_BG_H, 280).toFloat(),
-                rippleAmount = safeInt(prefs, KEY_RIPPLE_AMOUNT, 30) / 100f,
-                rippleMode   = safeStr(prefs, KEY_RIPPLE_MODE, "0").toIntOrNull() ?: 0,
-                rippleSpeed  = safeInt(prefs, KEY_RIPPLE_SPEED, 100) / 100f,
-                rippleKind   = safeStr(prefs, KEY_RIPPLE_KIND, "0").toIntOrNull() ?: 0,
-                panMode      = safeStr(prefs, KEY_PAN_MODE, "0").toIntOrNull() ?: 0,
-                zoom         = safeFloat(prefs, KEY_ZOOM, 1.0f),
-                rotation     = safeFloat(prefs, KEY_ROTATION, 0.0f),
-                panX         = safeFloat(prefs, KEY_PAN_X, 0.0f),
-                panY         = safeFloat(prefs, KEY_PAN_Y, 0.0f),
-                brightness   = safeInt(prefs, KEY_BRIGHTNESS, 100) / 100f,
-                depthAmount  = safeInt(prefs, KEY_DEPTH_AMOUNT, 30) / 100f,
-                matRoughness   = safeInt(prefs, KEY_MAT_ROUGHNESS, 50) / 100f,
-                matMetalness   = safeInt(prefs, KEY_MAT_METALNESS, 40) / 100f,
-                matSheen       = safeInt(prefs, KEY_MAT_SHEEN, 35) / 100f,
-                matClearcoat   = safeInt(prefs, KEY_MAT_CLEARCOAT, 45) / 100f,
-                matAnisotropy  = safeInt(prefs, KEY_MAT_ANISOTROPY, 40) / 100f,
-                matIridescence = safeInt(prefs, KEY_MAT_IRIDESCENCE, 45) / 100f,
-                matEmissive    = safeInt(prefs, KEY_MAT_EMISSIVE, 60) / 100f,
-                matRelief      = safeInt(prefs, KEY_MAT_RELIEF, 105) / 100f,
-                lightAngle     = safeInt(prefs, KEY_LIGHT_ANGLE, 230).toFloat(),
-                lightElevation = safeInt(prefs, KEY_LIGHT_ELEVATION, 55).toFloat(),
-                lightIntensity = safeInt(prefs, KEY_LIGHT_INTENSITY, 100) / 100f,
-                lightWarmth    = safeInt(prefs, KEY_LIGHT_WARMTH, 50) / 100f,
-                lightAmbient   = safeInt(prefs, KEY_LIGHT_AMBIENT, 22) / 100f,
-                matSheenColorR  = safeInt(prefs, KEY_MAT_SHEEN_COLOR_R, 100) / 100f,
-                matSheenColorG  = safeInt(prefs, KEY_MAT_SHEEN_COLOR_G, 97)  / 100f,
-                matSheenColorB  = safeInt(prefs, KEY_MAT_SHEEN_COLOR_B, 92)  / 100f,
-                matIridThickMin = safeInt(prefs, KEY_MAT_IRID_THICK_MIN, 280).toFloat(),
-                matIridThickMax = safeInt(prefs, KEY_MAT_IRID_THICK_MAX, 560).toFloat(),
-                matRoughMod = safeInt(prefs, KEY_MAT_ROUGH_MOD, 0) / 100f,
-                matMetalMod = safeInt(prefs, KEY_MAT_METAL_MOD, 0) / 100f,
+                family       = snapshot.string(KEY_FAMILY, "0").toIntOrNull() ?: 0,
+                seedIdx      = snapshot.string(KEY_SEED, "0").toIntOrNull() ?: 0,
+                generation   = snapshot.int(KEY_GENERATION, 4),
+                preset       = snapshot.string(KEY_PRESET, "4").toIntOrNull() ?: 4,
+                colorCount   = snapshot.int(KEY_COLOR_COUNT, 2).coerceIn(2, 18),
+                colorMode    = (snapshot.string(KEY_COLOR_MODE, "0").toIntOrNull() ?: 0).coerceIn(0, 3),
+                colorSpread  = snapshot.int(KEY_COLOR_SPREAD, 100).coerceIn(0, 100),
+                colorSpectral = snapshot.int(KEY_COLOR_SPECTRAL, 0).coerceIn(0, 100),
+                borderOn     = snapshot.boolean(KEY_BORDER_ON, true),
+                borderWidth  = snapshot.int(KEY_BORDER_W, 80) / 100f,
+                borderJoin   = (snapshot.string(KEY_BORDER_JOIN, "0").toIntOrNull() ?: 0).coerceIn(0, 2),
+                borderFill   = snapshot.int(KEY_BORDER_FILL, 0) / 100f,
+                borderPoint  = snapshot.int(KEY_BORDER_POINT, 0) / 100f,
+                borderGap    = snapshot.int(KEY_BORDER_GAP, 0) / 100f,
+                borderL      = snapshot.int(KEY_BORDER_L, 95) / 100f,
+                borderC      = snapshot.int(KEY_BORDER_C,  0) / 100f,
+                borderH      = snapshot.int(KEY_BORDER_H,  0).toFloat(),
+                borderAlpha  = snapshot.int(KEY_BORDER_A, 35) / 100f,
+                bgMode       = snapshot.string(KEY_BG_MODE, "0").toIntOrNull() ?: 0,
+                bgL          = snapshot.int(KEY_BG_L,   4) / 100f,
+                bgC          = snapshot.int(KEY_BG_C,   0) / 100f,
+                bgH          = snapshot.int(KEY_BG_H, 280).toFloat(),
+                rippleAmount = snapshot.int(KEY_RIPPLE_AMOUNT, 30) / 100f,
+                rippleMode   = snapshot.string(KEY_RIPPLE_MODE, "0").toIntOrNull() ?: 0,
+                rippleSpeed  = snapshot.int(KEY_RIPPLE_SPEED, 100) / 100f,
+                rippleKind   = snapshot.string(KEY_RIPPLE_KIND, "0").toIntOrNull() ?: 0,
+                panMode      = snapshot.string(KEY_PAN_MODE, "0").toIntOrNull() ?: 0,
+                zoom         = snapshot.float(KEY_ZOOM, 1.0f),
+                rotation     = snapshot.float(KEY_ROTATION, 0.0f),
+                panX         = snapshot.float(KEY_PAN_X, 0.0f),
+                panY         = snapshot.float(KEY_PAN_Y, 0.0f),
+                brightness   = snapshot.int(KEY_BRIGHTNESS, 100) / 100f,
+                depthAmount  = snapshot.int(KEY_DEPTH_AMOUNT, 30) / 100f,
+                matRoughness   = snapshot.int(KEY_MAT_ROUGHNESS, 50) / 100f,
+                matMetalness   = snapshot.int(KEY_MAT_METALNESS, 40) / 100f,
+                matSheen       = snapshot.int(KEY_MAT_SHEEN, 35) / 100f,
+                matClearcoat   = snapshot.int(KEY_MAT_CLEARCOAT, 45) / 100f,
+                matAnisotropy  = snapshot.int(KEY_MAT_ANISOTROPY, 40) / 100f,
+                matIridescence = snapshot.int(KEY_MAT_IRIDESCENCE, 45) / 100f,
+                matEmissive    = snapshot.int(KEY_MAT_EMISSIVE, 60) / 100f,
+                matRelief      = snapshot.int(KEY_MAT_RELIEF, 105) / 100f,
+                lightAngle     = snapshot.int(KEY_LIGHT_ANGLE, 230).toFloat(),
+                lightElevation = snapshot.int(KEY_LIGHT_ELEVATION, 55).toFloat(),
+                lightIntensity = snapshot.int(KEY_LIGHT_INTENSITY, 100) / 100f,
+                lightWarmth    = snapshot.int(KEY_LIGHT_WARMTH, 50) / 100f,
+                lightAmbient   = snapshot.int(KEY_LIGHT_AMBIENT, 22) / 100f,
+                lightChoreoAmount = snapshot.int(KEY_LIGHT_CHOREO_AMOUNT, 18).coerceIn(0, 100) / 100f,
+                lightChoreoSpeed = snapshot.int(KEY_LIGHT_CHOREO_SPEED, 100).coerceIn(0, 200) / 100f,
+                lightChoreoSource = (snapshot.string(KEY_LIGHT_CHOREO_SOURCE, "3").toIntOrNull() ?: 3).coerceIn(0, 3).toFloat(),
+                clockWaveform = (snapshot.string(KEY_CLOCK_WAVEFORM, "0").toIntOrNull() ?: 0).coerceIn(0, 3),
+                matSheenColorR  = snapshot.int(KEY_MAT_SHEEN_COLOR_R, 100) / 100f,
+                matSheenColorG  = snapshot.int(KEY_MAT_SHEEN_COLOR_G, 97)  / 100f,
+                matSheenColorB  = snapshot.int(KEY_MAT_SHEEN_COLOR_B, 92)  / 100f,
+                matIridThickMin = snapshot.int(KEY_MAT_IRID_THICK_MIN, 280).toFloat(),
+                matIridThickMax = snapshot.int(KEY_MAT_IRID_THICK_MAX, 560).toFloat(),
+                matRoughMod = snapshot.int(KEY_MAT_ROUGH_MOD, 0) / 100f,
+                matMetalMod = snapshot.int(KEY_MAT_METAL_MOD, 0) / 100f,
+                ornamentStyle = snapshot.int(KEY_ORNAMENT_STYLE, 0).coerceIn(0, 4).toFloat(),
+                ornamentAmount = snapshot.int(KEY_ORNAMENT_AMOUNT, 0).coerceIn(0, 100) / 100f,
+                ornamentWidth = snapshot.int(KEY_ORNAMENT_WIDTH, 45).coerceIn(0, 100) / 100f,
+                ornamentDensity = snapshot.int(KEY_ORNAMENT_DENSITY, 100).coerceIn(0, 100) / 100f,
+                ornamentPhase = snapshot.int(KEY_ORNAMENT_PHASE, 0).coerceIn(0, 100) / 100f,
+                ornamentTwist = snapshot.int(KEY_ORNAMENT_TWIST, 50).coerceIn(0, 100) / 100f,
+                ornamentSeed = snapshot.int(KEY_ORNAMENT_SEED, 0).coerceIn(0, 999).toFloat(),
+                surfaceContourAmount = snapshot.int(KEY_SURFACE_CONTOUR_AMOUNT, 0).coerceIn(0, 100) / 100f,
+                surfaceContourSource = (snapshot.string(KEY_SURFACE_CONTOUR_SOURCE, "0").toIntOrNull() ?: 0).coerceIn(0, 7).toFloat(),
+                surfaceContourSpacing = snapshot.int(KEY_SURFACE_CONTOUR_SPACING, 16).coerceIn(1, 64).toFloat(),
+                surfaceContourWidth = snapshot.int(KEY_SURFACE_CONTOUR_WIDTH, 18).coerceIn(1, 50) / 100f,
+                surfaceContourPhase = snapshot.int(KEY_SURFACE_CONTOUR_PHASE, 0).coerceIn(0, 100) / 100f,
+                surfaceContourL = snapshot.int(KEY_SURFACE_CONTOUR_L, 92).coerceIn(0, 100) / 100f,
+                surfaceContourC = snapshot.int(KEY_SURFACE_CONTOUR_C, 6).coerceIn(0, 40) / 100f,
+                surfaceContourH = snapshot.int(KEY_SURFACE_CONTOUR_H, 85).coerceIn(0, 360).toFloat(),
+                sourceMarkAL = snapshot.int(KEY_SOURCE_MARK_A_L, 62).coerceIn(0, 100) / 100f,
+                sourceMarkAC = snapshot.int(KEY_SOURCE_MARK_A_C, 28).coerceIn(0, 40) / 100f,
+                sourceMarkAH = snapshot.int(KEY_SOURCE_MARK_A_H, 30).coerceIn(0, 360).toFloat(),
+                sourceMarkBL = snapshot.int(KEY_SOURCE_MARK_B_L, 58).coerceIn(0, 100) / 100f,
+                sourceMarkBC = snapshot.int(KEY_SOURCE_MARK_B_C, 24).coerceIn(0, 40) / 100f,
+                sourceMarkBH = snapshot.int(KEY_SOURCE_MARK_B_H, 265).coerceIn(0, 360).toFloat(),
+                sourceMarkCL = snapshot.int(KEY_SOURCE_MARK_C_L, 72).coerceIn(0, 100) / 100f,
+                sourceMarkCC = snapshot.int(KEY_SOURCE_MARK_C_C, 4).coerceIn(0, 40) / 100f,
+                sourceMarkCH = snapshot.int(KEY_SOURCE_MARK_C_H, 85).coerceIn(0, 360).toFloat(),
+                edgeProfileWidth = snapshot.int(KEY_EDGE_PROFILE_WIDTH, 0).coerceIn(0, 100) / 100f,
+                edgeProfileGlow = snapshot.int(KEY_EDGE_PROFILE_GLOW, 0).coerceIn(0, 100) / 100f,
+                edgeProfileL = snapshot.int(KEY_EDGE_PROFILE_L, 100).coerceIn(0, 100) / 100f,
+                edgeProfileC = snapshot.int(KEY_EDGE_PROFILE_C, 0).coerceIn(0, 37) / 100f,
+                edgeProfileH = snapshot.int(KEY_EDGE_PROFILE_H, 0).coerceIn(0, 359).toFloat(),
                 // Projection mode + disk-mode params. PROJECTION is a
                 // "0"/"1" ListPreference. Scale slider 0..100 maps
                 // LINEAR to 0.05..3.0 — the lower bound is 0.05 (not 0)
@@ -306,26 +420,37 @@ internal class Settings(
                 // slider=1. Default 50 → scale 1.525. Boost X / Y
                 // sliders 0..100 → -0.9..+0.9 in B² (50 → 0). Border /
                 // fill subdivisions 1..32 / 1..8.
-                projection    = safeStr(prefs, KEY_PROJECTION, "0").toIntOrNull() ?: 0,
-                hypScale      = 0.05f + safeInt(prefs, KEY_HYP_SCALE, 50) / 100f * 2.95f,
-                hypBoostX       = (safeInt(prefs, KEY_HYP_BOOST_X, 50) - 50) / 50f * 0.9f,
-                hypBoostY       = (safeInt(prefs, KEY_HYP_BOOST_Y, 50) - 50) / 50f * 0.9f,
-                hypBorderSubdiv = safeInt(prefs, KEY_HYP_BORDER_SUBDIV, 16).coerceIn(1, 32),
-                hypFillSubdiv   = safeInt(prefs, KEY_HYP_FILL_SUBDIV, 4).coerceIn(1, 8),
+                projection    = snapshot.string(KEY_PROJECTION, "0").toIntOrNull() ?: 0,
+                hypScale      = 0.05f + snapshot.int(KEY_HYP_SCALE, 50) / 100f * 2.95f,
+                hypBoostX       = (snapshot.int(KEY_HYP_BOOST_X, 50) - 50) / 50f * 0.9f,
+                hypBoostY       = (snapshot.int(KEY_HYP_BOOST_Y, 50) - 50) / 50f * 0.9f,
+                hypBorderSubdiv = snapshot.int(KEY_HYP_BORDER_SUBDIV, 16).coerceIn(1, 32),
+                hypFillSubdiv   = snapshot.int(KEY_HYP_FILL_SUBDIV, 4).coerceIn(1, 8),
                 customOklch  = custom,
             )
         }
 
-        fun saveView(
-            prefs: SharedPreferences,
+        suspend fun saveView(
+            store: SettingsStore,
             zoom: Float, rotation: Float, panX: Float, panY: Float,
         ) {
-            prefs.edit {
-                putFloat(KEY_ZOOM, zoom)
-                putFloat(KEY_ROTATION, rotation)
-                putFloat(KEY_PAN_X, panX)
-                putFloat(KEY_PAN_Y, panY)
+            store.updateAwait {
+                this[KEY_ZOOM] = StoredSetting.FloatValue(zoom)
+                this[KEY_ROTATION] = StoredSetting.FloatValue(rotation)
+                this[KEY_PAN_X] = StoredSetting.FloatValue(panX)
+                this[KEY_PAN_Y] = StoredSetting.FloatValue(panY)
             }
         }
+
+        fun saveViewAsync(
+            store: SettingsStore,
+            zoom: Float, rotation: Float, panX: Float, panY: Float,
+        ): Deferred<Unit> =
+            store.updateAsync {
+                this[KEY_ZOOM] = StoredSetting.FloatValue(zoom)
+                this[KEY_ROTATION] = StoredSetting.FloatValue(rotation)
+                this[KEY_PAN_X] = StoredSetting.FloatValue(panX)
+                this[KEY_PAN_Y] = StoredSetting.FloatValue(panY)
+            }
     }
 }

@@ -1,28 +1,26 @@
 // =============================================================================
 // Substitution / tiling verifier
 // =============================================================================
-// Rigorous, reproducible regression check for the renderer's tiling families.
-// It links the production tiling core (tiling/penrose.cpp) and certifies, for
-// every family, the two properties that *define* a correct tiling — with no
-// reference to any figure, screenshot, or rendered image:
+// Reproducible regression check for the renderer's tiling families. It links
+// the production tiling core (tiling/penrose.cpp) and checks generated patches
+// without consulting any figure, screenshot, or rendered image:
 //
 //   1. Area conservation (substitution families). A substitution replaces a
 //      tile by smaller tiles that must exactly repartition it, so the total
-//      area is invariant under deflation. Checked exactly across every
-//      generation 0..maxGen.
+//      area is invariant under deflation. Checked across every generation
+//      0..maxGen for families whose generator preserves a seed region.
 //
-//   2. Gap- and overlap-free closure. Monte-Carlo: sample points and count how
-//      many tiles contain each. For a substitution family every point of the
-//      seed region must be covered exactly as many times at the deepest
-//      generation as at generation 0 (overlap => covered twice; gap => covered
-//      zero times). For the cut-and-project families, no point may be covered
-//      twice (overlap-free; gaps are structurally impossible for a multigrid
-//      dual). Plus a degeneracy screen (no zero-area or sub-triangle tiles).
+//   2. Coverage regression. Monte-Carlo: sample points and count how many tiles
+//      contain each. Seed-region families compare deepest-generation coverage
+//      to generation 0. Patch families that do not preserve one fixed seed
+//      region run an overlap screen over the generated patch.
 //
-// Area conservation + overlap-free + seed-region containment is a complete
-// proof that the tiles partition the region: this is the same closure
-// argument used to derive the Danzer substitution, applied as an automated
-// gate. Build and run (from the repository root):
+//   3. Finite chamber topology. Every patch is converted to a Delaney-style
+//      finite D-set over chambers. The gate checks involutions, op0/op2
+//      commutation, overfull edges, face-orbit count, and interior vertex angle
+//      sums, and reports canonical local vertex-star classes.
+//
+// Build and run (from the repository root):
 //
 //   g++ -std=c++20 -O2 -I android/app/src/main/cpp
 //       tools/verify_tilings.cpp android/app/src/main/cpp/tiling/penrose.cpp
@@ -32,8 +30,10 @@
 // =============================================================================
 
 #include "tiling/penrose.h"
+#include "tiling_dsymbols.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -52,6 +52,66 @@ double tileArea(const Tile& t) {
            - static_cast<double>(t.x[j]) * t.y[i];
     }
     return std::fabs(a) * 0.5;
+}
+
+double orient2(double ax, double ay, double bx, double by, double cx, double cy) {
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+}
+
+bool pointOnSegment(double ax, double ay, double bx, double by, double px, double py) {
+    constexpr double eps = 1e-8;
+    if (std::fabs(orient2(ax, ay, bx, by, px, py)) > eps) return false;
+    return px >= std::min(ax, bx) - eps && px <= std::max(ax, bx) + eps
+        && py >= std::min(ay, by) - eps && py <= std::max(ay, by) + eps;
+}
+
+bool segmentsIntersect(
+    double ax,
+    double ay,
+    double bx,
+    double by,
+    double cx,
+    double cy,
+    double dx,
+    double dy
+) {
+    constexpr double eps = 1e-8;
+    const double o1 = orient2(ax, ay, bx, by, cx, cy);
+    const double o2 = orient2(ax, ay, bx, by, dx, dy);
+    const double o3 = orient2(cx, cy, dx, dy, ax, ay);
+    const double o4 = orient2(cx, cy, dx, dy, bx, by);
+    const bool cdStraddlesAb = (o1 > eps && o2 < -eps) || (o1 < -eps && o2 > eps);
+    const bool abStraddlesCd = (o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps);
+    if (cdStraddlesAb && abStraddlesCd) return true;
+    return pointOnSegment(ax, ay, bx, by, cx, cy)
+        || pointOnSegment(ax, ay, bx, by, dx, dy)
+        || pointOnSegment(cx, cy, dx, dy, ax, ay)
+        || pointOnSegment(cx, cy, dx, dy, bx, by);
+}
+
+bool simplePolygonOk(const Tile& t) {
+    constexpr double eps = 1e-8;
+    if (t.vcount < 3) return false;
+    if (tileArea(t) <= eps) return false;
+    for (int i = 0; i < t.vcount; ++i) {
+        if (!std::isfinite(t.x[i]) || !std::isfinite(t.y[i])) return false;
+        const int j = (i + 1) % t.vcount;
+        const double dx = static_cast<double>(t.x[i]) - t.x[j];
+        const double dy = static_cast<double>(t.y[i]) - t.y[j];
+        if (dx * dx + dy * dy <= eps * eps) return false;
+    }
+    for (int i = 0; i < t.vcount; ++i) {
+        const int i1 = (i + 1) % t.vcount;
+        for (int j = i + 1; j < t.vcount; ++j) {
+            const int j1 = (j + 1) % t.vcount;
+            if (i == j || i1 == j || j1 == i) continue;
+            if (i == 0 && j1 == 0) continue;
+            if (segmentsIntersect(t.x[i], t.y[i], t.x[i1], t.y[i1], t.x[j], t.y[j], t.x[j1], t.y[j1])) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 // Even-odd point-in-polygon, valid for the convex and the concave (P1 star /
@@ -124,30 +184,129 @@ struct Grid {
     }
 };
 
+std::array<double, 3> sortedSides(const Tile& t) {
+    std::array<double, 3> sides{};
+    for (int i = 0; i < 3; ++i) {
+        const int j = (i + 1) % 3;
+        const double dx = static_cast<double>(t.x[i]) - t.x[j];
+        const double dy = static_cast<double>(t.y[i]) - t.y[j];
+        sides[i] = std::hypot(dx, dy);
+    }
+    std::sort(sides.begin(), sides.end());
+    return sides;
+}
+
+bool equithirdsShapeOk(const Tile& t) {
+    if (t.vcount != 3) return false;
+    const auto s = sortedSides(t);
+    if (s[0] <= 1e-12) return false;
+    // Deep Equithirds generations are stored as float32 vertices; by gen10 the
+    // smallest sides are ~0.004, so exact sqrt(3) ratios carry a few ULPs of
+    // accumulated roundoff. Keep this tight enough to catch wrong prototiles
+    // while not failing valid source-rule subdivisions.
+    constexpr double kShapeTol = 5e-5;
+    if (t.type == 0) {
+        return std::fabs(s[1] / s[0] - 1.0) < kShapeTol
+            && std::fabs(s[2] / s[0] - 1.0) < kShapeTol;
+    }
+    if (t.type == 1) {
+        return std::fabs(s[1] / s[0] - 1.0) < kShapeTol
+            && std::fabs(s[2] / s[0] - std::sqrt(3.0)) < kShapeTol;
+    }
+    return false;
+}
+
+bool d4SquareOk(const Tile& t) {
+    if (t.vcount != 4 || t.type > 7) return false;
+    std::array<double, 4> side = {};
+    std::array<double, 4> dx = {};
+    std::array<double, 4> dy = {};
+    for (int i = 0; i < 4; ++i) {
+        const int j = (i + 1) % 4;
+        dx[i] = static_cast<double>(t.x[j]) - t.x[i];
+        dy[i] = static_cast<double>(t.y[j]) - t.y[i];
+        side[i] = std::hypot(dx[i], dy[i]);
+    }
+    const double minSide = *std::min_element(side.begin(), side.end());
+    const double maxSide = *std::max_element(side.begin(), side.end());
+    if (minSide <= 1e-12) return false;
+    if (std::fabs(maxSide / minSide - 1.0) > 1e-4) return false;
+    for (int i = 0; i < 4; ++i) {
+        const int j = (i + 1) % 4;
+        const double dot = dx[i] * dx[j] + dy[i] * dy[j];
+        if (std::fabs(dot) / (side[i] * side[j]) > 1e-4) return false;
+    }
+    return true;
+}
+
+int expectedExactTileCount(Family fam, int seed, int generation) {
+    if (fam == Family::Hat) {
+        constexpr std::array<std::array<int, 5>, 4> counts = {{
+            {{25, 169, 1156, 7921, 54289}},
+            {{4, 25, 169, 1156, 7921}},
+            {{14, 96, 658, 4510, 30912}},
+            {{16, 112, 770, 5280, 36192}},
+        }};
+        if (seed < 0 || seed >= static_cast<int>(counts.size())) return -1;
+        if (generation < 0 || generation >= static_cast<int>(counts[0].size())) return -1;
+        return counts[seed][generation];
+    }
+    if (fam == Family::Spectre) {
+        constexpr std::array<int, 4> gamma = {{8, 62, 488, 3842}};
+        constexpr std::array<int, 4> other = {{9, 71, 559, 4401}};
+        if (seed < 0 || seed > 8) return -1;
+        if (generation < 0 || generation >= static_cast<int>(gamma.size())) return -1;
+        return seed == 0 ? gamma[generation] : other[generation];
+    }
+    if (fam == Family::D4Substitution) {
+        if (seed < 0 || seed > 5 || generation < 0 || generation > 8) return -1;
+        int count = 1;
+        for (int g = 0; g < generation; ++g) count *= 4;
+        return count;
+    }
+    return -1;
+}
+
+bool spectreTypeHistogramOk(const std::vector<Tile>& tiles) {
+    std::array<int, 10> seen = {};
+    for (const Tile& t : tiles) {
+        if (t.type > 9) return false;
+        seen[t.type] += 1;
+    }
+    return std::all_of(seen.begin(), seen.end(), [](int count) { return count > 0; });
+}
+
 struct FamilyCase {
     Family fam;
     const char* name;
     int nseeds;
-    bool substitution;   // seed + deflation (area is conserved per generation)
+    bool areaConserved;
+    bool compareSeedCoverage;
 };
 
 } // namespace
 
 int main() {
     const FamilyCase cases[] = {
-        { Family::P3,            "P3",            4, true  },
-        { Family::P2,            "P2",            2, true  },
-        { Family::Chair,         "Chair",         3, true  },
-        { Family::Pinwheel,      "Pinwheel",      3, true  },
-        { Family::Tuebingen,     "Tuebingen",     2, true  },
-        { Family::Danzer,        "Danzer",        2, true  },
-        { Family::Dodecagonal,   "Dodecagonal",   3, false },
-        { Family::AmmannBeenker, "AmmannBeenker", 3, false },
-        { Family::Heptagonal,    "Heptagonal",    3, false },
-        { Family::Binary,        "Binary",        2, false },
-        { Family::P1,            "P1",            1, false },
-        { Family::Hat,           "Hat",           4, false },
-        { Family::Spectre,       "Spectre",       9, false },
+        { Family::P3,            "P3",            4, true,  true  },
+        { Family::P2,            "P2",            2, true,  true  },
+        { Family::Chair,         "Chair",         3, true,  true  },
+        { Family::Pinwheel,      "Pinwheel",      3, true,  true  },
+        { Family::Tuebingen,     "Tuebingen",     2, true,  true  },
+        { Family::Equithirds,    "Equithirds",    2, true,  true  },
+        { Family::CromwellKRT,   "CromwellKRT",   4, false, false },
+        { Family::GailiunasSpiral, "GailiunasSpiral", 52, false, false },
+        { Family::Cairo,         "Cairo",          1, false, false },
+        { Family::SocolarTaylor, "SocolarTaylor",  2, true,  true  },
+        { Family::Danzer,        "Danzer",        2, true,  true  },
+        { Family::Dodecagonal,   "Dodecagonal",   3, false, false },
+        { Family::AmmannBeenker, "AmmannBeenker", 3, false, false },
+        { Family::Heptagonal,    "Heptagonal",    3, false, false },
+        { Family::Binary,        "Binary",        2, false, false },
+        { Family::P1,            "P1",            1, false, false },
+        { Family::Hat,           "Hat",           4, false, false },
+        { Family::Spectre,       "Spectre",       9, false, false },
+        { Family::D4Substitution, "D4Substitution", 6, true, true  },
     };
 
     constexpr int kSamples = 20000;
@@ -167,8 +326,22 @@ int main() {
             double a0 = 0.0;
             for (const Tile& t : g0) a0 += tileArea(t);
 
+            // ---- 0. exact substitution/layer counts -----------------------
+            if (fc.fam == Family::Hat || fc.fam == Family::Spectre || fc.fam == Family::D4Substitution) {
+                for (int g = 0; g <= maxGen; ++g) {
+                    const int expected = expectedExactTileCount(fc.fam, seed, g);
+                    const std::vector<Tile> tg = generate(fc.fam, seed, g);
+                    if (expected < 0 || static_cast<int>(tg.size()) != expected) {
+                        std::printf("  FAIL %s seed %d: generation/layer %d tile count %zu "
+                                    "!= expected %d\n",
+                                    fc.name, seed, g, tg.size(), expected);
+                        ok = false;
+                    }
+                }
+            }
+
             // ---- 1. area conservation across generations -------------------
-            if (fc.substitution) {
+            if (fc.areaConserved) {
                 for (int g = 1; g <= maxGen; ++g) {
                     const std::vector<Tile> tg = generate(fc.fam, seed, g);
                     double a = 0.0;
@@ -185,17 +358,71 @@ int main() {
             // ---- 2. closure at the deepest generation ----------------------
             const std::vector<Tile> gN = generate(fc.fam, seed, maxGen);
             int degen = 0;
+            int nonSimple = 0;
+            int badShape = 0;
             for (const Tile& t : gN)
                 if (t.vcount < 3 || tileArea(t) < 1e-14) ++degen;
+            for (const Tile& t : gN)
+                if (!simplePolygonOk(t)) ++nonSimple;
+            if (fc.fam == Family::Equithirds) {
+                for (const Tile& t : gN)
+                    if (!equithirdsShapeOk(t)) ++badShape;
+            }
+            if (fc.fam == Family::CromwellKRT) {
+                for (const Tile& t : gN)
+                    if (t.vcount != 4 || t.type > 2) ++badShape;
+            }
+            if (fc.fam == Family::Hat) {
+                for (const Tile& t : gN)
+                    if (t.vcount != 13 || t.type > 4) ++badShape;
+            }
+            if (fc.fam == Family::Spectre) {
+                for (const Tile& t : gN)
+                    if (t.vcount != 14 || t.type > 9) ++badShape;
+                if (!spectreTypeHistogramOk(gN)) ++badShape;
+            }
+            if (fc.fam == Family::D4Substitution) {
+                for (const Tile& t : gN)
+                    if (!d4SquareOk(t)) ++badShape;
+            }
             if (degen) {
                 std::printf("  FAIL %s seed %d: %d degenerate tiles\n",
                             fc.name, seed, degen);
                 ok = false;
             }
+            if (nonSimple) {
+                std::printf("  FAIL %s seed %d: %d non-simple polygon tiles\n",
+                            fc.name, seed, nonSimple);
+                ok = false;
+            }
+            if (badShape) {
+                if (fc.fam == Family::CromwellKRT) {
+                    std::printf("  FAIL %s seed %d: %d tiles fail KRT "
+                                "quadrilateral/type checks\n",
+                                fc.name, seed, badShape);
+                } else if (fc.fam == Family::Spectre) {
+                    std::printf("  FAIL %s seed %d: %d tiles fail Spectre "
+                                "14-anchor/type/histogram checks\n",
+                                fc.name, seed, badShape);
+                } else if (fc.fam == Family::Hat) {
+                    std::printf("  FAIL %s seed %d: %d tiles fail Hat "
+                                "13-anchor/type checks\n",
+                                fc.name, seed, badShape);
+                } else if (fc.fam == Family::D4Substitution) {
+                    std::printf("  FAIL %s seed %d: %d tiles fail D4 "
+                                "square/type checks\n",
+                                fc.name, seed, badShape);
+                } else {
+                    std::printf("  FAIL %s seed %d: %d tiles fail equilateral / "
+                                "30-30-120 side-ratio checks\n",
+                                fc.name, seed, badShape);
+                }
+                ok = false;
+            }
 
             const Grid gridN(gN, 256);
             int covered = 0, mismatches = 0, overlaps = 0;
-            if (fc.substitution) {
+            if (fc.compareSeedCoverage) {
                 const Grid grid0(g0, 128);
                 for (int i = 0; i < kSamples; ++i) {
                     const double px = grid0.minx + unit() * grid0.span;
@@ -234,16 +461,30 @@ int main() {
                 ok = false;
             }
 
+            const analysis::FiniteDelaneyPatch dset = analysis::extractFiniteDelaneyPatch(gN);
+            const analysis::DelaneyPatchSummary& ds = dset.summary;
+            if (!ds.valid() || ds.faceOrbits != static_cast<int>(gN.size())) {
+                std::printf("  FAIL %s seed %d: invalid finite chamber graph "
+                            "(faces=%d tiles=%zu overfull=%d involutions=%d "
+                            "commutators=%d vertexAngles=%d)\n",
+                            fc.name, seed, ds.faceOrbits, gN.size(),
+                            ds.overfullEdges, ds.badInvolutions,
+                            ds.badCommutators, ds.badInteriorVertexAngles);
+                ok = false;
+            }
+
             std::printf("  %-7s %-13s seed %d: %6zu tiles @gen%-2d  "
-                        "area=%.6f  covered %5d/%d\n",
+                        "area=%.6f  covered %5d/%d  dset F/E/V/C=%d/%d/%d/%d\n",
                         ok ? "PASS" : "FAIL", fc.name, seed,
-                        gN.size(), maxGen, a0, covered, kSamples);
+                        gN.size(), maxGen, a0, covered, kSamples,
+                        ds.faceOrbits, ds.edgeOrbits,
+                        ds.interiorVertexOrbits, ds.vertexConfigurations);
             if (!ok) ++failures;
         }
     }
 
     std::printf("\n%s — %d family/seed case(s) failed\n",
-                failures ? "VERIFICATION FAILED" : "ALL TILINGS VERIFIED",
+                failures ? "TILING CHECKS FAILED" : "ALL TILING CHECKS PASSED",
                 failures);
     return failures ? 1 : 0;
 }

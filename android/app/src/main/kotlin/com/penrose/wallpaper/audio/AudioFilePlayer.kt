@@ -16,6 +16,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import java.nio.ByteBuffer
 
 /**
  * Wraps an [ExoPlayer] configured with a [FftTapProcessor] in the audio
@@ -29,10 +30,11 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 @OptIn(UnstableApi::class)
 internal class AudioFilePlayer(
     context: Context,
-    onPcm: (FloatArray, Int, Int) -> Unit,
+    onSampleRate: (Int) -> Unit,
+    onPcmBuffer: (ByteBuffer, Int, Int, Int, Int) -> Unit,
 ) {
     private val appContext = context.applicationContext
-    private val tap = FftTapProcessor(onPcm)
+    private val tap = FftTapProcessor(onSampleRate, onPcmBuffer)
 
     private val renderersFactory = object : DefaultRenderersFactory(appContext) {
         override fun buildAudioSink(

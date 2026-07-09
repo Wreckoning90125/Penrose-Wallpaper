@@ -1,4 +1,4 @@
-import { createReadStream, existsSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { spawnSync } from 'node:child_process';
@@ -64,6 +64,21 @@ function serverIdentityPlugin(): Plugin {
 }
 
 function liveGeometryPlugin(): Plugin {
+  const generatedGeometryIsFresh = (output: string): boolean => {
+    if (!existsSync(output)) return false;
+    const outputMtime = statSync(output).mtimeMs;
+    const sources = [
+      'tools/generate_web_geometry.py',
+      'tools/export_tiling_geometry.cpp',
+      'android/app/src/main/cpp/tiling/penrose.cpp',
+      'android/app/src/main/cpp/tiling/penrose.h',
+    ];
+    return sources.every(source => {
+      const fullPath = path.join(repoRoot, source);
+      return !existsSync(fullPath) || statSync(fullPath).mtimeMs <= outputMtime;
+    });
+  };
+
   const handle: Middleware = async (req, res, next) => {
     // A malformed request URL (e.g. a stray '//') must not crash the dev/preview
     // server — fall through to the next middleware instead of throwing.
@@ -85,7 +100,7 @@ function liveGeometryPlugin(): Plugin {
     const generation = match[3] ?? '';
     const outputDir = path.join(repoRoot, '.cache', 'web-live-geometry');
     const output = path.join(outputDir, `${family}-${seed}-${generation}.ptg`);
-    if (!existsSync(output)) {
+    if (!generatedGeometryIsFresh(output)) {
       await mkdir(outputDir, { recursive: true });
       const result = spawnSync(
         'python3',

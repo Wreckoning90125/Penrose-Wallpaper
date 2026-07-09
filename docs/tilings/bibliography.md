@@ -27,6 +27,8 @@ the named sets.
 - Mampusti, M.; Whittaker, M. F. (2021). "An aperiodic monotile that forces nonperiodicity through dendrites." *Bulletin of the London Mathematical Society* **52**(5):942–959. arXiv:1903.01158. doi:10.1112/blms.12375
 - Smith, David; Myers, Joseph Samuel; Kaplan, Craig S.; Goodman-Strauss, Chaim (2024). "An aperiodic monotile." *Combinatorial Theory* **4**(1). arXiv:2303.10798. doi:10.5070/C64163843 — the "Hat" einstein.
 - Smith, David; Myers, Joseph Samuel; Kaplan, Craig S.; Goodman-Strauss, Chaim (2024). "A chiral aperiodic monotile." *Combinatorial Theory* **4**(2). arXiv:2305.17743. doi:10.5070/C64264241 — the "Spectre" einstein.
+- Socolar, Joshua E. S.; Taylor, Joan M. (2011). "An aperiodic hexagonal tile." *Journal of Combinatorial Theory, Series A* **118**(8):2207–2231. doi:10.1016/j.jcta.2011.05.001 — marked hexagonal monotile, disconnected shape-only variant, and substitution hierarchy.
+- Socolar, Joshua E. S.; Taylor, Joan M. (2012). "Forcing nonperiodicity with a single tile." *The Mathematical Intelligencer* **34**(1):18–28. doi:10.1007/s00283-011-9255-y — expository account of the single-tile construction and definitions.
 - Walther, Gerd; Selter, Christoph, eds. (1999). *Mathematikdidaktik als design science: Festschrift für Erich Christian Wittmann.* Ernst Klett Grundschulverlag. ISBN 978-3-12-200060-8
 - Zerhusen, Aaron (1997). *Danzer's three dimensional tiling.* University of Kentucky.
 
@@ -36,7 +38,31 @@ Cross-references (entries held elsewhere):
 - Grünbaum & Shephard 1987, *Tilings and Patterns* — see *Periodic reference*.
 - Goodman-Strauss 1998, "Matching rules and substitution tilings" — see *Heptagonal*.
 - Goodman-Strauss 2005, hyperbolic strongly aperiodic tiles — see *Hyperbolic & tooling*.
+- Akiyama & Lee 2012, "The Computation of Overlap Coincidence in Taylor-Socolar Substitution Tiling" — see *Socolar-Taylor*.
 - Böröczky 1974, hyperbolic monotile — see *Hyperbolic & tooling*.
+
+---
+
+## Socolar-Taylor
+
+Sources for `socolar-taylor.md` — the Taylor-Socolar marked hexagonal monotile
+and the half-hexagonal substitution model rendered by the app.
+
+- Akiyama, Shigeki; Lee, Jeong-Yup (2012). "The Computation of Overlap Coincidence in Taylor-Socolar Substitution Tiling." arXiv:1212.4209 — half-hexagonal Taylor-Socolar substitution model and overlap-coincidence computation.
+
+Cross-references:
+
+- Socolar & Taylor 2011, "An aperiodic hexagonal tile" — see *Catalogue*.
+- Socolar & Taylor 2012, "Forcing nonperiodicity with a single tile" — see *Catalogue*.
+
+---
+
+## Catalogue tooling notes
+
+Sources used by local reference-indexing and future verifier work rather than
+by one renderer family doc alone.
+
+- Vereshchagin, Nikolay (2025). "Goodman-Strauss theorem revisited." arXiv:2510.02842 — simplified sufficient conditions for sofic/local-rule descriptions of substitution and hierarchical tilings.
 
 ---
 

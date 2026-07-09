@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 Guidance for AI assistants working in this repo. Keep it accurate — delete or fix
 anything that drifts.
@@ -16,9 +16,15 @@ support it.
 - `npm run web:preview` — production preview (port-owned; what the user usually runs).
 - **Gate** (run before claiming work is done): `npm run quality:local` — runs
   `js:policy · ts:policy · typecheck · atlas:verify · border:verify ·
-  tilings:verify · shaders:validate · cpp:tidy · web:build · graph:contract`.
+  tilings:verify · shaders:validate · cpp:tidy · cpp:build · web:build · graph:contract`.
   The fast inner loop for web changes is
   `npm run typecheck && npm run ts:policy && npm run js:policy && npm run web:build && npm run graph:contract`.
+- Commit gates run mechanically via **lefthook** (`lefthook.yml`; installed by
+  `npm install`). Staged files select which gates fire — native changes trigger
+  `cpp:build:tidy`, an NDK-toolchain compile of `libpenrose.so` plus the same
+  clang-tidy + static-analysis-budget ratchet CI enforces
+  (`tools/check_native_build.sh` prints NDK setup if it's missing). Never
+  commit with `--no-verify`.
 
 ## Hard rules (these bite — they caused real regressions)
 
@@ -27,11 +33,11 @@ support it.
    keywords — comments and string literals are fine, and `as const` is allowed.
    Use `Reflect.get`, generics, and typed guards instead of casts. `js:policy`
    forbids plain JS in the owned tree.
-2. **The surface material may reference ≤ 8 vertex attributes** (WebGPU
-   `maxVertexBuffers`). A 9th `attribute(...)` makes the pipeline invalid → **black
-   tiles** (regressed 5×). Pack extra per-vertex data into a spare component of an
-   existing attribute (`tileType`/`tileRing`/`tileOrient`/`tileCenter`), never a
-   new one. `graph:contract` guards this.
+2. **The surface material may use ≤ 8 vertex-buffer slots** (WebGPU
+   `maxVertexBuffers`). A 9th backing buffer makes the pipeline invalid → **black
+   tiles** (regressed 5×). Extra surface metadata must share the existing
+   interleaved tile-metadata buffer, not create another vertex buffer.
+   `graph:contract` guards this.
 3. **Post-pipeline rebuilds must free old render targets.** three's
    `RenderPipeline.dispose()` frees only its quad material; reuse the scene `pass()`
    and dispose the old node tree's RTs each rebuild, or GPU memory climbs to OOM
@@ -70,9 +76,9 @@ for the module map and dependency direction.
   smoothness is the **normal**, not frequency or poly count).
 - **Fail hard, don't mask.** On WebGPU device loss the app surfaces a fatal screen
   rather than silently recovering — keep it that way unless asked.
-- Reference implementations the user values: `.local/procedural-morphology-lab`
-  (graph-driven render), `docs/webGpuW3Spec/` (WebGPU spec), `.local/Zorin/`
-  (Block 2 surface/field-domain papers).
+- Use committed docs and public source citations for repository-facing work. Keep
+  maintainer-local research material out of committed paths and public docs unless
+  the user explicitly asks otherwise.
 
 ## Docs worth reading
 

@@ -18,7 +18,10 @@ export function renderChainConnected(nodes: readonly Node[], edges: readonly Edg
   // chain is the source path atlas->tiling->projection plus the frame chain.
   const surface = link('atlas', 'out', 'tiling', 'in')
     && link('tiling', 'out', 'projection', 'in');
-  if (!surface) return false;
+  return surface && rendererFrameConnected(nodes, edges);
+}
+
+function rendererFrameConnected(nodes: readonly Node[], edges: readonly Edge[]): boolean {
   const byId = new Map(nodes.map(node => [node.id, node]));
   const incomingFrame = (id: string): Edge | undefined =>
     edges.find(edge => edge.target === id && edge.targetHandle === 'frame');
@@ -38,7 +41,12 @@ export function renderInputsFromEdges(nodes: readonly Node[], edges: readonly Ed
   const link = (source: string, sourceHandle: string, target: string, targetHandle: string): boolean =>
     edges.some(edge => edge.source === source && edge.sourceHandle === sourceHandle
       && edge.target === target && edge.targetHandle === targetHandle);
+  const attractor = link('ifs', 'points', 'renderer', 'attractor') && rendererFrameConnected(nodes, edges);
   const lighting = link('lighting', 'out', 'renderer', 'lighting');
+  // Choreography animates only while a signal wire feeds lighting:phase (and
+  // the lighting node itself reaches the renderer).
+  const choreoPhase = lighting
+    && edges.some(edge => edge.target === 'lighting' && edge.targetHandle === FIELD_SOURCE_PHASE_HANDLE);
   const color = link('palette', 'color', 'material', 'color');
   const material = link('material', 'surface', 'renderer', 'surface');
   const projection = link('projection', 'out', 'palette', 'in');
@@ -74,5 +82,5 @@ export function renderInputsFromEdges(nodes: readonly Node[], edges: readonly Ed
   // The Border node wires its single outlet to the renderer; cut it and the edge
   // mesh stops rendering.
   const border = link('edgeProfile', 'border', 'renderer', 'border');
-  return { geometry: renderChainConnected(nodes, edges), lighting, color, material, materialColor, materialRelief, projection, fieldDisplace, fieldRelief, fieldColor, fieldUndulate, fieldPhase, border };
+  return { geometry: renderChainConnected(nodes, edges), attractor, lighting, choreoPhase, color, material, materialColor, materialRelief, projection, fieldDisplace, fieldRelief, fieldColor, fieldUndulate, fieldPhase, border };
 }

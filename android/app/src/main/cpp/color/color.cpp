@@ -2,12 +2,20 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace penrose {
 
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
+
+int typeBucketCount(const std::vector<Tile>& tiles, Family family, const ClassSpec& cs) {
+    if (family != Family::GailiunasSpiral) return cs.typeBuckets > 0 ? cs.typeBuckets : 1;
+    uint8_t maxType = 0;
+    for (const Tile& tile : tiles) maxType = std::max(maxType, tile.type);
+    return static_cast<int>(maxType) + 1;
+}
 
 inline float srgbEncode(float v) {
     if (v <= 0.0f) return 0.0f;
@@ -20,6 +28,25 @@ inline Oklch lerp(Oklch a, Oklch b, float t) {
     return { a.L + (b.L - a.L) * t,
              a.C + (b.C - a.C) * t,
              a.H + (b.H - a.H) * t };
+}
+
+Oklch spectralColor(int index, int k) {
+    const int denom = std::max(k, 1);
+    const int clampedIndex = std::clamp(index, 0, denom - 1);
+    return {
+        0.70f,
+        0.16f,
+        std::fmod(static_cast<float>(clampedIndex) * 360.0f / static_cast<float>(denom) + 30.0f, 360.0f),
+    };
+}
+
+void mixWithSpectra(PresetResult& out, int k, float spectral) {
+    const float amount = std::clamp(spectral, 0.0f, 1.0f);
+    if (amount <= 0.0f) return;
+    const int active = std::clamp(k, 1, kMaxColors);
+    for (int i = 0; i < kMaxColors; ++i) {
+        out.colors[i] = lerp(out.colors[i], spectralColor(std::min(i, active - 1), active), amount);
+    }
 }
 
 // Build evenly spaced color stops between two OKLCH endpoints and pad to
@@ -37,6 +64,36 @@ void fillEvenStops(PresetResult& out, Oklch c0, Oklch c1, int k) {
     for (int i = n; i < kMaxColors; ++i) {
         out.colors[i] = { 0.65f, 0.14f, std::fmod(static_cast<float>(i * 36 + 20), 360.0f) };
     }
+}
+
+std::vector<float> tileRingsForClassification(const std::vector<Tile>& tiles, const ClassSpec& cs) {
+    const size_t n = tiles.size();
+    std::vector<float> rings(n, 0.0f);
+    std::vector<float> cxs(n), cys(n);
+    float maxX = 0.0f, maxY = 0.0f, maxR = 0.0f;
+    for (size_t i = 0; i < n; ++i) {
+        const TilePoint center = tileAreaCentroid(tiles[i]);
+        const float cx = static_cast<float>(center.x);
+        const float cy = static_cast<float>(center.y);
+        cxs[i] = cx;
+        cys[i] = cy;
+        maxX = std::max(maxX, std::abs(cx));
+        maxY = std::max(maxY, std::abs(cy));
+        maxR = std::max(maxR, std::sqrt(cx * cx + cy * cy));
+    }
+    if (cs.ringChebyshev) {
+        const float invX = maxX > 0.0f ? 1.0f / maxX : 1.0f;
+        const float invY = maxY > 0.0f ? 1.0f / maxY : 1.0f;
+        for (size_t i = 0; i < n; ++i) {
+            rings[i] = std::clamp(std::max(std::abs(cxs[i]) * invX, std::abs(cys[i]) * invY), 0.0f, 1.0f);
+        }
+    } else {
+        const float inv = maxR > 0.0f ? 1.0f / maxR : 1.0f;
+        for (size_t i = 0; i < n; ++i) {
+            rings[i] = std::clamp(std::sqrt(cxs[i] * cxs[i] + cys[i] * cys[i]) * inv, 0.0f, 1.0f);
+        }
+    }
+    return rings;
 }
 
 } // namespace
@@ -110,7 +167,7 @@ ShaderColor oklchToShaderColor(Oklch c, float alpha, bool wideGamutP3, bool line
 // Palette presets mirror web/src/color/palette.ts.
 // =============================================================================
 
-PresetResult buildPreset(Preset p, int k, const Oklch* customSource) {
+PresetResult buildPreset(Preset p, int k, const Oklch* customSource, float spectral) {
     PresetResult out{};
     const int kk = std::clamp(k, 1, kMaxColors);
 
@@ -227,6 +284,7 @@ PresetResult buildPreset(Preset p, int k, const Oklch* customSource) {
         }
         case Preset::Count_: break;
     }
+    mixWithSpectra(out, kk, spectral);
     return out;
 }
 
@@ -245,8 +303,10 @@ Classification classify(const std::vector<Tile>& tiles,
     const int k = std::clamp(colorCount, 1, kMaxColors);
 
     if (mode == ColorMode::Type) {
-        // One bucket per distinct tile kind, as the family declares.
-        const int tb = cs.typeBuckets > 0 ? cs.typeBuckets : 1;
+        // One bucket per distinct tile kind. Gailiunas spirals carry the arm
+        // index in `type`, so setting Slots to the seed's arm count maps arm i
+        // to palette slot i like the source notebook's "color count = arms".
+        const int tb = typeBucketCount(tiles, family, cs);
         c.numBuckets = tb;
         for (size_t i = 0; i < n; ++i)
             c.bucket[i] = static_cast<uint8_t>(tiles[i].type % tb);
@@ -277,43 +337,50 @@ Classification classify(const std::vector<Tile>& tiles,
                 c.bucket[i] = static_cast<uint8_t>(bin);
             }
         }
-    } else { // Ring
+    } else if (mode == ColorMode::Ring) {
         c.numBuckets = k;
-        // Compute centroids + family-aware radius.
-        std::vector<float> cxs(n), cys(n);
-        float maxX = 0.0f, maxY = 0.0f, maxR = 0.0f;
+        const std::vector<float> rings = tileRingsForClassification(tiles, cs);
         for (size_t i = 0; i < n; ++i) {
-            const Tile& t = tiles[i];
-            float sx = 0.0f, sy = 0.0f;
-            const int vc = t.vcount;
-            for (int j = 0; j < vc; ++j) { sx += t.x[j]; sy += t.y[j]; }
-            const float cx = sx / vc;
-            const float cy = sy / vc;
-            cxs[i] = cx; cys[i] = cy;
-            const float ax = std::abs(cx), ay = std::abs(cy);
-            if (ax > maxX) maxX = ax;
-            if (ay > maxY) maxY = ay;
-            const float r = std::sqrt(cx * cx + cy * cy);
-            if (r > maxR) maxR = r;
+            int bin = static_cast<int>(std::floor(rings[i] * static_cast<float>(k)));
+            if (bin >= k) bin = k - 1;
+            if (bin < 0) bin = 0;
+            c.bucket[i] = static_cast<float>(bin);
         }
-        if (cs.ringChebyshev) {
-            const float invX = maxX > 0.0f ? 1.0f / maxX : 1.0f;
-            const float invY = maxY > 0.0f ? 1.0f / maxY : 1.0f;
+    } else { // Phase
+        c.numBuckets = 0;
+        const int classCount = std::max(1, typeBucketCount(tiles, family, cs));
+        if (family == Family::GailiunasSpiral) {
+            std::vector<int> perArm(classCount, 0);
             for (size_t i = 0; i < n; ++i) {
-                const float d = std::max(std::abs(cxs[i]) * invX, std::abs(cys[i]) * invY);
-                int bin = static_cast<int>(std::floor(d * k));
-                if (bin >= k) bin = k - 1;
-                if (bin < 0) bin = 0;
-                c.bucket[i] = static_cast<uint8_t>(bin);
+                const int arm = std::clamp(static_cast<int>(tiles[i].type), 0, classCount - 1);
+                perArm[arm] += 1;
+            }
+            std::vector<int> seen(classCount, 0);
+            for (size_t i = 0; i < n; ++i) {
+                const int arm = std::clamp(static_cast<int>(tiles[i].type), 0, classCount - 1);
+                const int count = std::max(1, perArm[arm]);
+                const float progress = count > 1 ? static_cast<float>(seen[arm]) / static_cast<float>(count - 1) : 0.0f;
+                seen[arm] += 1;
+                c.bucket[i] = (static_cast<float>(arm) + progress) / static_cast<float>(classCount);
             }
         } else {
-            const float inv = maxR > 0.0f ? 1.0f / maxR : 1.0f;
+            const std::vector<float> rings = tileRingsForClassification(tiles, cs);
+            // Finite sentinels: -ffast-math makes infinity (and isfinite) UB,
+            // so an untouched class is detected by min > max instead.
+            std::vector<float> minRing(classCount, std::numeric_limits<float>::max());
+            std::vector<float> maxRing(classCount, std::numeric_limits<float>::lowest());
             for (size_t i = 0; i < n; ++i) {
-                const float d = std::sqrt(cxs[i] * cxs[i] + cys[i] * cys[i]) * inv;
-                int bin = static_cast<int>(std::floor(d * k));
-                if (bin >= k) bin = k - 1;
-                if (bin < 0) bin = 0;
-                c.bucket[i] = static_cast<uint8_t>(bin);
+                const int cls = std::clamp(static_cast<int>(tiles[i].type), 0, classCount - 1);
+                minRing[cls] = std::min(minRing[cls], rings[i]);
+                maxRing[cls] = std::max(maxRing[cls], rings[i]);
+            }
+            for (size_t i = 0; i < n; ++i) {
+                const int cls = std::clamp(static_cast<int>(tiles[i].type), 0, classCount - 1);
+                const bool touched = minRing[cls] <= maxRing[cls];
+                const float lo = touched ? minRing[cls] : 0.0f;
+                const float hi = touched ? maxRing[cls] : lo;
+                const float progress = std::clamp((rings[i] - lo) / std::max(1e-6f, hi - lo), 0.0f, 1.0f);
+                c.bucket[i] = (static_cast<float>(cls) + progress) / static_cast<float>(classCount);
             }
         }
     }

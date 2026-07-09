@@ -9,9 +9,9 @@ namespace penrose {
 
 // =============================================================================
 // Settings — single source of truth for everything the renderer asks the
-// Kotlin layer about. Touch-driven view state (pan/zoom/rotate) is NOT here;
-// it lives directly on the renderer because it changes too often to round-trip
-// through JNI.
+// Kotlin layer about. View baselines are persisted here and mirrored into the
+// renderer's LiveView on settings apply; high-frequency gesture deltas still
+// update LiveView directly and are persisted only at touch end.
 // =============================================================================
 
 enum class BackgroundMode : int {
@@ -45,11 +45,20 @@ struct Settings {
     Preset preset       = Preset::Gold;
     int    colorCount   = 2;
     ColorMode colorMode = ColorMode::Type;
+    int    colorSpread  = 100;
+    float  colorSpectral = 0.0f;
 
     bool   borderOn     = true;
     float  borderWidth  = 0.8f;
+    int    borderJoin   = 0;   // 0=miter, 1=round, 2=bevel
+    float  borderFill   = 0.0f;
+    float  borderPoint  = 0.0f;
+    float  borderGap    = 0.0f;
     Oklch  borderColor  { 0.95f, 0.0f, 0.0f };
     float  borderAlpha  = 0.35f;
+    float  edgeProfileWidth = 0.0f;
+    float  edgeProfileGlow = 0.0f;
+    Oklch  edgeProfileColor { 1.0f, 0.0f, 0.0f };
 
     BackgroundMode bgMode { BackgroundMode::Solid };
     Oklch  bgColor     { 0.04f, 0.005f, 280.0f };
@@ -65,10 +74,10 @@ struct Settings {
     float  rippleSpeed  = 1.0f;
     int    rippleKind   = 0;
 
-    // View transform persisted across sessions. Updated by pinch zoom +
-    // pinch rotate. `panMode` 0 (Locked) keeps panX/panY at 0; mode 1
-    // (Generative) lets a single-finger drag grow the tiling outward by
-    // bumping the effective generation as the gesture accumulates.
+    // View transform persisted across sessions. Updated by pinch zoom,
+    // pinch rotate, and Free pan. `panMode` 0 (Locked) ignores
+    // single-finger drag; mode 1 (Free pan) translates panX/panY in
+    // screen pixels; mode 2 (Endless) follows launcher xPixelOffset.
     float  zoom         = 1.0f;
     float  rotation     = 0.0f;
     float  panX         = 0.0f;
@@ -128,6 +137,10 @@ struct Settings {
     float  lightIntensity = 1.00f;   // master key+fill scale
     float  lightWarmth    = 0.50f;   // 0 cool .. 0.5 neutral .. 1 warm
     float  lightAmbient   = 0.22f;   // flat ambient level
+    float  lightChoreoAmount = 0.18f; // moving light response amount
+    float  lightChoreoSpeed  = 1.00f; // clock/page/beat phase multiplier
+    float  lightChoreoSource = 3.0f;  // 0 clock, 1 page, 2 beat, 3 hybrid
+    int    clockWaveform     = 0;     // 0 saw, 1 sine, 2 triangle, 3 square — shapes the choreo clock (web clock_waveform)
 
     // Per-preset material colour overrides. No slider UI today — these
     // are seeded by the Material preset picker so each preset has its
@@ -149,8 +162,37 @@ struct Settings {
     float  matRoughMod = 0.0f;
     float  matMetalMod = 0.0f;
 
-    // Custom palette — used when `preset == Preset::Custom`. 10 OKLCH
-    // triples; only the first `colorCount` are actually consumed.
+    // Deterministic curve overlays. Style 0 is off; 1 square arcs,
+    // 2 square diagonals, 3 square Truchet arcs, 4 source diagonals.
+    // Amount/width/coverage/transform/axis-swap are normalized slider values.
+    float  ornamentStyle  = 0.0f;
+    float  ornamentAmount = 0.0f;
+    float  ornamentWidth  = 0.45f;
+    float  ornamentDensity = 1.0f;
+    float  ornamentPhase  = 0.0f;
+    float  ornamentTwist  = 0.5f;
+    float  ornamentSeed   = 0.0f; // legacy payload slot; canonical shaders ignore it.
+
+    // Surface contour overlay. Source 0=edge distance, 1=relief, 2=luminance,
+    // 3=curvature/ridge flux, 4=adjacency degree, 5=motif hash,
+    // 6=relaxed scalar, 7=biharmonic scalar. The line colour is independent
+    // OKLCH so contour readability is not tied to the base palette.
+    float  surfaceContourAmount  = 0.0f;
+    float  surfaceContourSource  = 0.0f;
+    float  surfaceContourSpacing = 16.0f;
+    float  surfaceContourWidth   = 0.18f;
+    float  surfaceContourPhase   = 0.0f;
+    Oklch  surfaceContourColor { 0.92f, 0.06f, 85.0f };
+
+    // Source-marking overlay colours. These mirror the web source-mark controls:
+    // A/B for the Robinson red/blue arc families and C for single-line overlays
+    // such as Ammann-Beenker diagonals.
+    Oklch  sourceMarkA { 0.62f, 0.28f, 30.0f };
+    Oklch  sourceMarkB { 0.58f, 0.24f, 265.0f };
+    Oklch  sourceMarkC { 0.72f, 0.04f, 85.0f };
+
+    // Custom palette — used when `preset == Preset::Custom`. Only the first
+    // `colorCount` OKLCH triples are consumed.
     Oklch  customOklch[kMaxColors] = {
         { 0.18f, 0.02f, 280.0f },
         { 0.78f, 0.13f,  80.0f },
@@ -165,24 +207,41 @@ struct Settings {
     };
 };
 
-// Returns true if any setting that affects geometry (tile generation) changed.
-// Used by the renderer to decide whether to rebuild vertex buffers or just
-// re-record draw commands. Both subdivision counts and the projection mode
-// gate the tessellation paths in renderer_geometry.cpp — toggling any of
-// them has to rebuild to actually apply (or strip) the polyline split.
-inline bool geometryChanged(const Settings& a, const Settings& b) {
+// Returns true if any setting that affects the fill mesh changed.
+// Border-ring controls are intentionally excluded: Android keeps fill and
+// border buffers separate, so changing width/join/fill/point/gap can rebuild
+// only border geometry.
+inline bool tileGeometryChanged(const Settings& a, const Settings& b) {
     return a.family != b.family
         || a.seedIdx != b.seedIdx
         || a.generation != b.generation
-        || a.hypBorderSubdiv != b.hypBorderSubdiv
         || a.hypFillSubdiv   != b.hypFillSubdiv
+        || a.projection != b.projection;
+}
+
+// Returns true if any setting that affects the tile-local border ring changed.
+inline bool borderGeometryChanged(const Settings& a, const Settings& b) {
+    return a.family != b.family
+        || a.seedIdx != b.seedIdx
+        || a.generation != b.generation
+        || a.borderOn != b.borderOn
+        || a.borderWidth != b.borderWidth
+        || a.borderJoin != b.borderJoin
+        || a.borderFill != b.borderFill
+        || a.borderPoint != b.borderPoint
+        || a.borderGap != b.borderGap
+        || a.ornamentStyle != b.ornamentStyle
+        || a.ornamentWidth != b.ornamentWidth
+        || a.hypScale != b.hypScale
+        || a.hypBorderSubdiv != b.hypBorderSubdiv
         || a.projection != b.projection;
 }
 
 // Returns true if anything that affects per-tile classification changed.
 inline bool classificationChanged(const Settings& a, const Settings& b) {
     return a.colorMode != b.colorMode
-        || a.colorCount != b.colorCount;
+        || a.colorCount != b.colorCount
+        || a.colorSpread != b.colorSpread;
 }
 
 } // namespace penrose

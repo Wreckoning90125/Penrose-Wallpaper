@@ -5,16 +5,12 @@ android:fullBackupContent pair. We opt OUT of both cloud-backup and
 device-transfer for everything in the app's data dir, for two
 reasons:
 
-  1. The user's hand-built modulation graph (filesDir/modulation_graph.json)
-     is small and easy to recreate; restoring a half-corrupted copy
-     onto a new device would feel worse than starting from defaults.
+  1. Live wallpaper renderer state is private app state, not a portable
+     account profile.
   2. The crash handler writes filesDir/crash.log on native faults.
      Cloud-backing up crash dumps from one device to another would be
      actively misleading.
 
-If we ever want selective restore (e.g. ship the wallpaper preset
-choice across devices) extend cloud-backup / device-transfer's
-<include domain="sharedpref" path="..."/> entries here.
 -->
 <data-extraction-rules>
     <cloud-backup>

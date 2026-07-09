@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "allowImportingTsExtensions": true,
     "allowJs": false,
     "checkJs": false,
     "exactOptionalPropertyTypes": true,
@@ -29,6 +30,7 @@
   },
   "include": [
     "scripts/**/*.mts",
+    "tools/**/*.mts",
     "web/src/**/*.ts",
     "web/src/**/*.tsx",
     "vite.config.mts"

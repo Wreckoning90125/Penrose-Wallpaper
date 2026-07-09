@@ -5,7 +5,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
+#include <unordered_set>
 #include <unordered_map>
 #include <utility>
 
@@ -17,7 +19,19 @@ constexpr double kPi    = 3.14159265358979323846;
 constexpr double kPhi   = 1.6180339887498949;
 constexpr double kPsi   = 1.0 / kPhi;
 constexpr double kPsi2  = kPsi * kPsi;
+constexpr double kInvSqrt3 = 0.5773502691896258;
 constexpr double kHalfSqrt3 = 0.8660254037844386;
+
+// Natural one-step linear inflation factors for the de Bruijn multigrid families
+// (docs/tilings/{octagonal,dodecagonal,heptagonal}.md). Each generation scales the
+// patch by exactly one inflation; using a power of these (e.g. 2 + sqrt(3) for the
+// dodecagonal, which is the *two*-step factor) would be an arbitrary multi-step rate.
+constexpr double kInflAmmannBeenker = 2.4142135623730951;  // 1 + sqrt(2)  (silver ratio)
+constexpr double kInflDodecagonal   = 1.9318516525781366;  // sqrt(2 + sqrt(3))  (2 + sqrt(3) is two-step)
+constexpr double kInflHeptagonal    = 1.8019377358048383;  // 2 cos(pi/7)  (matches the Danzer 7-fold rate)
+// Crop radius of the generation-0 multigrid patch (the minimal central rosette),
+// in raw dual-map units; the radius grows by the inflation factor each generation.
+constexpr double kMultigridBaseRadius = 1.6;
 
 struct Pt {
     double x;
@@ -33,7 +47,6 @@ constexpr Xf kIdent{1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
 inline Pt pt(double x, double y) { return {x, y}; }
 inline Pt padd(Pt p, Pt q) { return {p.x + q.x, p.y + q.y}; }
 inline Pt psub(Pt p, Pt q) { return {p.x - q.x, p.y - q.y}; }
-
 inline Pt hexPt(double x, double y) {
     return {x + 0.5 * y, kHalfSqrt3 * y};
 }
@@ -498,14 +511,21 @@ std::array<SpecPtr, 9> buildSpectreBase() {
         pt(-0.866025403784439, 1.5), pt(0.0, 1.0),
     };
     const std::array<Pt, 4> quad = {spectre[3], spectre[5], spectre[7], spectre[11]};
+    // CurvyShape draws from the last straight anchor to the first, then walks the
+    // straight anchor list with alternating cubic bulges. Store only those 14
+    // anchors here; renderers flatten the cubic curve at the needed fidelity.
+    std::vector<Pt> spectreShape;
+    spectreShape.reserve(spectre.size());
+    spectreShape.push_back(spectre.back());
+    for (std::size_t i = 0; i + 1 < spectre.size(); ++i) spectreShape.push_back(spectre[i]);
 
     std::array<SpecPtr, 9> sys{};
     for (int i = 1; i < 9; ++i)
-        sys[i] = makeSpecLeaf(spectre, quad, static_cast<uint8_t>(i + 1));
+        sys[i] = makeSpecLeaf(spectreShape, quad, static_cast<uint8_t>(i + 1));
 
     SpecPtr gamma = makeSpecMeta(quad);
-    addSpecChild(gamma, makeSpecLeaf(spectre, quad, 0), kIdent);
-    addSpecChild(gamma, makeSpecLeaf(spectre, quad, 1),
+    addSpecChild(gamma, makeSpecLeaf(spectreShape, quad, 0), kIdent);
+    addSpecChild(gamma, makeSpecLeaf(spectreShape, quad, 1),
                  mul(ttrans(spectre[8].x, spectre[8].y), trot(kPi / 6.0)));
     sys[0] = gamma;
     return sys;
@@ -579,49 +599,91 @@ void emitSpecLeaves(const SpecPtr& geom, Xf T, std::vector<Tile>& out) {
 // Substitutions
 // =============================================================================
 
+// Penrose P3 (rhomb) deflation: the Robinson-triangle substitution that is MLD to
+// the Penrose Rhomb tiling (Grünbaum & Shephard, Tilings and Patterns [GS87];
+// inflation factor phi). Both half-triangles keep legs = rhombus edge every
+// generation, so two same-type triangles sharing their base reconstitute a rhomb.
+// Worked in role order (verts [A(apex), B, C], type = colour 0 acute / 1 obtuse);
+// finalizeGoldenTriangles() reorders to the renderer convention (base at edge index
+// 2, type acute = 1 / obtuse = 0). This is a distinct substitution from the P2
+// kite/dart rule (subdivideP2); the two Penrose versions are MLD but not identical.
 std::vector<Tile> subdivideP3(const std::vector<Tile>& in) {
     std::vector<Tile> out;
     out.reserve(in.size() * 3);
     for (const Tile& t : in) {
-        const float A0 = t.x[0], A1 = t.y[0];
-        const float B0 = t.x[1], B1 = t.y[1];
-        const float C0 = t.x[2], C1 = t.y[2];
-        if (t.type == 0) { // L → 2 L + 1 S
-            float Dx, Dy, Ex, Ey;
-            comb(A0, A1, kPsi2, C0, C1, kPsi, Dx, Dy);
-            comb(A0, A1, kPsi2, B0, B1, kPsi, Ex, Ey);
-            out.push_back(mkTri(0, Dx, Dy, Ex, Ey, A0, A1));
-            out.push_back(mkTri(1, Ex, Ey, Dx, Dy, B0, B1));
-            out.push_back(mkTri(0, C0, C1, Dx, Dy, B0, B1));
-        } else {           // S → 1 L + 1 S
-            float Dx, Dy;
-            comb(A0, A1, kPsi, B0, B1, kPsi2, Dx, Dy);
-            out.push_back(mkTri(1, Dx, Dy, C0, C1, A0, A1));
-            out.push_back(mkTri(0, C0, C1, Dx, Dy, B0, B1));
+        const float ax = t.x[0], ay = t.y[0];
+        const float bx = t.x[1], by = t.y[1];
+        const float cx = t.x[2], cy = t.y[2];
+        if (t.type == 0) { // acute (colour 0): cut P on leg A->B at 1/phi from apex A
+            float px, py;
+            comb(ax, ay, kPsi2, bx, by, kPsi, px, py);
+            out.push_back(mkTri(0, cx, cy, px, py, bx, by));
+            out.push_back(mkTri(1, px, py, cx, cy, ax, ay));
+        } else {           // obtuse (colour 1): cut Q on B->A and R on B->C at 1/phi from B
+            float qx, qy, rx, ry;
+            comb(bx, by, kPsi2, ax, ay, kPsi, qx, qy);
+            comb(bx, by, kPsi2, cx, cy, kPsi, rx, ry);
+            out.push_back(mkTri(1, rx, ry, cx, cy, ax, ay));
+            out.push_back(mkTri(1, qx, qy, rx, ry, bx, by));
+            out.push_back(mkTri(0, rx, ry, qx, qy, ax, ay));
         }
     }
     return out;
 }
 
+// P2 shares the P3 deflation (same Robinson half-triangles); the kite/dart split is
+// a downstream leg-leg weld, not a different subdivision.
+// P2 kite/dart is a distinct substitution from the P3 rhomb rule above: the
+// "Penrose Tiles" notebook Deflate (c1 = 1/phi, c2 = 1/phi^2; type 1 = acute a[],
+// type 0 = obtuse o[]). Children pair leg-leg into whole kites and darts.
 std::vector<Tile> subdivideP2(const std::vector<Tile>& in) {
     std::vector<Tile> out;
     out.reserve(in.size() * 3);
     for (const Tile& t : in) {
-        const float A0 = t.x[0], A1 = t.y[0];
-        const float B0 = t.x[1], B1 = t.y[1];
-        const float C0 = t.x[2], C1 = t.y[2];
-        if (t.type == 1) { // S → 2 S + 1 L
+        const float x0 = t.x[0], y0 = t.y[0];
+        const float x1 = t.x[1], y1 = t.y[1];
+        const float x2 = t.x[2], y2 = t.y[2];
+        if (t.type == 1) { // notebook a[x,y,z] -> a[d,z,x], a[d,z,e], o[y,e,d]
             float Dx, Dy, Ex, Ey;
-            comb(A0, A1, 1.0 - kPsi, B0, B1, kPsi, Dx, Dy);
-            comb(B0, B1, 1.0 - kPsi, C0, C1, kPsi, Ex, Ey);
-            out.push_back(mkTri(1, Dx, Dy, A0, A1, Ex, Ey));
-            out.push_back(mkTri(1, Ex, Ey, A0, A1, C0, C1));
-            out.push_back(mkTri(0, B0, B1, Dx, Dy, Ex, Ey));
-        } else {           // L → 1 S + 1 L
+            comb(x0, y0, kPsi,  x1, y1, kPsi2, Dx, Dy);
+            comb(x1, y1, kPsi,  x2, y2, kPsi2, Ex, Ey);
+            out.push_back(mkTri(1, Dx, Dy, x2, y2, x0, y0));
+            out.push_back(mkTri(1, Dx, Dy, x2, y2, Ex, Ey));
+            out.push_back(mkTri(0, x1, y1, Ex, Ey, Dx, Dy));
+        } else {           // notebook o[x,y,z] -> o[z,d,y], a[y,x,d]
             float Fx, Fy;
-            comb(A0, A1, 1.0 - kPsi, C0, C1, kPsi, Fx, Fy);
-            out.push_back(mkTri(1, B0, B1, A0, A1, Fx, Fy));
-            out.push_back(mkTri(0, B0, B1, Fx, Fy, C0, C1));
+            comb(x0, y0, kPsi2, x2, y2, kPsi, Fx, Fy);
+            out.push_back(mkTri(0, x2, y2, Fx, Fy, x1, y1));
+            out.push_back(mkTri(1, x1, y1, x0, y0, Fx, Fy));
+        }
+    }
+    return out;
+}
+
+// Reorder internal (Robinson-triangle role) golden triangles to the renderer convention: verts =
+// [baseVertex, apex, baseVertex] so the base (the odd edge; the two equal edges are
+// the legs) sits at edge index 2, and map the colour to the renderer type
+// (acute = 1, obtuse = 0).
+std::vector<Tile> finalizeGoldenTriangles(const std::vector<Tile>& in) {
+    std::vector<Tile> out;
+    out.reserve(in.size());
+    for (const Tile& t : in) {
+        const float ax = t.x[0], ay = t.y[0];
+        const float bx = t.x[1], by = t.y[1];
+        const float cx = t.x[2], cy = t.y[2];
+        const double eab = std::hypot(static_cast<double>(ax) - bx, static_cast<double>(ay) - by);
+        const double ebc = std::hypot(static_cast<double>(bx) - cx, static_cast<double>(by) - cy);
+        const double eca = std::hypot(static_cast<double>(cx) - ax, static_cast<double>(cy) - ay);
+        const uint8_t type = t.type == 0 ? 1 : 0;
+        const double dAbBc = std::abs(eab - ebc);
+        const double dBcCa = std::abs(ebc - eca);
+        const double dCaAb = std::abs(eca - eab);
+        if (dAbBc <= dBcCa && dAbBc <= dCaAb) {
+            out.push_back(mkTri(type, cx, cy, bx, by, ax, ay)); // apex B, base CA
+        } else if (dBcCa <= dCaAb) {
+            out.push_back(mkTri(type, ax, ay, cx, cy, bx, by)); // apex C, base AB
+        } else {
+            out.push_back(mkTri(type, bx, by, ax, ay, cx, cy)); // apex A, base BC
         }
     }
     return out;
@@ -766,93 +828,101 @@ std::vector<Tile> subdivideChair(const std::vector<Tile>& in) {
 // Seeds
 // =============================================================================
 
-std::vector<Tile> seedP3(SeedP3 seed) {
+// Sun: ten acute (colour 0) Robinson triangles meeting apex-first at the origin (a
+// legal fivefold P3 centre), alternating winding so the disk tiles edge-to-edge; the
+// seed ordinal rigidly rotates it so distinct seeds give distinct legal framings.
+static std::vector<Tile> goldenTriangleSun(int ordinal) {
     std::vector<Tile> out;
-    switch (seed) {
-        case SeedP3::Sun: {
-            out.reserve(10);
-            for (int i = 0; i < 10; ++i) {
-                double a1 = (2.0 * kPi * i) / 10.0;
-                double a2 = (2.0 * kPi * (i + 1)) / 10.0;
-                float ax = (float)std::cos(a1), ay = (float)std::sin(a1);
-                float cx = (float)std::cos(a2), cy = (float)std::sin(a2);
-                if ((i & 1) == 0) { std::swap(ax, cx); std::swap(ay, cy); }
-                out.push_back(mkTri(1, ax, ay, 0.0f, 0.0f, cx, cy));
-            }
-            break;
-        }
-        case SeedP3::Star: {
-            out.reserve(10);
-            for (int i = 0; i < 5; ++i) {
-                double a1 = (2.0 * kPi * i) / 5.0;
-                double a3 = a1 + 72.0 * kPi / 180.0;
-                float v1x = (float)std::cos(a1), v1y = (float)std::sin(a1);
-                float v3x = (float)std::cos(a3), v3y = (float)std::sin(a3);
-                float v2x = v1x + v3x, v2y = v1y + v3y;
-                out.push_back(mkTri(0, 0.0f, 0.0f, v1x, v1y, v2x, v2y));
-                out.push_back(mkTri(0, 0.0f, 0.0f, v3x, v3y, v2x, v2y));
-            }
-            break;
-        }
-        case SeedP3::Cartwheel: {
-            out.reserve(10);
-            for (int i = 0; i < 10; ++i) {
-                double a1 = (2.0 * kPi * i) / 10.0 + kPi / 10.0;
-                double a2 = (2.0 * kPi * (i + 1)) / 10.0 + kPi / 10.0;
-                float ax = (float)std::cos(a1), ay = (float)std::sin(a1);
-                float cx = (float)std::cos(a2), cy = (float)std::sin(a2);
-                if ((i & 1) == 1) { std::swap(ax, cx); std::swap(ay, cy); }
-                out.push_back(mkTri(1, ax, ay, 0.0f, 0.0f, cx, cy));
-            }
-            break;
-        }
-        case SeedP3::Ace: {
-            out.reserve(2);
-            double a1 = -36.0 * kPi / 180.0;
-            double a3 =  36.0 * kPi / 180.0;
-            float v1x = (float)std::cos(a1), v1y = (float)std::sin(a1);
-            float v3x = (float)std::cos(a3), v3y = (float)std::sin(a3);
-            float v2x = v1x + v3x, v2y = v1y + v3y;
-            const float cx = v2x * 0.5f;
-            const float cy = v2y * 0.5f;
-            out.push_back(mkTri(0, -cx, -cy, v1x - cx, v1y - cy, v2x - cx, v2y - cy));
-            out.push_back(mkTri(0, -cx, -cy, v3x - cx, v3y - cy, v2x - cx, v2y - cy));
-            break;
-        }
+    out.reserve(10);
+    const double twist = (kPi / 10.0) * static_cast<double>(ordinal);
+    for (int i = 0; i < 10; ++i) {
+        const double a1 = 2.0 * kPi * i / 10.0 + twist;
+        const double a2 = 2.0 * kPi * (i + 1) / 10.0 + twist;
+        float bx = static_cast<float>(std::cos(a1)), by = static_cast<float>(std::sin(a1));
+        float cx = static_cast<float>(std::cos(a2)), cy = static_cast<float>(std::sin(a2));
+        if ((i & 1) == 0) { std::swap(bx, cx); std::swap(by, cy); }
+        out.push_back(mkTri(0, 0.0f, 0.0f, bx, by, cx, cy));
     }
     return out;
 }
 
+// P3 seed as a decagon fan of ten acute (colour 0) triangles, apex at the origin,
+// each direction carrying a +/- pair (non-alternating winding). A distinct legal
+// fivefold centre from goldenTriangleSun.
+static std::vector<Tile> goldenTriangleFan() {
+    std::vector<Tile> out;
+    out.reserve(10);
+    for (int i = 0; i < 5; ++i) {
+        const double a0 = 2.0 * kPi * static_cast<double>(i) / 5.0;
+        const double ap = a0 + kPi / 5.0;
+        const double am = a0 - kPi / 5.0;
+        const float ax = static_cast<float>(std::cos(a0));
+        const float ay = static_cast<float>(std::sin(a0));
+        out.push_back(mkTri(0, 0.0f, 0.0f, ax, ay, static_cast<float>(std::cos(ap)), static_cast<float>(std::sin(ap))));
+        out.push_back(mkTri(0, 0.0f, 0.0f, ax, ay, static_cast<float>(std::cos(am)), static_cast<float>(std::sin(am))));
+    }
+    return out;
+}
+
+// P3 Ace seed: two acute (colour 0) triangles, apexes at the origin, legs = phi,
+// spanning a small kite-shaped patch.
+static std::vector<Tile> goldenTriangleAce() {
+    std::vector<Tile> out;
+    out.reserve(2);
+    auto acute = [](double ang) {
+        const double l = kPhi;
+        return mkTri(0, 0.0f, 0.0f,
+                     static_cast<float>(l * std::cos(ang - kPi / 10.0)), static_cast<float>(l * std::sin(ang - kPi / 10.0)),
+                     static_cast<float>(l * std::cos(ang + kPi / 10.0)), static_cast<float>(l * std::sin(ang + kPi / 10.0)));
+    };
+    out.push_back(acute(kPi / 2.0 - kPi / 10.0));
+    out.push_back(acute(kPi / 2.0 + kPi / 10.0));
+    return out;
+}
+
+// P3 seeds are all-acute (Robinson) patches; the rhomb obtuse rule expects children
+// in a specific role order that hand-built obtuse seeds do not carry, so each seed
+// is a distinct legal acute framing that deflates cleanly.
+std::vector<Tile> seedP3(SeedP3 seed) {
+    switch (seed) {
+        case SeedP3::Star:      return goldenTriangleFan();
+        case SeedP3::Cartwheel: return goldenTriangleSun(1);
+        case SeedP3::Ace:       return goldenTriangleAce();
+        case SeedP3::Sun:
+        default:                return goldenTriangleSun(0);
+    }
+}
+
+// P2 seeds use the notebook convention (type 1 = acute a[], apex at the origin
+// vertex), matching subdivideP2 above. Sun = ten acute meeting apex-first at the
+// centre; Star = a five-point star of obtuse triangles.
 std::vector<Tile> seedP2(SeedP2 seed) {
     std::vector<Tile> out;
     switch (seed) {
-        case SeedP2::Sun: {
+        case SeedP2::Star: {
             out.reserve(10);
-            for (int i = 0; i < 10; ++i) {
-                double a1 = (2.0 * kPi * i) / 10.0;
-                double a2 = (2.0 * kPi * (i + 1)) / 10.0;
-                float ax = (float)(kPhi * std::cos(a1));
-                float ay = (float)(kPhi * std::sin(a1));
-                float cx = (float)(kPhi * std::cos(a2));
-                float cy = (float)(kPhi * std::sin(a2));
-                if ((i & 1) == 0) { std::swap(ax, cx); std::swap(ay, cy); }
-                out.push_back(mkTri(1, ax, ay, 0.0f, 0.0f, cx, cy));
+            for (int i = 0; i < 5; ++i) {
+                const double a0 = 2.0 * kPi * static_cast<double>(i) / 5.0;
+                const double ap = a0 + kPi / 5.0;
+                const double am = a0 - kPi / 5.0;
+                const float yx = static_cast<float>(std::cos(a0));
+                const float yy = static_cast<float>(std::sin(a0));
+                out.push_back(mkTri(0, 0.0f, 0.0f, yx, yy, static_cast<float>(kPhi * std::cos(ap)), static_cast<float>(kPhi * std::sin(ap))));
+                out.push_back(mkTri(0, 0.0f, 0.0f, yx, yy, static_cast<float>(kPhi * std::cos(am)), static_cast<float>(kPhi * std::sin(am))));
             }
             break;
         }
-        case SeedP2::Star: {
+        case SeedP2::Sun:
+        default: {
             out.reserve(10);
-            const double ang36 = kPi / 5.0;
             for (int i = 0; i < 5; ++i) {
-                double theta = (2.0 * kPi * i) / 5.0 + kPi / 2.0;
-                float Bx = (float)std::cos(theta);
-                float By = (float)std::sin(theta);
-                float cLx = (float)(kPhi * std::cos(theta + ang36));
-                float cLy = (float)(kPhi * std::sin(theta + ang36));
-                float cRx = (float)(kPhi * std::cos(theta - ang36));
-                float cRy = (float)(kPhi * std::sin(theta - ang36));
-                out.push_back(mkTri(0, 0.0f, 0.0f, Bx, By, cLx, cLy));
-                out.push_back(mkTri(0, 0.0f, 0.0f, Bx, By, cRx, cRy));
+                const double a0 = 2.0 * kPi * static_cast<double>(i) / 5.0;
+                const double ap = a0 + kPi / 5.0;
+                const double am = a0 - kPi / 5.0;
+                const float ax = static_cast<float>(std::cos(a0));
+                const float ay = static_cast<float>(std::sin(a0));
+                out.push_back(mkTri(1, ax, ay, 0.0f, 0.0f, static_cast<float>(std::cos(ap)), static_cast<float>(std::sin(ap))));
+                out.push_back(mkTri(1, ax, ay, 0.0f, 0.0f, static_cast<float>(std::cos(am)), static_cast<float>(std::sin(am))));
             }
             break;
         }
@@ -913,6 +983,426 @@ std::vector<Tile> seedDanzer(SeedDanzer seed) {
         out.push_back(mkTri(3, 0.0f, 0.0f,
             static_cast<float>(std::cos(a1)), static_cast<float>(std::sin(a1)),
             static_cast<float>(std::cos(a2)), static_cast<float>(std::sin(a2))));
+    }
+    return out;
+}
+
+namespace {
+
+struct CromTri {
+    Pt p;
+    Pt q;
+    Pt r;
+    bool tall;
+};
+
+struct CromPointKey {
+    long long x;
+    long long y;
+    bool operator==(const CromPointKey& other) const {
+        return x == other.x && y == other.y;
+    }
+};
+
+struct CromPointHash {
+    size_t operator()(const CromPointKey& key) const {
+        const uint64_t a = static_cast<uint64_t>(key.x);
+        const uint64_t b = static_cast<uint64_t>(key.y);
+        return static_cast<size_t>(a ^ (b + 0x9e3779b97f4a7c15ull + (a << 6u) + (a >> 2u)));
+    }
+};
+
+struct CromEdgeKey {
+    int a;
+    int b;
+    bool operator==(const CromEdgeKey& other) const {
+        return a == other.a && b == other.b;
+    }
+};
+
+struct CromEdgeHash {
+    size_t operator()(const CromEdgeKey& key) const {
+        return (static_cast<size_t>(key.a) << 32u) ^ static_cast<size_t>(key.b);
+    }
+};
+
+Pt goldenSection(Pt p, Pt q) {
+    return {p.x + (q.x - p.x) * kPsi, p.y + (q.y - p.y) * kPsi};
+}
+
+void cromwellWide(Pt p, Pt q, Pt r, int depth, std::vector<CromTri>& out);
+void cromwellTall(Pt p, Pt q, Pt r, int depth, std::vector<CromTri>& out);
+
+void cromwellWide(Pt p, Pt q, Pt r, int depth, std::vector<CromTri>& out) {
+    if (depth <= 0) {
+        out.push_back({p, q, r, false});
+        return;
+    }
+    const Pt t = goldenSection(p, q);
+    cromwellTall(r, t, p, depth - 1, out);
+    cromwellWide(q, r, t, depth - 1, out);
+}
+
+void cromwellTall(Pt p, Pt q, Pt r, int depth, std::vector<CromTri>& out) {
+    if (depth <= 0) {
+        out.push_back({p, q, r, true});
+        return;
+    }
+    const Pt u = goldenSection(q, r);
+    const Pt v = goldenSection(r, p);
+    cromwellTall(v, p, q, depth - 1, out);
+    cromwellTall(v, u, q, depth - 1, out);
+    cromwellWide(r, v, u, depth - 1, out);
+}
+
+double signedArea(const std::vector<Pt>& poly) {
+    double area = 0.0;
+    for (size_t i = 0; i < poly.size(); ++i) {
+        const Pt a = poly[i];
+        const Pt b = poly[(i + 1) % poly.size()];
+        area += a.x * b.y - b.x * a.y;
+    }
+    return 0.5 * area;
+}
+
+uint8_t cromwellFaceType(const std::vector<Pt>& face) {
+    double side[4];
+    for (int i = 0; i < 4; ++i) {
+        const Pt a = face[i];
+        const Pt b = face[(i + 1) & 3];
+        const double dx = b.x - a.x;
+        const double dy = b.y - a.y;
+        side[i] = std::sqrt(dx * dx + dy * dy);
+    }
+    const double scale = std::max(std::max(side[0], side[1]), std::max(side[2], side[3]));
+    const auto eq = [&](double a, double b) {
+        return std::fabs(a - b) <= 1e-5 * std::max(scale, 1.0);
+    };
+    if (eq(side[0], side[1]) && eq(side[1], side[2]) && eq(side[2], side[3])) return 1;
+    if ((eq(side[0], side[1]) && eq(side[2], side[3])) ||
+        (eq(side[1], side[2]) && eq(side[3], side[0]))) return 0;
+    return 2;
+}
+
+Pt cromwellTileCenter(const Tile& tile) {
+    const TilePoint c = tileAreaCentroid(tile);
+    return {c.x, c.y};
+}
+
+enum class BoundedSide : std::uint8_t { Outside, Boundary, Inside };
+
+double orient2(Pt a, Pt b, Pt c) {
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+bool pointOnSegment(Pt a, Pt b, Pt p) {
+    constexpr double eps = 1e-10;
+    if (std::fabs(orient2(a, b, p)) > eps) return false;
+    return p.x >= std::min(a.x, b.x) - eps
+        && p.x <= std::max(a.x, b.x) + eps
+        && p.y >= std::min(a.y, b.y) - eps
+        && p.y <= std::max(a.y, b.y) + eps;
+}
+
+BoundedSide cromwellBoundedSide(Pt p, const Tile& tile) {
+    bool inside = false;
+    for (int i = 0, j = tile.vcount - 1; i < tile.vcount; j = i++) {
+        const double ax = tile.x[i];
+        const double ay = tile.y[i];
+        const double bx = tile.x[j];
+        const double by = tile.y[j];
+        if (pointOnSegment({ax, ay}, {bx, by}, p)) return BoundedSide::Boundary;
+        if ((ay > p.y) != (by > p.y) &&
+            p.x < ((bx - ax) * (p.y - ay)) / (by - ay) + ax) {
+            inside = !inside;
+        }
+    }
+    return inside ? BoundedSide::Inside : BoundedSide::Outside;
+}
+
+bool cromwellPointInTile(Pt p, const Tile& tile) {
+    return cromwellBoundedSide(p, tile) != BoundedSide::Outside;
+}
+
+std::vector<Tile> cromwellFacesFromTriangles(const std::vector<CromTri>& tris) {
+    std::vector<Pt> points;
+    std::unordered_map<CromPointKey, int, CromPointHash> pointIndex;
+    const auto pointId = [&](Pt p) {
+        const CromPointKey key{
+            static_cast<long long>(std::llround(p.x * 1000000000.0)),
+            static_cast<long long>(std::llround(p.y * 1000000000.0)),
+        };
+        const auto it = pointIndex.find(key);
+        if (it != pointIndex.end()) return it->second;
+        const int id = static_cast<int>(points.size());
+        pointIndex.emplace(key, id);
+        points.push_back(p);
+        return id;
+    };
+
+    std::unordered_set<CromEdgeKey, CromEdgeHash> edges;
+    const auto addEdge = [&](Pt p, Pt q) {
+        int ia = pointId(p);
+        int ib = pointId(q);
+        if (ia == ib) return;
+        if (ib < ia) std::swap(ia, ib);
+        edges.insert({ia, ib});
+    };
+
+    for (const CromTri& tri : tris) {
+        if (tri.tall) {
+            // Tall triangle edge q-r is blue; keep p-q (black) and r-p (red).
+            addEdge(tri.p, tri.q);
+            addEdge(tri.r, tri.p);
+        } else {
+            // Wide triangle edge p-q is blue; keep q-r (green) and r-p (black).
+            addEdge(tri.q, tri.r);
+            addEdge(tri.r, tri.p);
+        }
+    }
+
+    std::vector<std::vector<int>> adj(points.size());
+    for (const CromEdgeKey& e : edges) {
+        adj[e.a].push_back(e.b);
+        adj[e.b].push_back(e.a);
+    }
+    for (size_t i = 0; i < adj.size(); ++i) {
+        std::sort(adj[i].begin(), adj[i].end(), [&](int lhs, int rhs) {
+            const Pt p = points[i];
+            const Pt a0 = points[lhs];
+            const Pt b0 = points[rhs];
+            return std::atan2(a0.y - p.y, a0.x - p.x) < std::atan2(b0.y - p.y, b0.x - p.x);
+        });
+    }
+
+    std::unordered_set<CromEdgeKey, CromEdgeHash> used;
+    std::vector<Tile> out;
+    out.reserve(edges.size() / 2);
+    for (const CromEdgeKey& e : edges) {
+        const CromEdgeKey starts[2] = {{e.a, e.b}, {e.b, e.a}};
+        for (const CromEdgeKey start : starts) {
+            if (used.find(start) != used.end()) continue;
+            std::vector<int> faceIds;
+            CromEdgeKey cur = start;
+            bool closed = false;
+            for (int guard = 0; guard < 4096; ++guard) {
+                if (used.find(cur) != used.end()) break;
+                used.insert(cur);
+                faceIds.push_back(cur.a);
+                const std::vector<int>& nbrs = adj[cur.b];
+                const auto it = std::find(nbrs.begin(), nbrs.end(), cur.a);
+                if (it == nbrs.end() || nbrs.empty()) break;
+                const int idx = static_cast<int>(it - nbrs.begin());
+                const int next = nbrs[(idx + static_cast<int>(nbrs.size()) - 1) % static_cast<int>(nbrs.size())];
+                cur = {cur.b, next};
+                if (cur == start) {
+                    closed = true;
+                    break;
+                }
+            }
+            if (!closed || faceIds.size() != 4) continue;
+            std::vector<Pt> face;
+            face.reserve(4);
+            for (int id : faceIds) face.push_back(points[id]);
+            if (signedArea(face) <= 1e-10) continue;
+            Tile tile{};
+            tile.vcount = 4;
+            tile.type = cromwellFaceType(face);
+            for (int i = 0; i < 4; ++i) {
+                tile.x[i] = static_cast<float>(face[i].x);
+                tile.y[i] = static_cast<float>(face[i].y);
+            }
+            out.push_back(tile);
+        }
+    }
+    return out;
+}
+
+std::vector<Tile> buildCromwellKRTFromRobinson(int depth) {
+    const Pt a{0.0, 0.0};
+    const Pt b{kPhi, 0.0};
+    const double wideHeight = std::sqrt(std::max(0.0, 1.0 - (kPhi * 0.5) * (kPhi * 0.5)));
+    const Pt c{kPhi * 0.5, wideHeight};
+    const double tallX = 0.5 * kPsi;
+    const Pt d{tallX, -std::sqrt(std::max(0.0, 1.0 - tallX * tallX))};
+
+    std::vector<CromTri> tris;
+    tris.reserve(2u << std::min(depth, 20));
+    // Cromwell's Figure 3 Robinson patch: one wide and one tall triangle sharing
+    // the omitted blue edge. This helper extracts the red+green+black KRT graph
+    // from that Robinson patch; generateCromwellKRT below crops KRT supertiles
+    // from it instead of exposing this whole two-triangle window as the atlas.
+    cromwellWide(a, b, c, depth, tris);
+    cromwellTall(d, a, b, depth, tris);
+    return cromwellFacesFromTriangles(tris);
+}
+
+std::vector<Tile> buildCromwellKRTStar(int depth) {
+    std::vector<CromTri> tris;
+    tris.reserve(10u << std::min(depth, 18));
+    const double ang36 = kPi / 5.0;
+    for (int i = 0; i < 5; ++i) {
+        const double theta = (2.0 * kPi * i) / 5.0 + kPi / 2.0;
+        const Pt apex{std::cos(theta), std::sin(theta)};
+        const Pt left{kPhi * std::cos(theta + ang36), kPhi * std::sin(theta + ang36)};
+        const Pt right{kPhi * std::cos(theta - ang36), kPhi * std::sin(theta - ang36)};
+        // Same Robinson-wide star as the P2 star seed, but consumed as the
+        // Robinson graph before dropping blue edges into Cromwell KRT faces.
+        cromwellWide({0.0, 0.0}, left, apex, depth, tris);
+        cromwellWide({0.0, 0.0}, right, apex, depth, tris);
+    }
+    return cromwellFacesFromTriangles(tris);
+}
+
+} // namespace
+
+double tileSignedArea(const Tile& tile) {
+    double area = 0.0;
+    for (int i = 0; i < tile.vcount; ++i) {
+        const int j = (i + 1) % tile.vcount;
+        area += static_cast<double>(tile.x[i]) * static_cast<double>(tile.y[j])
+              - static_cast<double>(tile.x[j]) * static_cast<double>(tile.y[i]);
+    }
+    return 0.5 * area;
+}
+
+TilePoint tileAreaCentroid(const Tile& tile) {
+    double twiceArea = 0.0;
+    double cx = 0.0;
+    double cy = 0.0;
+    for (int i = 0; i < tile.vcount; ++i) {
+        const int j = (i + 1) % tile.vcount;
+        const double ax = static_cast<double>(tile.x[i]);
+        const double ay = static_cast<double>(tile.y[i]);
+        const double bx = static_cast<double>(tile.x[j]);
+        const double by = static_cast<double>(tile.y[j]);
+        const double cross = ax * by - bx * ay;
+        twiceArea += cross;
+        cx += (ax + bx) * cross;
+        cy += (ay + by) * cross;
+    }
+    if (std::fabs(twiceArea) > 1e-12) {
+        const double scale = 1.0 / (3.0 * twiceArea);
+        return {cx * scale, cy * scale};
+    }
+    double sx = 0.0;
+    double sy = 0.0;
+    const int n = std::max(1, static_cast<int>(tile.vcount));
+    for (int i = 0; i < tile.vcount; ++i) {
+        sx += static_cast<double>(tile.x[i]);
+        sy += static_cast<double>(tile.y[i]);
+    }
+    return {sx / static_cast<double>(n), sy / static_cast<double>(n)};
+}
+
+std::vector<Tile> generateCromwellKRT(int seedIdx, int generations) {
+    const int seed = std::max(0, std::min(3, seedIdx));
+    if (seed == static_cast<int>(SeedCromwellKRT::Star)) {
+        std::vector<Tile> out = buildCromwellKRTStar(std::max(0, generations) * 2);
+        normalizeTiles(out);
+        return out;
+    }
+    const int baseDepth = 3;
+    const int depth = baseDepth + std::max(0, generations) * 2;
+    const std::vector<Tile> base = buildCromwellKRTFromRobinson(baseDepth);
+    const std::vector<Tile> full = buildCromwellKRTFromRobinson(depth);
+
+    Pt baseMin{0.0, 0.0};
+    Pt baseMax{0.0, 0.0};
+    bool foundBasePoint = false;
+    for (const Tile& tile : base) {
+        for (int i = 0; i < tile.vcount; ++i) {
+            const Pt p{static_cast<double>(tile.x[i]), static_cast<double>(tile.y[i])};
+            if (!foundBasePoint) {
+                baseMin = p;
+                baseMax = p;
+                foundBasePoint = true;
+            } else {
+                baseMin.x = std::min(baseMin.x, p.x);
+                baseMin.y = std::min(baseMin.y, p.y);
+                baseMax.x = std::max(baseMax.x, p.x);
+                baseMax.y = std::max(baseMax.y, p.y);
+            }
+        }
+    }
+    const Pt baseCenter{0.5 * (baseMin.x + baseMax.x), 0.5 * (baseMin.y + baseMax.y)};
+    Tile window{};
+    bool foundWindow = false;
+    double bestDist2 = 0.0;
+    for (const Tile& tile : base) {
+        if (tile.type == seed) {
+            const Pt c = cromwellTileCenter(tile);
+            const double dx = c.x - baseCenter.x;
+            const double dy = c.y - baseCenter.y;
+            const double dist2 = dx * dx + dy * dy;
+            if (!foundWindow || dist2 < bestDist2) {
+                bestDist2 = dist2;
+                window = tile;
+                foundWindow = true;
+            }
+        }
+    }
+
+    std::vector<Tile> out;
+    if (foundWindow) {
+        out.reserve(full.size());
+        for (const Tile& tile : full) {
+            if (cromwellPointInTile(cromwellTileCenter(tile), window)) {
+                out.push_back(tile);
+            }
+        }
+        // A selected face at depth 3 is a valid KRT supertile. At generation 0
+        // the center test above can sit on numerical boundaries, so fall back to
+        // the selected face itself if no child center was accepted.
+        if (out.empty()) {
+            out.push_back(window);
+        }
+    }
+    if (out.empty()) out = full;
+    normalizeTiles(out);
+    return out;
+}
+
+std::vector<Tile> seedEquithirds(SeedEquithirds seed) {
+    if (seed == SeedEquithirds::Wide) {
+        // 30-30-120 triangle with unit equal sides and long edge sqrt(3).
+        return { mkTri(1,
+            static_cast<float>(-kHalfSqrt3), -1.0f / 6.0f,
+            static_cast<float>( kHalfSqrt3), -1.0f / 6.0f,
+            0.0f,                             1.0f / 3.0f) };
+    }
+
+    // Unit equilateral triangle, centred on its centroid.
+    return { mkTri(0,
+        -0.5f, static_cast<float>(-kHalfSqrt3 / 3.0),
+         0.5f, static_cast<float>(-kHalfSqrt3 / 3.0),
+         0.0f, static_cast<float>( 2.0 * kHalfSqrt3 / 3.0)) };
+}
+
+std::vector<Tile> subdivideEquithirds(const std::vector<Tile>& in) {
+    std::vector<Tile> out;
+    out.reserve(in.size() * 3);
+    for (const Tile& t : in) {
+        if (t.type == 0) {
+            const float cx = (t.x[0] + t.x[1] + t.x[2]) / 3.0f;
+            const float cy = (t.y[0] + t.y[1] + t.y[2]) / 3.0f;
+            out.push_back(mkTri(1, t.x[0], t.y[0], t.x[1], t.y[1], cx, cy));
+            out.push_back(mkTri(1, t.x[1], t.y[1], t.x[2], t.y[2], cx, cy));
+            out.push_back(mkTri(1, t.x[2], t.y[2], t.x[0], t.y[0], cx, cy));
+            continue;
+        }
+
+        const float mx = (t.x[0] + t.x[1]) * 0.5f;
+        const float my = (t.y[0] + t.y[1]) * 0.5f;
+        const float sx = (t.x[1] - t.x[0]) / 6.0f;
+        const float sy = (t.y[1] - t.y[0]) / 6.0f;
+        const float b1x = mx - sx;
+        const float b1y = my - sy;
+        const float b2x = mx + sx;
+        const float b2y = my + sy;
+        out.push_back(mkTri(1, t.x[0], t.y[0], t.x[2], t.y[2], b1x, b1y));
+        out.push_back(mkTri(0, b1x, b1y, b2x, b2y, t.x[2], t.y[2]));
+        out.push_back(mkTri(1, t.x[2], t.y[2], t.x[1], t.y[1], b2x, b2y));
     }
     return out;
 }
@@ -992,7 +1482,7 @@ void edgesChair(const Tile& t, std::vector<Edge>& out) {
 // dualization, not substitution: no seed/subdivide pair; `generations` scales
 // the grid range and `seedIdx` (0..2) picks a grid-offset variant.
 
-std::vector<Tile> generateMultigrid(int gridCount, int seedIdx, int generations) {
+std::vector<Tile> generateMultigrid(int gridCount, int seedIdx, int generations, double inflation) {
     const int N = (gridCount < 2) ? 2 : gridCount;
     std::vector<double> dirx(N), diry(N);
     for (int k = 0; k < N; ++k) {
@@ -1029,16 +1519,19 @@ std::vector<Tile> generateMultigrid(int gridCount, int seedIdx, int generations)
     }
 
     int gen = generations < 0 ? 0 : generations;
-    // The grid line-index half-range grows ~phi per generation, so the
-    // normalised tile size shrinks at the same 1/phi rate the renderer's
-    // border scaling (deflationRate) assumes for the substitution families.
-    int B = static_cast<int>(std::lround(12.0 * std::pow(kPhi, gen - 6)));
-    if (B < 2) B = 2;
-    // Keep rhombi whose centroid lies inside this raw-units radius. The dual
-    // map scales the plane by ~N/2, so 0.5*N*(B-1) keeps the patch hole-free
-    // out to that radius (for N = 6 this is the original 3*(B-1)).
-    const double keepLin = 0.5 * N * (B - 1);
+    // One generation = one true inflation. The crop radius grows by the family's
+    // natural inflation factor from the minimal central rosette, so tile count
+    // scales as inflation^(2*gen) and normalised tile size shrinks at 1/inflation
+    // per generation. The radius is grown *directly* (not through the integer grid
+    // half-range): the earlier `0.5*N*(B-1)` scheme tied the radius to B, so a
+    // single B step (2->5) meant a ~16x area jump — generation 1 exploded to
+    // hundreds of tiles. `maxGen` (per family, in kFamilyInfo) bounds the top.
+    const double keepLin = kMultigridBaseRadius * std::pow(inflation, gen);
     const double keepR2 = keepLin * keepLin;
+    // Grid half-range large enough to fill the crop disk (the dual map scales the
+    // plane by ~N/2), plus one line of margin so the disk stays hole-free.
+    int B = static_cast<int>(std::ceil(2.0 * keepLin / N)) + 1;
+    if (B < 2) B = 2;
 
     // Seed 0 is 2N-fold symmetric, but the de Bruijn dual of a constant-offset
     // grid centres that symmetry on P = (-1, -cot(pi/2N)) — not the origin
@@ -1472,10 +1965,24 @@ inline double p1Area(const float* x, const float* y, int n) {
     return a;
 }
 
+Tile p1SeedStar() {
+    Tile t{};
+    t.vcount = 10;
+    t.type = 1;
+    for (int i = 0; i < 10; ++i) {
+        const double r = (i & 1) ? kPsi2 : 1.0;
+        const double a = -0.5 * kPi + static_cast<double>(i) * kPi / 5.0;
+        t.x[i] = static_cast<float>(r * std::cos(a));
+        t.y[i] = static_cast<float>(r * std::sin(a));
+    }
+    return t;
+}
+
 } // namespace
 
 std::vector<Tile> generateP1(int /*seedIdx*/, int generations) {
-    const int md = generations < 1 ? 1 : generations;
+    const int md = generations < 0 ? 0 : generations;
+    if (md == 0) return { p1SeedStar() };
 
     // ---- 1. run the recursion, collecting the decorating pentagons --------
     std::vector<Tile> pent;
@@ -1586,7 +2093,7 @@ std::vector<Tile> generateP1(int /*seedIdx*/, int generations) {
 
 std::vector<Tile> generateHat(int seedIdx, int generations) {
     auto metatiles = initialHatMetatiles();
-    for (int g = 0; g < generations; ++g) {
+    for (int g = 0; g <= generations; ++g) {
         const HatPtr patch = constructHatPatch(metatiles);
         metatiles = constructHatMetatiles(patch);
     }
@@ -1599,12 +2106,639 @@ std::vector<Tile> generateHat(int seedIdx, int generations) {
 
 std::vector<Tile> generateSpectre(int seedIdx, int generations) {
     auto sys = buildSpectreBase();
-    for (int g = 0; g < generations; ++g) sys = buildSpectreSupertiles(sys);
+    for (int g = 0; g <= generations; ++g) sys = buildSpectreSupertiles(sys);
     const int seed = (seedIdx < 0 || seedIdx > 8) ? 0 : seedIdx;
     std::vector<Tile> out;
     emitSpecLeaves(sys[seed], kIdent, out);
     normalizeTiles(out);
     return out;
+}
+
+std::vector<Tile> generateEquithirds(int seedIdx, int generations) {
+    const int seed = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+    auto tiles = seedEquithirds(static_cast<SeedEquithirds>(seed));
+    for (int g = 0; g < generations; ++g) tiles = subdivideEquithirds(tiles);
+    return tiles;
+}
+
+struct SpiralSeed {
+    int arms;
+    int n;
+    int k;
+};
+
+constexpr SpiralSeed kGailiunasSeeds[] = {
+    { 3,  6,  3}, { 3,  9,  4}, { 3, 12,  5}, { 3, 15,  6},
+    { 3, 18,  7}, { 3, 21,  8}, { 3, 24,  9}, { 3, 27, 10},
+    { 3, 30, 11}, { 3, 33, 12}, { 3, 36, 13}, { 4,  8,  3},
+    { 4, 12,  4}, { 4, 16,  5}, { 4, 20,  6}, { 4, 24,  7},
+    { 4, 28,  8}, { 4, 32,  9}, { 4, 36, 10}, { 5, 10,  3},
+    { 5, 15,  4}, { 5, 20,  5}, { 5, 25,  6}, { 5, 30,  7},
+    { 5, 35,  8}, { 6, 12,  3}, { 6, 18,  4}, { 6, 24,  5},
+    { 6, 30,  6}, { 6, 36,  7}, { 7, 14,  3}, { 7, 21,  4},
+    { 7, 28,  5}, { 7, 35,  6}, { 8, 16,  3}, { 8, 24,  4},
+    { 8, 32,  5}, { 9, 18,  3}, { 9, 27,  4}, { 9, 36,  5},
+    {10, 20,  3}, {10, 30,  4}, {11, 22,  3}, {11, 33,  4},
+    {12, 24,  3}, {12, 36,  4}, {13, 26,  3}, {14, 28,  3},
+    {15, 30,  3}, {16, 32,  3}, {17, 34,  3}, {18, 36,  3},
+};
+
+inline Pt cadd(Pt a, Pt b) { return {a.x + b.x, a.y + b.y}; }
+inline Pt csub(Pt a, Pt b) { return {a.x - b.x, a.y - b.y}; }
+inline Pt cscale(Pt a, double s) { return {a.x * s, a.y * s}; }
+inline Pt cconj(Pt a) { return {a.x, -a.y}; }
+inline Pt crot(Pt a, double angle) {
+    const double c = std::cos(angle);
+    const double s = std::sin(angle);
+    return {a.x * c - a.y * s, a.x * s + a.y * c};
+}
+
+using SpiralPoly = std::vector<Pt>;
+using SpiralPolyList = std::vector<SpiralPoly>;
+using SpiralSections = std::vector<SpiralPolyList>;
+
+SpiralPoly translatePoly(const SpiralPoly& in, Pt delta) {
+    SpiralPoly out;
+    out.reserve(in.size());
+    for (Pt p : in) out.push_back(cadd(p, delta));
+    return out;
+}
+
+SpiralPoly rotateTranslatePoly(const SpiralPoly& in, double angle, Pt delta) {
+    SpiralPoly out;
+    out.reserve(in.size());
+    for (Pt p : in) out.push_back(cadd(crot(p, angle), delta));
+    return out;
+}
+
+SpiralPoly gailiunasBaseTile(int n, int k) {
+    SpiralPoly z;
+    z.reserve(static_cast<size_t>(k));
+    Pt acc{0.0, 0.0};
+    for (int i = 0; i < k; ++i) {
+        acc = cadd(acc, {std::cos(2.0 * kPi * i / n), std::sin(2.0 * kPi * i / n)});
+        z.push_back(acc);
+    }
+
+    SpiralPoly poly;
+    poly.reserve(2U * static_cast<size_t>(k));
+    for (Pt p : z) poly.push_back(p);
+    for (auto it = z.rbegin(); it != z.rend(); ++it) poly.push_back(csub(*it, {1.0, 0.0}));
+    return poly;
+}
+
+void pushSpiralTile(const SpiralPoly& poly, uint8_t type, std::vector<Tile>& out) {
+    if (poly.size() < 3 || poly.size() > static_cast<size_t>(kMaxTileVerts)) return;
+    Tile tile{};
+    tile.vcount = static_cast<uint8_t>(poly.size());
+    tile.type = type;
+    for (size_t i = 0; i < poly.size(); ++i) {
+        tile.x[i] = static_cast<float>(poly[i].x);
+        tile.y[i] = static_cast<float>(poly[i].y);
+    }
+    out.push_back(tile);
+}
+
+std::vector<Tile> generateGailiunasSpiral(int seedIdx, int generations) {
+    const int maxSeed = static_cast<int>(sizeof(kGailiunasSeeds) / sizeof(kGailiunasSeeds[0])) - 1;
+    const SpiralSeed seed = kGailiunasSeeds[(seedIdx < 0 || seedIdx > maxSeed) ? 0 : seedIdx];
+    const int level = std::max(0, generations);
+    const double turn = kPi * (2.0 / static_cast<double>(seed.arms) + 1.0);
+
+    const SpiralPoly base = gailiunasBaseTile(seed.n, seed.k);
+    const Pt anchor = base[static_cast<size_t>(seed.k - 1)];
+    SpiralPoly ft0 = translatePoly(base, cscale(anchor, -1.0));
+
+    SpiralPoly fc;
+    fc.reserve(base.size());
+    for (Pt p : base) fc.push_back(crot(cconj(p), turn));
+
+    std::vector<SpiralPolyList> ft(static_cast<size_t>(level + 1));
+    ft[0].push_back(ft0);
+    for (int j = 1; j <= level; ++j) {
+        SpiralPolyList polys;
+        polys.reserve(2U * static_cast<size_t>(j));
+        for (int i = 0; i < j; ++i) polys.push_back(translatePoly(ft0, {-static_cast<double>(i), 0.0}));
+        for (int i = 0; i < j; ++i) {
+            const Pt step = cadd({static_cast<double>(j), 0.0}, crot({static_cast<double>(i), 0.0}, turn));
+            polys.push_back(translatePoly(fc, cscale(step, -1.0)));
+        }
+        ft[static_cast<size_t>(j)] = std::move(polys);
+    }
+
+    std::vector<SpiralSections> sections(static_cast<size_t>(level + 1));
+    for (int j = 1; j <= level; ++j) {
+        Pt offset{0.0, 0.0};
+        Pt next{0.0, 0.0};
+        const SpiralPolyList& polys = ft[static_cast<size_t>(j)];
+        const Pt last = polys.back().back();
+        const Pt t = cscale(last, -1.0);
+        SpiralSections sect;
+        sect.reserve(static_cast<size_t>(seed.k - 1));
+        for (int i = 0; i <= seed.k - 2; ++i) {
+            offset = cadd(offset, next);
+            next = crot(t, -2.0 * kPi * i / seed.n);
+            SpiralPolyList sector;
+            sector.reserve(polys.size());
+            for (const SpiralPoly& p : polys) {
+                sector.push_back(rotateTranslatePoly(p, -2.0 * kPi * i / seed.n, cscale(offset, -1.0)));
+            }
+            sect.push_back(std::move(sector));
+        }
+        sections[static_cast<size_t>(j)] = std::move(sect);
+    }
+
+    SpiralPolyList oneArm;
+    if (level == 0) {
+        oneArm.push_back(ft0);
+    } else {
+        Pt offset{0.0, 0.0};
+        Pt next{0.0, 0.0};
+        for (int i = 1; i <= level; ++i) {
+            offset = cadd(offset, next);
+            const double angle = -2.0 * kPi * (i - 1) * (seed.k - 1) / seed.n;
+            const SpiralSections& sect = sections[static_cast<size_t>(i)];
+            next = crot(sect.back().back().back(), angle);
+            for (const SpiralPolyList& sector : sect) {
+                for (const SpiralPoly& p : sector) oneArm.push_back(rotateTranslatePoly(p, angle, offset));
+            }
+        }
+    }
+
+    std::vector<Tile> out;
+    out.reserve(oneArm.size() * static_cast<size_t>(seed.arms));
+    for (int arm = 0; arm < seed.arms; ++arm) {
+        const double angle = 2.0 * kPi * arm / seed.arms;
+        const uint8_t type = static_cast<uint8_t>(arm % 18);
+        for (const SpiralPoly& p : oneArm) pushSpiralTile(rotateTranslatePoly(p, angle, {0.0, 0.0}), type, out);
+    }
+    normalizeTiles(out);
+    return out;
+}
+
+std::vector<Tile> generateCairo(int /*seedIdx*/, int generations) {
+    constexpr double e = 0.5;
+    const std::array<std::array<Pt, 5>, 8> cell = {{
+        {{{0.0, 0.0}, {1.0, -e}, {2.0, 0.0}, {2.0 - e, 1.0}, {e, 1.0}}},
+        {{{e, 1.0}, {0.0, 2.0}, {1.0, 2.0 + e}, {2.0, 2.0}, {2.0 - e, 1.0}}},
+        {{{0.0, 2.0}, {-e, 3.0}, {0.0, 4.0}, {1.0, 4.0 - e}, {1.0, 2.0 + e}}},
+        {{{1.0, 4.0 - e}, {2.0, 4.0}, {2.0 + e, 3.0}, {2.0, 2.0}, {1.0, 2.0 + e}}},
+        {{{2.0, 0.0}, {3.0, e}, {3.0, 2.0 - e}, {2.0, 2.0}, {2.0 - e, 1.0}}},
+        {{{3.0, e}, {3.0, 2.0 - e}, {4.0, 2.0}, {4.0 + e, 1.0}, {4.0, 0.0}}},
+        {{{3.0, 2.0 - e}, {2.0, 2.0}, {2.0 + e, 3.0}, {4.0 - e, 3.0}, {4.0, 2.0}}},
+        {{{2.0 + e, 3.0}, {4.0 - e, 3.0}, {4.0, 4.0}, {3.0, 4.0 + e}, {2.0, 4.0}}},
+    }};
+
+    const int radius = std::max(0, generations);
+    const int cells = 2 * radius + 1;
+    std::vector<Tile> out;
+    out.reserve(static_cast<size_t>(cells * cells) * cell.size());
+    for (int ix = -radius; ix <= radius; ++ix) {
+        for (int iy = -radius; iy <= radius; ++iy) {
+            const Xf T = ttrans(4.0 * ix, 4.0 * iy);
+            for (size_t type = 0; type < cell.size(); ++type) {
+                Tile tile{};
+                tile.vcount = 5;
+                tile.type = static_cast<uint8_t>(type);
+                for (int i = 0; i < 5; ++i) {
+                    const Pt p = transPt(T, cell[type][static_cast<size_t>(i)]);
+                    tile.x[i] = static_cast<float>(p.x);
+                    tile.y[i] = static_cast<float>(p.y);
+                }
+                out.push_back(tile);
+            }
+        }
+    }
+    normalizeTiles(out);
+    return out;
+}
+
+struct SocolarTaylorState {
+    uint8_t letter;
+    bool barred;
+    bool right;
+    int orient;
+    Xf place;
+};
+
+struct SocolarTaylorChildSymbol {
+    uint8_t letter;
+    bool barred;
+    bool right;
+};
+
+constexpr uint8_t stA = 0;
+constexpr uint8_t stB = 1;
+constexpr uint8_t stC = 2;
+constexpr uint8_t stD = 3;
+constexpr uint8_t stE = 4;
+constexpr uint8_t stF = 5;
+constexpr uint8_t stG = 6;
+constexpr bool stPlain = false;
+constexpr bool stBar = true;
+constexpr bool stLeft = false;
+constexpr bool stRight = true;
+
+inline SocolarTaylorChildSymbol stSym(uint8_t letter, bool barred, bool right) {
+    return {letter, barred, right};
+}
+
+using SocolarTaylorRule = std::array<SocolarTaylorChildSymbol, 4>;
+
+// Substitution table for the Socolar-Taylor half-hex hierarchy: one parent
+// state (letter A-G, barred or plain, left or right chirality) maps to its
+// four child symbols in child-slot order. The switch enumerates every
+// (letter, barred, right) combination explicitly — these rows are the
+// tiling's defining data (see docs/tilings/socolar-taylor.md), so they stay
+// as literal tuples rather than being compressed into clever index math.
+SocolarTaylorRule socolarTaylorRule(const SocolarTaylorState& state) {
+    switch (state.letter) {
+        case stA:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stG, stBar, stLeft), stSym(stD, stBar, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stG, stPlain, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stA, stPlain, stRight), stSym(stD, stPlain, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stA, stBar, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stA, stBar, stLeft), stSym(stD, stBar, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stA, stPlain, stRight) }};
+            }
+            return {{ stSym(stG, stPlain, stRight), stSym(stD, stPlain, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stG, stBar, stLeft) }};
+        case stB:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stB, stPlain, stLeft), stSym(stF, stBar, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stG, stPlain, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stG, stBar, stRight), stSym(stF, stPlain, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stA, stBar, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stG, stPlain, stLeft), stSym(stF, stBar, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stA, stPlain, stRight) }};
+            }
+            return {{ stSym(stB, stBar, stRight), stSym(stF, stPlain, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stG, stBar, stLeft) }};
+        case stC:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stF, stPlain, stLeft), stSym(stE, stPlain, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stF, stBar, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stD, stBar, stRight), stSym(stE, stBar, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stD, stPlain, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stD, stPlain, stLeft), stSym(stE, stPlain, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stD, stBar, stRight) }};
+            }
+            return {{ stSym(stF, stBar, stRight), stSym(stE, stBar, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stF, stPlain, stLeft) }};
+        case stD:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stB, stBar, stLeft), stSym(stD, stBar, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stB, stPlain, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stA, stBar, stRight), stSym(stE, stPlain, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stA, stPlain, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stA, stPlain, stLeft), stSym(stE, stBar, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stA, stBar, stRight) }};
+            }
+            return {{ stSym(stB, stPlain, stRight), stSym(stD, stPlain, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stB, stBar, stLeft) }};
+        case stE:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stB, stPlain, stLeft), stSym(stE, stBar, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stB, stBar, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stG, stBar, stRight), stSym(stE, stPlain, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stG, stPlain, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stG, stPlain, stLeft), stSym(stE, stBar, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stG, stBar, stRight) }};
+            }
+            return {{ stSym(stB, stBar, stRight), stSym(stE, stPlain, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stB, stPlain, stLeft) }};
+        case stF:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stB, stPlain, stLeft), stSym(stF, stBar, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stB, stPlain, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stG, stBar, stRight), stSym(stE, stPlain, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stA, stPlain, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stG, stPlain, stLeft), stSym(stE, stBar, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stA, stBar, stRight) }};
+            }
+            return {{ stSym(stB, stBar, stRight), stSym(stF, stPlain, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stB, stBar, stLeft) }};
+        case stG:
+            if (!state.barred && !state.right) {
+                return {{ stSym(stB, stBar, stLeft), stSym(stD, stBar, stLeft),
+                          stSym(stC, stBar, stRight), stSym(stG, stPlain, stRight) }};
+            }
+            if (!state.barred && state.right) {
+                return {{ stSym(stA, stBar, stRight), stSym(stF, stPlain, stRight),
+                          stSym(stC, stBar, stLeft), stSym(stA, stBar, stLeft) }};
+            }
+            if (state.barred && !state.right) {
+                return {{ stSym(stA, stPlain, stLeft), stSym(stF, stBar, stLeft),
+                          stSym(stC, stPlain, stRight), stSym(stA, stPlain, stRight) }};
+            }
+            return {{ stSym(stB, stPlain, stRight), stSym(stD, stPlain, stRight),
+                      stSym(stC, stPlain, stLeft), stSym(stG, stBar, stLeft) }};
+        default:
+            std::abort();
+    }
+}
+
+int stMod6(int value) {
+    const int r = value % 6;
+    return r < 0 ? r + 6 : r;
+}
+
+uint8_t stTileType(uint8_t letter, bool barred, bool right) {
+    return static_cast<uint8_t>(letter * 4u + (barred ? 2u : 0u) + (right ? 1u : 0u));
+}
+
+Tile stPolygonTile(const std::vector<Pt>& poly, Xf T, uint8_t type) {
+    Tile tile = polygonTile(poly, T, type);
+    if (tileSignedArea(tile) < 0.0) {
+        for (int lo = 0, hi = static_cast<int>(tile.vcount) - 1; lo < hi; ++lo, --hi) {
+            std::swap(tile.x[lo], tile.x[hi]);
+            std::swap(tile.y[lo], tile.y[hi]);
+        }
+    }
+    return tile;
+}
+
+const std::vector<Pt>& socolarTaylorHalfHex(bool right) {
+    static const std::vector<Pt> left = {
+        {0.0, 0.0},
+        {-kHalfSqrt3, -0.5},
+        {-kHalfSqrt3, -1.5},
+        {0.0, -2.0},
+    };
+    static const std::vector<Pt> rightShape = {
+        {0.0, 0.0},
+        {0.0, -2.0},
+        {kHalfSqrt3, -1.5},
+        {kHalfSqrt3, -0.5},
+    };
+    return right ? rightShape : left;
+}
+
+Tile socolarTaylorTile(const SocolarTaylorState& state) {
+    const Xf T = mul(state.place, trot((static_cast<double>(state.orient) * kPi) / 3.0));
+    return stPolygonTile(
+        socolarTaylorHalfHex(state.right),
+        T,
+        stTileType(state.letter, state.barred, state.right)
+    );
+}
+
+std::vector<SocolarTaylorState> subdivideSocolarTaylor(const std::vector<SocolarTaylorState>& states) {
+    static const Xf invQ = inv({-1.0, -2.0 * kHalfSqrt3, 0.0, -2.0 * kHalfSqrt3, 1.0, 0.0});
+    static const Pt offsetsLeft[4] = {
+        {0.0, 0.0},
+        {2.0 * kHalfSqrt3, 1.0},
+        {kHalfSqrt3, -0.5},
+        {4.0 * kHalfSqrt3, -2.0},
+    };
+    static const Pt offsetsRight[4] = {
+        {0.0, 0.0},
+        {0.0, -2.0},
+        {kHalfSqrt3, -0.5},
+        {4.0 * kHalfSqrt3, -2.0},
+    };
+    constexpr int orientLeft[4] = {2, 1, 1, 3};
+    constexpr int orientRight[4] = {0, 1, 1, 5};
+
+    std::vector<SocolarTaylorState> next;
+    next.reserve(states.size() * 4u);
+    for (const SocolarTaylorState& state : states) {
+        const SocolarTaylorRule rule = socolarTaylorRule(state);
+        const Pt* offsets = state.right ? offsetsRight : offsetsLeft;
+        const int* orientBase = state.right ? orientRight : orientLeft;
+        const Xf orientFrame = trot((-static_cast<double>(state.orient) * kPi) / 3.0);
+        for (size_t i = 0; i < rule.size(); ++i) {
+            const SocolarTaylorChildSymbol& child = rule[i];
+            const Pt offset = transPt(orientFrame, offsets[i]);
+            next.push_back({
+                child.letter,
+                child.barred,
+                child.right,
+                stMod6(orientBase[i] - state.orient),
+                mul(state.place, mul(invQ, ttrans(offset.x, offset.y))),
+            });
+        }
+    }
+    return next;
+}
+
+std::vector<Tile> generateSocolarTaylor(int seedIdx, int generations) {
+    const SeedSocolarTaylor seed = seedIdx == 1
+        ? SeedSocolarTaylor::AHex
+        : SeedSocolarTaylor::GeneratingTriad;
+    std::vector<SocolarTaylorState> states;
+    states.reserve(seed == SeedSocolarTaylor::GeneratingTriad ? 6u : 2u);
+    auto pushHex = [&states](uint8_t letter, bool barred, int orient) {
+        states.push_back({letter, barred, stLeft, orient, kIdent});
+        states.push_back({letter, barred, stRight, orient, kIdent});
+    };
+    if (seed == SeedSocolarTaylor::GeneratingTriad) {
+        // Akiyama-Lee Fig. 1: B, barred G, and A hexes meeting at the origin.
+        pushHex(stB, stPlain, 4);
+        pushHex(stG, stBar, 2);
+        pushHex(stA, stPlain, 0);
+    } else {
+        pushHex(stA, stPlain, 0);
+    }
+    for (int g = 0; g < generations; ++g) states = subdivideSocolarTaylor(states);
+
+    std::vector<Tile> out;
+    out.reserve(states.size());
+    for (const SocolarTaylorState& state : states) out.push_back(socolarTaylorTile(state));
+    normalizeTiles(out);
+    return out;
+}
+
+struct D4Matrix {
+    int a;
+    int b;
+    int c;
+    int d;
+};
+
+constexpr std::array<D4Matrix, 8> kD4Matrices = {{
+    { 1,  0,  0,  1}, // identity
+    { 0, -1,  1,  0}, // rotate 90
+    {-1,  0,  0, -1}, // rotate 180
+    { 0,  1, -1,  0}, // rotate 270
+    {-1,  0,  0,  1}, // mirror left/right
+    { 1,  0,  0, -1}, // mirror up/down
+    { 0,  1,  1,  0}, // mirror main diagonal
+    { 0, -1, -1,  0}, // mirror anti-diagonal
+}};
+
+constexpr std::array<std::array<uint8_t, 4>, 6> kD4SubstitutionRules = {{
+    {{0, 1, 4, 7}},
+    {{0, 4, 1, 5}},
+    {{2, 6, 3, 7}},
+    {{0, 2, 5, 7}},
+    {{1, 3, 4, 6}},
+    {{0, 5, 6, 3}},
+}};
+
+struct D4State {
+    double cx;
+    double cy;
+    double size;
+    uint8_t sym;
+};
+
+int d4Compose(int left, int right) {
+    const D4Matrix& L = kD4Matrices[static_cast<size_t>(left & 7)];
+    const D4Matrix& R = kD4Matrices[static_cast<size_t>(right & 7)];
+    const D4Matrix C{
+        L.a * R.a + L.b * R.c,
+        L.a * R.b + L.b * R.d,
+        L.c * R.a + L.d * R.c,
+        L.c * R.b + L.d * R.d,
+    };
+    for (size_t i = 0; i < kD4Matrices.size(); ++i) {
+        const D4Matrix& M = kD4Matrices[i];
+        if (M.a == C.a && M.b == C.b && M.c == C.c && M.d == C.d) {
+            return static_cast<int>(i);
+        }
+    }
+    return 0;
+}
+
+int d4MapQuadrant(int sym, int child) {
+    const int sx = (child & 1) ? 1 : -1;
+    const int sy = (child & 2) ? 1 : -1;
+    const D4Matrix& M = kD4Matrices[static_cast<size_t>(sym & 7)];
+    const int mx = M.a * sx + M.b * sy;
+    const int my = M.c * sx + M.d * sy;
+    return (mx > 0 ? 1 : 0) + (my > 0 ? 2 : 0);
+}
+
+Tile d4SquareTile(const D4State& state) {
+    const double h = state.size * 0.5;
+    Tile tile{};
+    tile.vcount = 4;
+    tile.type = state.sym;
+    tile.x[0] = static_cast<float>(state.cx - h);
+    tile.y[0] = static_cast<float>(state.cy - h);
+    tile.x[1] = static_cast<float>(state.cx + h);
+    tile.y[1] = static_cast<float>(state.cy - h);
+    tile.x[2] = static_cast<float>(state.cx + h);
+    tile.y[2] = static_cast<float>(state.cy + h);
+    tile.x[3] = static_cast<float>(state.cx - h);
+    tile.y[3] = static_cast<float>(state.cy + h);
+    return tile;
+}
+
+bool d4StateIntersectsWindow(const D4State& state, const WindowBounds& window, double margin) {
+    const double half = state.size * 0.5;
+    return state.cx + half >= static_cast<double>(window.minX) - margin
+        && state.cx - half <= static_cast<double>(window.maxX) + margin
+        && state.cy + half >= static_cast<double>(window.minY) - margin
+        && state.cy - half <= static_cast<double>(window.maxY) + margin;
+}
+
+void pruneD4StatesForWindow(std::vector<D4State>& states, const WindowBounds& window) {
+    const double spanX = std::max(static_cast<double>(window.maxX - window.minX), 1e-3);
+    const double spanY = std::max(static_cast<double>(window.maxY - window.minY), 1e-3);
+    const double margin = std::max(0.08, std::max(spanX, spanY) * 0.18);
+    std::vector<D4State> kept;
+    kept.reserve(states.size());
+    for (const D4State& state : states) {
+        if (d4StateIntersectsWindow(state, window, margin)) kept.push_back(state);
+    }
+    if (!kept.empty()) states = std::move(kept);
+}
+
+std::vector<Tile> d4StatesToTiles(const std::vector<D4State>& states) {
+    std::vector<Tile> out;
+    out.reserve(states.size());
+    for (const D4State& state : states) out.push_back(d4SquareTile(state));
+    normalizeTiles(out);
+    return out;
+}
+
+std::vector<Tile> generateD4Substitution(int seedIdx, int generations) {
+    const int ruleIdx = seedIdx < 0 || seedIdx >= static_cast<int>(kD4SubstitutionRules.size())
+        ? 0
+        : seedIdx;
+    const std::array<uint8_t, 4>& rule = kD4SubstitutionRules[static_cast<size_t>(ruleIdx)];
+    std::vector<D4State> states;
+    states.push_back({0.0, 0.0, 1.0, 0});
+    for (int g = 0; g < generations; ++g) {
+        std::vector<D4State> next;
+        next.reserve(states.size() * 4u);
+        for (const D4State& state : states) {
+            const double childSize = state.size * 0.5;
+            const double offset = state.size * 0.25;
+            for (int child = 0; child < 4; ++child) {
+                const int mapped = d4MapQuadrant(state.sym, child);
+                const double sx = (mapped & 1) ? 1.0 : -1.0;
+                const double sy = (mapped & 2) ? 1.0 : -1.0;
+                next.push_back({
+                    state.cx + sx * offset,
+                    state.cy + sy * offset,
+                    childSize,
+                    static_cast<uint8_t>(d4Compose(state.sym, rule[static_cast<size_t>(child)])),
+                });
+            }
+        }
+        states = std::move(next);
+    }
+
+    return d4StatesToTiles(states);
+}
+
+std::vector<Tile> generateD4SubstitutionWindowed(int seedIdx, int generations, const WindowBounds& window) {
+    const int ruleIdx = seedIdx < 0 || seedIdx >= static_cast<int>(kD4SubstitutionRules.size())
+        ? 0
+        : seedIdx;
+    const std::array<uint8_t, 4>& rule = kD4SubstitutionRules[static_cast<size_t>(ruleIdx)];
+    std::vector<D4State> states;
+    states.push_back({0.0, 0.0, 1.0, 0});
+    for (int g = 0; g < generations; ++g) {
+        std::vector<D4State> next;
+        next.reserve(states.size() * 4u);
+        for (const D4State& state : states) {
+            const double childSize = state.size * 0.5;
+            const double offset = state.size * 0.25;
+            for (int child = 0; child < 4; ++child) {
+                const int mapped = d4MapQuadrant(state.sym, child);
+                const double sx = (mapped & 1) ? 1.0 : -1.0;
+                const double sy = (mapped & 2) ? 1.0 : -1.0;
+                next.push_back({
+                    state.cx + sx * offset,
+                    state.cy + sy * offset,
+                    childSize,
+                    static_cast<uint8_t>(d4Compose(state.sym, rule[static_cast<size_t>(child)])),
+                });
+            }
+        }
+        states = std::move(next);
+        pruneD4StatesForWindow(states, window);
+    }
+    return d4StatesToTiles(states);
 }
 
 // =============================================================================
@@ -1629,13 +2763,13 @@ const FamilyInfo kFamilyInfo[kFamilyCount] = {
                           { 2, 10, false, 0, 2, false, false } },
     /* Chair         */ { 7, 0.5f,                 4, 0, false, false, 0,
                           { 4,  4, true,  0, 0, false, true  } },
-    /* Dodecagonal   */ { 8, 0.6180339887498949f, 12, 0, true,  false, 0,
+    /* Dodecagonal   */ { 6, 0.5176380902050415f, 12, 0, true,  false, 0,
                           { 3,  6, false, 0, 1, true,  false } },
     /* Pinwheel      */ { 6, 0.4472135954999579f,  0, 0, true,  false, 1,
                           { 2, 10, false, 0, 2, false, false } },
-    /* AmmannBeenker */ { 8, 0.6180339887498949f,  8, 0, true,  false, 0,
+    /* AmmannBeenker */ { 4, 0.4142135623730950f,  8, 0, true,  false, 0,
                           { 2,  4, false, 0, 1, true,  false } },
-    /* Heptagonal    */ { 8, 0.6180339887498949f, 14, 0, true,  false, 0,
+    /* Heptagonal    */ { 7, 0.5549581320873714f, 14, 0, true,  false, 0,
                           { 3,  7, false, 0, 1, true,  false } },
     /* Binary        */ { 8, 0.5257311121191336f,  5, 0, true,  false, 0,
                           { 2,  5, false, 0, 1, true,  false } },
@@ -1645,15 +2779,75 @@ const FamilyInfo kFamilyInfo[kFamilyCount] = {
                           { 4, 10, false, 0, 1, false, false } },
     /* Danzer        */ { 7, 0.5549581320873713f, 14, 0, true,  false, 2,
                           { 4, 14, false, 0, 2, false, false } },
-    /* Hat           */ { 5, 0.3819660112501051f,  0, 0, true,  true,  0,
+    /* Hat           */ { 4, 0.3819660112501051f,  0, 0, true,  true,  0,
                           { 5, 12, false, 0, 1, false, false } },
-    /* Spectre       */ { 5, 0.3535533905932738f,  0, 0, true,  true,  0,
+    /* Spectre       */ { 3, 0.3535533905932738f,  0, 0, true,  true,  0,
                           {10, 12, false, 0, 1, false, false } },
+    /* Equithirds    */ {10, static_cast<float>(kInvSqrt3), 6, 0, true,  false, 2,
+                          { 2,  6, false, 0, 1, false, false } },
+    /* CromwellKRT   */ { 5, 0.3819660112501051f,  5, 0, true,  false, 0,
+                          { 3, 10, false, 0, 1, false, false } },
+    /* GailiunasSpiral */ { 8, 1.0f,               0, 0, true,  true,  0,
+                          {18, 18, false, 0, 1, false, false } },
+    /* Cairo         */ { 8, 1.0f,                 4, 0, true,  true,  0,
+                          { 8,  8, false, 0, 1, false, true  } },
+    /* SocolarTaylor */ { 7, 0.5f,                 6, 0, true,  false, 0,
+                          {28,  6, false, 0, 1, false, false } },
+    /* D4Substitution */ { 8, 0.5f,                4, 0, true,  true,  0,
+                          { 8,  8, true,  0, 0, false, true  } },
 };
 
 // =============================================================================
 // Family-erased generate()
 // =============================================================================
+
+bool supportsWindowedGeneration(Family family) {
+    switch (family) {
+        case Family::P3:
+        case Family::P2:
+        case Family::Chair:
+        case Family::Pinwheel:
+        case Family::Tuebingen:
+        case Family::Danzer:
+        case Family::Equithirds:
+        case Family::D4Substitution:
+            return true;
+        default:
+            return false;
+    }
+}
+
+namespace {
+
+bool tileIntersectsWindow(const Tile& tile, const WindowBounds& window, float margin) {
+    if (tile.vcount == 0) return false;
+    float minX = tile.x[0], maxX = tile.x[0];
+    float minY = tile.y[0], maxY = tile.y[0];
+    for (int i = 1; i < tile.vcount; ++i) {
+        minX = std::min(minX, tile.x[i]);
+        maxX = std::max(maxX, tile.x[i]);
+        minY = std::min(minY, tile.y[i]);
+        maxY = std::max(maxY, tile.y[i]);
+    }
+    return maxX >= window.minX - margin
+        && minX <= window.maxX + margin
+        && maxY >= window.minY - margin
+        && minY <= window.maxY + margin;
+}
+
+void pruneTilesForWindow(std::vector<Tile>& tiles, const WindowBounds& window) {
+    const float spanX = std::max(window.maxX - window.minX, 1e-3f);
+    const float spanY = std::max(window.maxY - window.minY, 1e-3f);
+    const float margin = std::max(0.08f, std::max(spanX, spanY) * 0.18f);
+    std::vector<Tile> kept;
+    kept.reserve(tiles.size());
+    for (const Tile& tile : tiles) {
+        if (tileIntersectsWindow(tile, window, margin)) kept.push_back(tile);
+    }
+    if (!kept.empty()) tiles = std::move(kept);
+}
+
+} // namespace
 
 std::vector<Tile> generate(Family family, int seedIdx, int generations) {
     const int cap0 = generations < 0 ? 0 : generations;
@@ -1664,12 +2858,14 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
             int s = (seedIdx < 0 || seedIdx > 3) ? 0 : seedIdx;
             auto tiles = seedP3(static_cast<SeedP3>(s));
             for (int g = 0; g < cap; ++g) tiles = subdivideP3(tiles);
-            return tiles;
+            return finalizeGoldenTriangles(tiles);
         }
         case Family::P2: {
             int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
             auto tiles = seedP2(static_cast<SeedP2>(s));
             for (int g = 0; g < cap; ++g) tiles = subdivideP2(tiles);
+            // No finalize: the notebook kite/dart tiles are already in renderer
+            // convention (apex at vert 1, base at edge 2, acute = type 1).
             return tiles;
         }
         case Family::Chair: {
@@ -1684,9 +2880,9 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
             for (int g = 0; g < cap; ++g) tiles = subdividePinwheel(tiles);
             return tiles;
         }
-        case Family::Dodecagonal:   return generateMultigrid(6, seedIdx, cap);
-        case Family::AmmannBeenker: return generateMultigrid(4, seedIdx, cap);
-        case Family::Heptagonal:    return generateMultigrid(7, seedIdx, cap);
+        case Family::Dodecagonal:   return generateMultigrid(6, seedIdx, cap, kInflDodecagonal);
+        case Family::AmmannBeenker: return generateMultigrid(4, seedIdx, cap, kInflAmmannBeenker);
+        case Family::Heptagonal:    return generateMultigrid(7, seedIdx, cap, kInflHeptagonal);
         case Family::Binary: {
             int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
             return generateBinary(s, cap);
@@ -1712,8 +2908,105 @@ std::vector<Tile> generate(Family family, int seedIdx, int generations) {
             int s = (seedIdx < 0 || seedIdx > 8) ? 0 : seedIdx;
             return generateSpectre(s, cap);
         }
+        case Family::Equithirds: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            return generateEquithirds(s, cap);
+        }
+        case Family::CromwellKRT:
+            return generateCromwellKRT(seedIdx, cap);
+        case Family::GailiunasSpiral:
+            return generateGailiunasSpiral(seedIdx, cap);
+        case Family::Cairo:
+            return generateCairo(seedIdx, cap);
+        case Family::SocolarTaylor: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            return generateSocolarTaylor(s, cap);
+        }
+        case Family::D4Substitution: {
+            int s = (seedIdx < 0 || seedIdx > 5) ? 0 : seedIdx;
+            return generateD4Substitution(s, cap);
+        }
     }
     return {};
+}
+
+std::vector<Tile> generateWindowed(Family family, int seedIdx, int generations, const WindowBounds& window) {
+    const int cap0 = generations < 0 ? 0 : generations;
+    const int maxG = familyInfo(family).maxGen;
+    const int cap  = cap0 > maxG ? maxG : cap0;
+    if (!supportsWindowedGeneration(family)) return generate(family, seedIdx, cap);
+    switch (family) {
+        case Family::P3: {
+            int s = (seedIdx < 0 || seedIdx > 3) ? 0 : seedIdx;
+            auto tiles = seedP3(static_cast<SeedP3>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdivideP3(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            return finalizeGoldenTriangles(tiles);
+        }
+        case Family::P2: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            auto tiles = seedP2(static_cast<SeedP2>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdivideP2(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            // No finalize: notebook kite/dart tiles are already renderer-convention.
+            return tiles;
+        }
+        case Family::Chair: {
+            int s = (seedIdx < 0 || seedIdx > 2) ? 0 : seedIdx;
+            auto tiles = seedChair(static_cast<SeedChair>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdivideChair(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            return tiles;
+        }
+        case Family::Pinwheel: {
+            int s = (seedIdx < 0 || seedIdx > 2) ? 0 : seedIdx;
+            auto tiles = seedPinwheel(static_cast<SeedPinwheel>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdividePinwheel(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            return tiles;
+        }
+        case Family::Tuebingen: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            auto tiles = seedTuebingen(static_cast<SeedTuebingen>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdivideTuebingen(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            return tiles;
+        }
+        case Family::Danzer: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            auto tiles = seedDanzer(static_cast<SeedDanzer>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdivideDanzer(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            return tiles;
+        }
+        case Family::Equithirds: {
+            int s = (seedIdx < 0 || seedIdx > 1) ? 0 : seedIdx;
+            auto tiles = seedEquithirds(static_cast<SeedEquithirds>(s));
+            for (int g = 0; g < cap; ++g) {
+                tiles = subdivideEquithirds(tiles);
+                pruneTilesForWindow(tiles, window);
+            }
+            return tiles;
+        }
+        case Family::D4Substitution: {
+            int s = (seedIdx < 0 || seedIdx > 5) ? 0 : seedIdx;
+            return generateD4SubstitutionWindowed(s, cap, window);
+        }
+        default:
+            return generate(family, seedIdx, cap);
+    }
 }
 
 } // namespace penrose

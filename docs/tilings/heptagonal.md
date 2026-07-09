@@ -321,19 +321,19 @@ College PhD thesis (2003) and in *Discrete & Computational Geometry* 34
 (2005) 523–536.
 
 ### Renderer mapping
-Not implemented. The obstruction is mathematical, not a missing figure. The
-substitution is not volume-hierarchic: an inflated rhomb is a dimpled region,
-not a plain rhomb, and at λ ≈ 3.802 the thin rhomb alone expands to ten
-children (Harriss Table 1), the others comparably. Its dissection is therefore
-a rhomb-packing problem — place the unit rhombs so every edge dimple matches
-and the angles at every interior vertex sum to 2π — not the small
-polygon-triangulation enumeration that makes the triangle families (Danzer,
-Tübingen) tractable to a closure solver. The published figures (Harriss
-Fig. 2, 7–9) exhibit one solved packing; they are not the *source* of its
-validity, which is the dimple rule plus the 2π-vertex condition plus
-primitivity. A faithful `Family` therefore needs a constraint solver over
-rhomb placements, not a transcribed picture — the open tooling task noted in
-`tools/README.md`. `waveSymmetry` would be 7.
+Not implemented, and distinct from the shipped `Family::Heptagonal`
+dualization rhombs above. The substitution is not volume-hierarchic: an
+inflated rhomb is a dimpled region, not a plain rhomb, and at λ ≈ 3.802 the
+thin rhomb alone expands to ten children (Harriss Table 1), the others
+comparably. Its dissection is therefore a rhomb-packing problem — place the
+unit rhombs so every edge dimple matches and the angles at every interior
+vertex sum to 2π — not the small polygon-triangulation enumeration that makes
+the triangle families (Danzer, Tübingen) tractable. The published figures
+(Harriss Fig. 2, 7–9) exhibit one solved packing, but the source paper does
+not provide child-coordinate tables. A faithful `Family` therefore needs
+either a constraint solver over rhomb placements or an explicit, verifiable
+coordinate reconstruction of the rule, with the dimple rule, 2π-vertex
+condition, and primitivity checked by tooling. `waveSymmetry` would be 7.
 
 ### References
 - E. O. Harriss, "Non-Periodic Rhomb Substitution Tilings that Admit Order n

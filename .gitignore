@@ -1,115 +1,81 @@
-# Gradle files
+# OS, shell, and editor noise
+.DS_Store
+Thumbs.db
+*.sw?
+*:Zone.Identifier
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+deploymentTargetDropDown.xml
+misc.xml
+render.experimental.xml
+
+# Environment, credentials, and signing material
+*.env
+.env*
+*.jks
+*.keystore
+*.local
+google-services.json
+local.properties
+# The Android debug keystore is intentionally committed: its password is the
+# universal "android" and it only signs sideloadable debug builds.
+!android/app/debug.keystore
+
+# Maintainer-local research, reference indexes, and agent state
+.claude/
+.codex/worktrees/
+.local/
+.mcp.json
+.agents/
+docs/superpowers/
+
+# Web, TypeScript, and Vite output
+.cache/
+.tsbuildinfo
+*.tsbuildinfo*
+dist/
+dist-ssr/
+node_modules/
+vite.config.ts.timestamp-*
+
+# Android and Gradle output
+.cxx/
+.externalNativeBuild/
 .gradle/
 build/
-
-# Local configuration file (sdk path, etc)
-local.properties
-
-# Local research docs
-.local/
-
-# Log/OS Files
-*.log
-
-# Web toolchain/build output
-node_modules/
-dist/
-.cache/
-output/playwright/
-.playwright-cli/
-
-# Android Studio generated files and folders
 captures/
-.externalNativeBuild/
-.cxx/
 *.aab
 *.apk
 output-metadata.json
 
-# IntelliJ
-*.iml
-.idea/
-misc.xml
-deploymentTargetDropDown.xml
-render.experimental.xml
+# Native compiler scratch output
+a.out
 
-# Keystore files. The Android debug keystore at app/debug.keystore is
-# intentionally committed: its password is the universal "android" and it
-# only signs sideloadable builds, not Play Store releases.
-*.jks
-*.keystore
-!android/app/debug.keystore
-
-# Google Services (e.g. APIs or Firebase)
-google-services.json
-
-# Android Profiling
+# Logs, diagnostics, profiling, and browser artifacts
 *.hprof
-
-# Python bytecode cache from tools/ scripts
-__pycache__/
-*.pyc
-
-# Local agent loop state
-.claude/ralph-loop.local.md
-
-# ── Belt-and-suspenders: things not present today but that this stack
-#    (Vite + TS + React, Android Gradle + C++, Python tools, Playwright, WSL)
-#    will eventually try to drop here. Add precisely; don't whitelist later. ──
-
-# OS & editor
-.DS_Store
-Thumbs.db
-*.sw?
-.vscode/*
-!.vscode/settings.json
-!.vscode/extensions.json
-!.vscode/tasks.json
-
-# Windows / WSL (these breed constantly under WSL)
-*:Zone.Identifier
-
-# Environment & secrets
-*.env
-.env*
-*.local
-
-# TypeScript / Vite build state
-.tsbuildinfo
-*.tsbuildinfo*
-dist-ssr/
-vite.config.ts.timestamp-*
-
-# Caches
-.eslintcache
-.pytest_cache/
-.ruff_cache/
-
-# npm/yarn debug logs (already covered by *.log, but explicit)
+*.log
+.playwright-cli/
+output/
+test-results/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Test artifacts
-test-results/
-
-# Gate markers (ephemeral, written by npm gate scripts)
+# Tool caches and gate markers
+.eslintcache
 .gate-results/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
 
-# Archive, backups & scratch
+# Archives, backups, and scratch work
 /archive/
 /backups/
 /tmp/
 repomix/
 *.tgz
-
-# AI agent orchestration (local-only state)
-.mcp.json
-.claude/worktrees/
-.claude/*.lock
-/.claude/plans/
-docs/superpowers/
-.codex/worktrees/
-
-# Native compiler scratch output
-a.out

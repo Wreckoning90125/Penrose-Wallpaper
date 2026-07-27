@@ -95,7 +95,10 @@ jobs:
       - name: Build Java/Kotlin
         if: matrix.build-mode == 'manual'
         working-directory: android
-        run: gradle --no-daemon --stacktrace assembleDebug
+        # CodeQL's tracer only sees code that actually compiles: with a warm
+        # build cache every compile task resolves FROM-CACHE and the analysis
+        # fails with "no source code seen", so bypass task caching here.
+        run: gradle --no-daemon --stacktrace --no-build-cache --no-configuration-cache assembleDebug
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4.35.5

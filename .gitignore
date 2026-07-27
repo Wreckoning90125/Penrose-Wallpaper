@@ -18,6 +18,7 @@ render.experimental.xml
 .env*
 *.jks
 *.keystore
+keystore.properties
 *.local
 google-services.json
 local.properties

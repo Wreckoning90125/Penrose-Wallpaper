@@ -55,14 +55,21 @@ spirv-val --version
 npm run quality:local
 ```
 
-When the Android SDK is visible in WSL2, build the installable release APK:
+When the Android SDK is visible in WSL2, build the installable release APK
+with the committed wrapper (pinned to Gradle 9.4.1 with a verified
+`distributionSha256Sum`, so no local Gradle install is needed):
 
 ```bash
 cd android
-gradle --no-daemon --stacktrace assembleRelease
+./gradlew --no-daemon --stacktrace assembleRelease
 ```
 
 The Windows SDK install can remain the device-build authority.
+
+> Footnote: a standalone Gradle 9.4.1 install still works
+> (`gradle --no-daemon --stacktrace assembleRelease` from `android/`), and is
+> what CI provisions via `gradle/actions/setup-gradle`. The wrapper is the
+> preferred local entry point.
 
 ## Release signing
 
@@ -98,7 +105,7 @@ Gradle picks the file up automatically for the release variant:
 
 ```bash
 cd android
-gradle --no-daemon --stacktrace assembleRelease
+./gradlew --no-daemon --stacktrace assembleRelease
 ```
 
 Verify the signature on the produced APK before distributing it:

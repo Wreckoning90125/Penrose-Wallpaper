@@ -10,6 +10,7 @@ import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
 import java.io.File
+import java.util.Properties
 import javax.inject.Inject
 
 plugins {
@@ -17,6 +18,34 @@ plugins {
     // plugin is no longer applied separately. See:
     // https://developer.android.com/build/migrate-to-built-in-kotlin
     alias(libs.plugins.android.application)
+}
+
+// Optional local release signing. The owner creates android/keystore.properties
+// (git-ignored) with storeFile / storePassword / keyAlias / keyPassword and the
+// release build signs with that key. When the file is absent — CI, fresh
+// clones — the release build falls back to the committed debug keystore
+// exactly as before, so no workflow needs secrets. A present-but-incomplete
+// file fails the build loudly rather than silently shipping a debug-signed
+// "release". See docs/platform/dev-build.md for the keystore recipe.
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
+}
+val hasReleaseSigning = keystorePropertiesFile.exists().also { present ->
+    if (present) {
+        val missing = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+            .filter { keystoreProperties.getProperty(it).isNullOrBlank() }
+        if (missing.isNotEmpty()) {
+            error(
+                "android/keystore.properties exists but is missing: " +
+                    missing.joinToString(", ") +
+                    ". Provide all four properties or delete the file to fall " +
+                    "back to debug signing."
+            )
+        }
+    }
 }
 
 android {
@@ -117,6 +146,19 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        // Personal release key, wired only when android/keystore.properties
+        // exists. A relative storeFile resolves against android/ (the root
+        // project directory, where keystore.properties lives); an absolute
+        // path — the recommended layout, keeping the key outside the repo —
+        // is used as-is.
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
@@ -157,7 +199,10 @@ android {
             // entry points, breaking the C++ lookup.
             isMinifyEnabled = false
             isShrinkResources = false
-            signingConfig = signingConfigs.getByName("debug")
+            // Personal release signing when android/keystore.properties is
+            // present; otherwise the committed debug keystore, unchanged.
+            signingConfig = signingConfigs.findByName("release")
+                ?: signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
     }

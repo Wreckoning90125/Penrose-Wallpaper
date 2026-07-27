@@ -13,6 +13,21 @@ permissions:
   contents: read
 
 jobs:
+  # Verify the committed gradle-wrapper.jar against Gradle's published
+  # checksums so a tampered wrapper fails CI immediately. Same pinned
+  # gradle/actions commit as the setup-gradle steps below.
+  wrapper-validation:
+    name: validate gradle wrapper
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+
+      - name: Validate Gradle wrapper jar
+        uses: gradle/actions/wrapper-validation@0723195856401067f7a2779048b490ace7a47d7c  # v5.0.2
+
   build:
     name: assembleRelease
     runs-on: ubuntu-24.04

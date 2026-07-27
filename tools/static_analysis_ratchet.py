@@ -16,6 +16,7 @@ IGNORED_SARIF_RULE_IDS = {
     # visible in Lint's SARIF/HTML artifacts, but out of the defect ratchet.
     "GradleDependency",
     "NewerVersionAvailable",
+    "AndroidGradlePluginVersion",
 }
 
 

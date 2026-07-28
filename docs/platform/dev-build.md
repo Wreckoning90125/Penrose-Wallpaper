@@ -124,9 +124,12 @@ PENROSE_RELEASE_KEY_ALIAS
 PENROSE_RELEASE_KEY_PASSWORD
 ```
 
-Supplying only some variables is an error; Gradle never combines partial
-environment input with file input. Keep the keystore outside the repository,
-restrict its permissions, and remove an ephemeral copy after verification.
+Supplying only some variables — or any of them blank — is an error; Gradle
+never combines partial environment input with file input. As with the
+properties file, a relative `PENROSE_RELEASE_KEYSTORE` path resolves against
+`android/`, so prefer an absolute path. Keep the keystore outside the
+repository, restrict its permissions, and remove an ephemeral copy after
+verification.
 
 Verify the signature on the produced APK before distributing it:
 

@@ -40,23 +40,27 @@ val releaseSigningEnvironment = mapOf(
     "keyPassword" to "PENROSE_RELEASE_KEY_PASSWORD",
 )
 val releaseSigningFromEnvironment = releaseSigningEnvironment.mapValues { (_, variable) ->
-    System.getenv(variable)?.takeUnless { it.isBlank() }
+    System.getenv(variable)
 }
+// A set-but-blank variable counts as supplied so a broken secret-manager
+// injection that exports four empty values errors instead of silently
+// debug-signing what the operator believes is a release-signed build.
 val suppliedEnvironmentFields = releaseSigningFromEnvironment.values.count { it != null }
-if (suppliedEnvironmentFields in 1 until releaseSigningEnvironment.size) {
+val completeEnvironmentFields = releaseSigningFromEnvironment.values.count { !it.isNullOrBlank() }
+if (suppliedEnvironmentFields > 0 && completeEnvironmentFields < releaseSigningEnvironment.size) {
     val missing = releaseSigningFromEnvironment
-        .filterValues { it == null }
+        .filterValues { it.isNullOrBlank() }
         .keys
         .map { releaseSigningEnvironment.getValue(it) }
     error(
-        "Incomplete environment release signing; missing: " +
+        "Incomplete environment release signing; missing or blank: " +
             missing.joinToString(", ") +
             ". Provide all four PENROSE_RELEASE_* variables or none."
     )
 }
 
 val releaseSigningValues: Map<String, String>? = when {
-    suppliedEnvironmentFields == releaseSigningEnvironment.size ->
+    completeEnvironmentFields == releaseSigningEnvironment.size ->
         releaseSigningFromEnvironment.mapValues { (_, value) -> requireNotNull(value) }
 
     keystorePropertiesFile.exists() -> {
@@ -64,7 +68,7 @@ val releaseSigningValues: Map<String, String>? = when {
             .filter { keystoreProperties.getProperty(it).isNullOrBlank() }
         if (missing.isNotEmpty()) {
             error(
-                "android/keystore.properties exists but is missing: " +
+                "android/keystore.properties exists but is missing or blank: " +
                     missing.joinToString(", ") +
                     ". Provide all four properties or delete the file to fall " +
                     "back to debug signing."

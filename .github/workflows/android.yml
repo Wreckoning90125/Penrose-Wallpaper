@@ -74,7 +74,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92  # v6.2.0
         with:
-          gradle-version: "9.4.1"
+          gradle-version: "9.6.1"
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # Android Lint — Google's curated static analysis for Kotlin /
@@ -180,7 +180,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92  # v6.2.0
         with:
-          gradle-version: "9.4.1"
+          gradle-version: "9.6.1"
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Build UBSan-instrumented debug APK
@@ -293,7 +293,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92  # v6.2.0
         with:
-          gradle-version: "9.4.1"
+          gradle-version: "9.6.1"
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Run clang-tidy through CMake
@@ -426,7 +426,7 @@ jobs:
       - name: Submit dependency graph
         uses: gradle/actions/dependency-submission@3f131e8634966bd73d06cc69884922b02e6faf92  # v6.2.0
         with:
-          gradle-version: "9.4.1"
+          gradle-version: "9.6.1"
           build-root-directory: android
           # Report what ships in the APK. The default "resolve all" graph
           # includes Gradle/plugin classpaths, which created Dependabot alerts

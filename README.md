@@ -55,13 +55,12 @@ cd android
 gradle --no-daemon --stacktrace assembleRelease
 ```
 
-The committed debug keystore signs CI artifacts for direct install. For a
-personally signed release, create `android/keystore.properties` (git-ignored)
-with `storeFile`, `storePassword`, `keyAlias`, and `keyPassword`; Gradle picks
-it up automatically for `assembleRelease` and falls back to the debug keystore
-when the file is absent. CI never signs with a release key and carries no
-signing secrets by design — this is a public repository. Releases are
-local-sign-and-upload: build and verify the signed APK locally, then attach it
-to a GitHub release. See
+The committed debug keystore signs CI artifacts for direct install. A personal
+release uses either a complete `PENROSE_RELEASE_*` runtime environment or an
+ignored `android/keystore.properties`; environment input takes precedence.
+Gradle falls back to the debug keystore when neither is present. CI never
+signs with a release key and carries no signing secrets by design — this is a
+public repository. Releases are local-sign-and-upload: build and verify the
+signed APK locally, then attach it to a GitHub release. See
 [`docs/platform/dev-build.md`](docs/platform/dev-build.md) for the keystore
 recipe, verification, and upload flow.

@@ -20,33 +20,66 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
-// Optional local release signing. The owner creates android/keystore.properties
-// (git-ignored) with storeFile / storePassword / keyAlias / keyPassword and the
-// release build signs with that key. When the file is absent — CI, fresh
-// clones — the release build falls back to the committed debug keystore
-// exactly as before, so no workflow needs secrets. A present-but-incomplete
-// file fails the build loudly rather than silently shipping a debug-signed
-// "release". See docs/platform/dev-build.md for the keystore recipe.
+// Optional local release signing. Interactive users may create the ignored
+// android/keystore.properties file; secret-manager wrappers may instead supply
+// the four PENROSE_RELEASE_* environment variables for one Gradle process.
+// Environment input takes precedence so a stale local properties file cannot
+// redirect an automated build. Partial input fails loudly. When neither source
+// exists — CI and fresh clones — release builds retain the committed debug-key
+// fallback and require no secrets. See docs/platform/dev-build.md.
 val keystorePropertiesFile = rootProject.file("keystore.properties")
 val keystoreProperties = Properties().apply {
     if (keystorePropertiesFile.exists()) {
         keystorePropertiesFile.inputStream().use { load(it) }
     }
 }
-val hasReleaseSigning = keystorePropertiesFile.exists().also { present ->
-    if (present) {
-        val missing = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+val releaseSigningEnvironment = mapOf(
+    "storeFile" to "PENROSE_RELEASE_KEYSTORE",
+    "storePassword" to "PENROSE_RELEASE_STORE_PASSWORD",
+    "keyAlias" to "PENROSE_RELEASE_KEY_ALIAS",
+    "keyPassword" to "PENROSE_RELEASE_KEY_PASSWORD",
+)
+val releaseSigningFromEnvironment = releaseSigningEnvironment.mapValues { (_, variable) ->
+    System.getenv(variable)
+}
+// A set-but-blank variable counts as supplied so a broken secret-manager
+// injection that exports four empty values errors instead of silently
+// debug-signing what the operator believes is a release-signed build.
+val suppliedEnvironmentFields = releaseSigningFromEnvironment.values.count { it != null }
+val completeEnvironmentFields = releaseSigningFromEnvironment.values.count { !it.isNullOrBlank() }
+if (suppliedEnvironmentFields > 0 && completeEnvironmentFields < releaseSigningEnvironment.size) {
+    val missing = releaseSigningFromEnvironment
+        .filterValues { it.isNullOrBlank() }
+        .keys
+        .map { releaseSigningEnvironment.getValue(it) }
+    error(
+        "Incomplete environment release signing; missing or blank: " +
+            missing.joinToString(", ") +
+            ". Provide all four PENROSE_RELEASE_* variables or none."
+    )
+}
+
+val releaseSigningValues: Map<String, String>? = when {
+    completeEnvironmentFields == releaseSigningEnvironment.size ->
+        releaseSigningFromEnvironment.mapValues { (_, value) -> requireNotNull(value) }
+
+    keystorePropertiesFile.exists() -> {
+        val missing = releaseSigningEnvironment.keys
             .filter { keystoreProperties.getProperty(it).isNullOrBlank() }
         if (missing.isNotEmpty()) {
             error(
-                "android/keystore.properties exists but is missing: " +
+                "android/keystore.properties exists but is missing or blank: " +
                     missing.joinToString(", ") +
                     ". Provide all four properties or delete the file to fall " +
                     "back to debug signing."
             )
         }
+        releaseSigningEnvironment.keys.associateWith { keystoreProperties.getProperty(it) }
     }
+
+    else -> null
 }
+val hasReleaseSigning = releaseSigningValues != null
 
 android {
     namespace = "com.penrose.wallpaper"
@@ -146,17 +179,16 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
-        // Personal release key, wired only when android/keystore.properties
-        // exists. A relative storeFile resolves against android/ (the root
-        // project directory, where keystore.properties lives); an absolute
-        // path — the recommended layout, keeping the key outside the repo —
-        // is used as-is.
+        // Personal release key, wired only when a complete environment or
+        // properties-file source exists. A relative storeFile resolves against
+        // android/; an absolute path is used as-is.
         if (hasReleaseSigning) {
             create("release") {
-                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
-                storePassword = keystoreProperties.getProperty("storePassword")
-                keyAlias = keystoreProperties.getProperty("keyAlias")
-                keyPassword = keystoreProperties.getProperty("keyPassword")
+                val signing = requireNotNull(releaseSigningValues)
+                storeFile = rootProject.file(signing.getValue("storeFile"))
+                storePassword = signing.getValue("storePassword")
+                keyAlias = signing.getValue("keyAlias")
+                keyPassword = signing.getValue("keyPassword")
             }
         }
     }
@@ -199,8 +231,8 @@ android {
             // entry points, breaking the C++ lookup.
             isMinifyEnabled = false
             isShrinkResources = false
-            // Personal release signing when android/keystore.properties is
-            // present; otherwise the committed debug keystore, unchanged.
+            // Personal release signing when either complete source is present;
+            // otherwise the committed debug keystore, unchanged.
             signingConfig = signingConfigs.findByName("release")
                 ?: signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))

@@ -82,7 +82,7 @@ jobs:
         if: matrix.language == 'java-kotlin'
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c  # v5.0.2
         with:
-          gradle-version: "9.4.1"
+          gradle-version: "9.6.1"
           cache-read-only: true
 
       - name: Initialize CodeQL

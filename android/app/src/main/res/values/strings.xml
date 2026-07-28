@@ -58,4 +58,10 @@
     <string name="apply_wallpaper_title">Apply as wallpaper…</string>
     <string name="apply_wallpaper_summary">Snapshots the current settings, then opens the system live-wallpaper preview.</string>
     <string name="wallpaper_snapshot_failed_toast">Could not prepare wallpaper preview.</string>
+
+    <string name="about_category">About</string>
+    <string name="licenses_title">Third-party licenses</string>
+    <string name="licenses_summary">Open-source components bundled in this app and their license texts.</string>
+    <string name="licenses_dialog_title">Third-party licenses</string>
+    <string name="licenses_load_failed_toast">Could not load license notices.</string>
 </resources>

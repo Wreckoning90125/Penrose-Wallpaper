@@ -55,8 +55,9 @@ spirv-val --version
 npm run quality:local
 ```
 
-When the Android SDK is visible in WSL2, build the installable release APK
-with the committed wrapper (pinned to Gradle 9.4.1 with a verified
+The Linux Android SDK under `$ANDROID_SDK_ROOT` is the build authority. Build
+the installable release APK with the committed wrapper (pinned to Gradle 9.4.1
+with a verified
 `distributionSha256Sum`, so no local Gradle install is needed):
 
 ```bash
@@ -64,7 +65,9 @@ cd android
 ./gradlew --no-daemon --stacktrace assembleRelease
 ```
 
-The Windows SDK install can remain the device-build authority.
+Windows `platform-tools` may remain installed while Windows is the physical
+ADB/USB bridge; Android platforms, build-tools, CMake, and NDK are not needed
+there once the WSL release build has been verified.
 
 > Footnote: a standalone Gradle 9.4.1 install still works
 > (`gradle --no-daemon --stacktrace assembleRelease` from `android/`), and is
@@ -73,9 +76,11 @@ The Windows SDK install can remain the device-build authority.
 
 ## Release signing
 
-Release builds sign with a personal key when `android/keystore.properties`
-exists, and fall back to the committed debug keystore when it does not — so
-CI and fresh clones build exactly as before, with zero signing secrets.
+Release builds sign with a personal key when either a complete runtime
+environment or `android/keystore.properties` is present. They fall back to the
+committed debug keystore when neither exists, so CI and fresh clones build
+exactly as before with zero signing secrets. Runtime environment input takes
+precedence over the ignored properties file.
 
 Generate the keystore once (any machine with a JDK), outside the repository:
 
@@ -108,6 +113,21 @@ cd android
 ./gradlew --no-daemon --stacktrace assembleRelease
 ```
 
+For a secret-manager wrapper, avoid a persistent properties file. Materialize
+the keystore only for the build and provide all four variables to the same
+`--no-daemon` Gradle process:
+
+```text
+PENROSE_RELEASE_KEYSTORE
+PENROSE_RELEASE_STORE_PASSWORD
+PENROSE_RELEASE_KEY_ALIAS
+PENROSE_RELEASE_KEY_PASSWORD
+```
+
+Supplying only some variables is an error; Gradle never combines partial
+environment input with file input. Keep the keystore outside the repository,
+restrict its permissions, and remove an ephemeral copy after verification.
+
 Verify the signature on the produced APK before distributing it:
 
 ```bash
@@ -125,7 +145,8 @@ This is a public repository, so CI never signs with a release key and carries
 no signing secrets by design; its `assembleRelease` artifacts stay debug-signed
 sideload builds. A real release is produced locally:
 
-1. Build the signed APK with `assembleRelease` (keystore.properties present).
+1. Build the signed APK with `assembleRelease` (complete environment or
+   `keystore.properties` present).
 2. Verify it with `apksigner verify --print-certs`.
 3. Tag and attach it to a GitHub release with a lightweight tag:
 

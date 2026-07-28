@@ -10,7 +10,7 @@ material = "1.14.0"
 media3 = "1.10.1"
 # androidx.core provides the KTX extensions we use (Uri.toUri, prefs.edit {});
 # pinned ahead of androidx.appcompat so the Lint UseKtx hints have a target.
-coreKtx = "1.19.0"
+coreKtx = "1.18.0"
 # Lifecycle 2.10 is the latest stable as of 2026-05. We pull
 # lifecycle-runtime-ktx for the DefaultLifecycleObserver / Lifecycle
 # wiring used by RendererSession: Activities call

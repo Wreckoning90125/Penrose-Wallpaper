@@ -13,10 +13,13 @@ import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.util.TypedValue
 import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.GridView
 import android.widget.ImageView
+import android.widget.ScrollView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -253,6 +256,51 @@ class SettingsFragment : PreferenceFragmentCompat(),
         }
         findPreference<Preference>("nav_audio")?.setOnPreferenceClickListener {
             loadScreen(ScreenKey.Audio); true
+        }
+        findPreference<Preference>("action_licenses")?.setOnPreferenceClickListener {
+            showLicensesDialog()
+            true
+        }
+    }
+
+    /**
+     * Third-party license notices. The exact text bundled at repo root as
+     * THIRD_PARTY_NOTICES.md ships in the APK as res/raw/third_party_notices
+     * so an installed-binary recipient — not just a repo visitor — can read
+     * the MIT / Apache-2.0 attributions and full license texts the APK is
+     * obliged to carry. Read off the IO dispatcher (small bundled resource,
+     * but kept off the main thread to match the rest of this fragment) and
+     * shown in a scrollable, selectable monospace view inside a Material
+     * dialog, matching the preset-picker's MaterialAlertDialogBuilder use.
+     */
+    private fun showLicensesDialog() {
+        val ctx = requireContext()
+        viewLifecycleOwner.lifecycleScope.launch {
+            val text = try {
+                withContext(Dispatchers.IO) {
+                    resources.openRawResource(R.raw.third_party_notices)
+                        .bufferedReader().use { it.readText() }
+                }
+            } catch (e: Exception) {
+                Toast.makeText(ctx, R.string.licenses_load_failed_toast, Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            val padPx = TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP, 20f, ctx.resources.displayMetrics
+            ).toInt()
+            val body = TextView(ctx).apply {
+                setText(text)
+                typeface = android.graphics.Typeface.MONOSPACE
+                textSize = 11f
+                setTextIsSelectable(true)
+                setPadding(padPx, padPx, padPx, padPx)
+            }
+            val scroll = ScrollView(ctx).apply { addView(body) }
+            MaterialAlertDialogBuilder(ctx)
+                .setTitle(R.string.licenses_dialog_title)
+                .setView(scroll)
+                .setPositiveButton(android.R.string.ok, null)
+                .show()
         }
     }
 

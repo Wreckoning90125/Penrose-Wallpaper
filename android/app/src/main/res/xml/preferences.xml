@@ -71,4 +71,11 @@
             android:title="@string/audio_category"
             android:summary="@string/audio_file_summary" />
     </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/about_category">
+        <Preference
+            android:key="action_licenses"
+            android:title="@string/licenses_title"
+            android:summary="@string/licenses_summary" />
+    </PreferenceCategory>
 </PreferenceScreen>

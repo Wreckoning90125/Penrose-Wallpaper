@@ -10,13 +10,13 @@ material = "1.14.0"
 media3 = "1.10.1"
 # androidx.core provides the KTX extensions we use (Uri.toUri, prefs.edit {});
 # pinned ahead of androidx.appcompat so the Lint UseKtx hints have a target.
-coreKtx = "1.18.0"
+coreKtx = "1.19.0"
 # Lifecycle 2.10 is the latest stable as of 2026-05. We pull
 # lifecycle-runtime-ktx for the DefaultLifecycleObserver / Lifecycle
 # wiring used by RendererSession: Activities call
 # lifecycle.addObserver(session) and ON_DESTROY auto-fires
 # session.shutdown(). No ViewModel / LiveData / Compose dependency.
-lifecycle = "2.10.0"
+lifecycle = "2.11.0"
 # Coroutines 1.10 is current. We depend on the -android variant so the
 # Main dispatcher resolves to AndroidUiDispatcher without service-loader
 # gymnastics. Adopted to replace the hand-rolled HandlerThread +

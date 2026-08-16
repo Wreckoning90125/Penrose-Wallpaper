@@ -1,0 +1,104 @@
+{
+ "databases": [
+  {
+   "name": "penrose-audio",
+   "canonical_path": "Penrose-Wallpaper/.local/audio/catalog.sqlite",
+   "db_class": "persistent",
+   "schema_path": "Penrose-Wallpaper/.local/audio/penrose-audio.schema.sql",
+   "builder_path": null,
+   "members": [],
+   "user_version": 1,
+   "notes": "schema baseline recovered from the artifact; no builder identified"
+  },
+  {
+   "name": "penrose-bielefeld",
+   "canonical_path": "Penrose-Wallpaper/.local/tiling/bielefeld-tilings/parsed/catalog.sqlite",
+   "db_class": "staging",
+   "schema_path": "Penrose-Wallpaper/.local/tiling/bielefeld-tilings/parsed/penrose-bielefeld.schema.sql",
+   "builder_path": null,
+   "members": [],
+   "user_version": 1,
+   "notes": "schema baseline recovered from the artifact; no builder identified"
+  },
+  {
+   "name": "penrose-dafx",
+   "canonical_path": "Penrose-Wallpaper/.local/audio/DAFX/catalog.sqlite",
+   "db_class": "persistent",
+   "schema_path": "Penrose-Wallpaper/.local/audio/DAFX/penrose-dafx.schema.sql",
+   "builder_path": null,
+   "members": [],
+   "user_version": 1,
+   "notes": "schema baseline recovered from the artifact; no builder identified"
+  },
+  {
+   "name": "penrose-jgsavard",
+   "canonical_path": "Penrose-Wallpaper/.local/tiling/JGSavard/catalog.sqlite",
+   "db_class": "persistent",
+   "schema_path": "Penrose-Wallpaper/.local/tiling/JGSavard/penrose-jgsavard.schema.sql",
+   "builder_path": null,
+   "members": [],
+   "user_version": 1,
+   "notes": "schema baseline recovered from the artifact; no builder identified"
+  },
+  {
+   "name": "penrose-minimal-surfaces",
+   "canonical_path": "Penrose-Wallpaper/.local/geometry/minimal-surfaces-and-nets/catalog.sqlite",
+   "db_class": "persistent",
+   "schema_path": "Penrose-Wallpaper/.local/geometry/minimal-surfaces-and-nets/penrose-minimal-surfaces.schema.sql",
+   "builder_path": null,
+   "members": [],
+   "user_version": 1,
+   "notes": "schema baseline recovered from the artifact; no builder identified"
+  },
+  {
+   "name": "penrose-non-euclidean",
+   "canonical_path": "Penrose-Wallpaper/.local/render/non-euclidean/catalog.sqlite",
+   "db_class": "persistent",
+   "schema_path": "Penrose-Wallpaper/.local/render/non-euclidean/penrose-non-euclidean.schema.sql",
+   "builder_path": null,
+   "members": [],
+   "user_version": 1,
+   "notes": "schema baseline recovered from the artifact; no builder identified"
+  },
+  {
+   "name": "penrose-notebooks",
+   "canonical_path": "Penrose-Wallpaper/.local/notebooks/notebook-sources/catalog.sqlite",
+   "db_class": "persistent",
+   "schema_path": "Penrose-Wallpaper/.local/notebooks/notebook-sources/penrose-notebooks.schema.sql",
+   "builder_path": null,
+   "members": [],
+   "user_version": 1,
+   "notes": "schema baseline recovered from the artifact; no builder identified"
+  },
+  {
+   "name": "penrose-reference-index",
+   "canonical_path": "Penrose-Wallpaper/.local/meta/reference-index/reference-index.sqlite",
+   "db_class": "persistent",
+   "schema_path": "Penrose-Wallpaper/.local/meta/reference-index/penrose-reference-index.schema.sql",
+   "builder_path": null,
+   "members": [],
+   "user_version": 1,
+   "notes": "schema baseline recovered from the artifact; no builder identified"
+  },
+  {
+   "name": "penrose-research-pdfs",
+   "canonical_path": "Penrose-Wallpaper/.local/references/research-pdfs/catalog.sqlite",
+   "db_class": "persistent",
+   "schema_path": "Penrose-Wallpaper/.local/references/research-pdfs/penrose-research-pdfs.schema.sql",
+   "builder_path": null,
+   "members": [],
+   "user_version": 1,
+   "notes": "schema baseline recovered from the artifact; no builder identified"
+  },
+  {
+   "name": "penrose-surflab",
+   "canonical_path": "Penrose-Wallpaper/.local/geometry/SurfLab/catalog.sqlite",
+   "db_class": "persistent",
+   "schema_path": "Penrose-Wallpaper/.local/geometry/SurfLab/penrose-surflab.schema.sql",
+   "builder_path": null,
+   "members": [],
+   "user_version": 1,
+   "notes": "schema baseline recovered from the artifact; no builder identified"
+  }
+ ]
+}

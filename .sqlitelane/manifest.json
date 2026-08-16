@@ -12,7 +12,7 @@
    "dispositions": {
     "4nf": 4
    },
-   "sha256": "820b68b23b3bcd4d27af6c7590601f00ae25a4ed1d040e96fa1f84dd55781e8e"
+   "sha256": "b34004319b9b0fd3ad3040bd7c3b17386f1d6c9f3c28347ad57eaaa882f45da8"
   },
   {
    "authority": "penrose-bielefeld",
@@ -20,13 +20,13 @@
    "schema_path": "Penrose-Wallpaper/.local/tiling/bielefeld-tilings/parsed/penrose-bielefeld.schema.sql",
    "builder_path": null,
    "db_class": "staging",
-   "rulings": 182,
+   "rulings": 219,
    "relations": 7,
    "dispositions": {
     "4nf": 3,
     "proposed-exception": 4
    },
-   "sha256": "dd98e3e448b151303b5c81220d020e62d333de191a7f5b3f9ba738a2e2fa26a7"
+   "sha256": "047cf03cfa8433a1566ad2a96f7b023021dbb6f0c46c658e818048f236718e86"
   },
   {
    "authority": "penrose-dafx",
@@ -34,13 +34,12 @@
    "schema_path": "Penrose-Wallpaper/.local/audio/DAFX/penrose-dafx.schema.sql",
    "builder_path": null,
    "db_class": "persistent",
-   "rulings": 83,
+   "rulings": 119,
    "relations": 3,
    "dispositions": {
-    "4nf": 2,
-    "proposed-exception": 1
+    "4nf": 3
    },
-   "sha256": "cf9c6eb7a58f8337a459f232c52e4151f42ce19abc0738b277fc6baceb86df58"
+   "sha256": "344aa810e1fe225f40a74dc7aea2bfbac989edde2d968ee62654952ee3ffdb03"
   },
   {
    "authority": "penrose-jgsavard",
@@ -53,7 +52,7 @@
    "dispositions": {
     "4nf": 1
    },
-   "sha256": "26b5e3099856f39dd889598312e407614160d4a850648d3c37b22ab4691ede00"
+   "sha256": "c43457ff8e935dcd622f857a1fd5c76852474d305390801e062a86561d1c37b5"
   },
   {
    "authority": "penrose-minimal-surfaces",
@@ -61,13 +60,12 @@
    "schema_path": "Penrose-Wallpaper/.local/geometry/minimal-surfaces-and-nets/penrose-minimal-surfaces.schema.sql",
    "builder_path": null,
    "db_class": "persistent",
-   "rulings": 66,
+   "rulings": 71,
    "relations": 5,
    "dispositions": {
-    "4nf": 4,
-    "proposed-exception": 1
+    "4nf": 5
    },
-   "sha256": "a8cf9011df4a894425f7e01404ea2ef42b27c20d0b9ce1c294d642a3c00bafc6"
+   "sha256": "1e5191d3a53a014aa84f7c8d25af168e252e0487fe40855fce262774c7f8820e"
   },
   {
    "authority": "penrose-non-euclidean",
@@ -80,7 +78,7 @@
    "dispositions": {
     "4nf": 5
    },
-   "sha256": "3af2c049d7c362dade6c41c93486a524856d9e431aa1b9380a5e2b626d6cc031"
+   "sha256": "40a90127b981a4ac8a96e1deae4deda1d8267ab8abc05d3d5d6e24ec107bd8cb"
   },
   {
    "authority": "penrose-notebooks",
@@ -88,12 +86,12 @@
    "schema_path": "Penrose-Wallpaper/.local/notebooks/notebook-sources/penrose-notebooks.schema.sql",
    "builder_path": null,
    "db_class": "persistent",
-   "rulings": 15,
+   "rulings": 18,
    "relations": 1,
    "dispositions": {
-    "proposed-exception": 1
+    "4nf": 1
    },
-   "sha256": "756198859d6a89b97e1553b651adf221c9db4bcf606e8694c5497e0f68c17b53"
+   "sha256": "49f7c25be37cfa7385c2d294884d16eda83a218a05253e0de6a9c21cfc8ca158"
   },
   {
    "authority": "penrose-reference-index",
@@ -106,7 +104,7 @@
    "dispositions": {
     "4nf": 10
    },
-   "sha256": "e8467e1bcb829bd16c381395a4f52758ce0ebbc74fb9caf83863ac41156b21ed"
+   "sha256": "242e949e8a80dd02ac212c9514ea28566081cb9df306235974a7fee6446cba03"
   },
   {
    "authority": "penrose-research-pdfs",
@@ -114,13 +112,13 @@
    "schema_path": "Penrose-Wallpaper/.local/references/research-pdfs/penrose-research-pdfs.schema.sql",
    "builder_path": null,
    "db_class": "persistent",
-   "rulings": 38,
+   "rulings": 39,
    "relations": 3,
    "dispositions": {
     "4nf": 2,
     "proposed-exception": 1
    },
-   "sha256": "c0adccef46fa43ec86416df10522e16dc395bfc96e5dc7f9e0207ed636d61df4"
+   "sha256": "2ab9b310245529b2f84f8875b89f277a4bb6fde6c39bb3230304514a1c9fac84"
   },
   {
    "authority": "penrose-surflab",
@@ -133,8 +131,8 @@
    "dispositions": {
     "4nf": 5
    },
-   "sha256": "c65f8d4c3d1f51e05b6605eeee22d5cf64ecc384c6458c963a2215b9f08bf9d1"
+   "sha256": "b95719d6e6f2df5b8256e4f2d1a05e99203541f0cad8f24ff52244de6c384f4b"
   }
  ],
- "total_rulings": 673
+ "total_rulings": 755
 }

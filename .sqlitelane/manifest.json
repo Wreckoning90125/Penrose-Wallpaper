@@ -1,0 +1,136 @@
+{
+ "repository": "Penrose-Wallpaper",
+ "authorities": [
+  {
+   "authority": "penrose-audio",
+   "canonical_path": "Penrose-Wallpaper/.local/audio/catalog.sqlite",
+   "schema_path": "Penrose-Wallpaper/.local/audio/penrose-audio.schema.sql",
+   "builder_path": null,
+   "db_class": "persistent",
+   "rulings": 50,
+   "relations": 4,
+   "dispositions": {
+    "4nf": 4
+   },
+   "sha256": "e1c8b8074ef8758540a9718073a4e3d048339068dadc4a9ab541b2f94f170934"
+  },
+  {
+   "authority": "penrose-bielefeld",
+   "canonical_path": "Penrose-Wallpaper/.local/tiling/bielefeld-tilings/parsed/catalog.sqlite",
+   "schema_path": "Penrose-Wallpaper/.local/tiling/bielefeld-tilings/parsed/penrose-bielefeld.schema.sql",
+   "builder_path": null,
+   "db_class": "staging",
+   "rulings": 251,
+   "relations": 10,
+   "dispositions": {
+    "4nf": 10
+   },
+   "sha256": "5b7798ea100303ee7a82ea4fb71fbeb8450f4fc20a500ec54fc62d1abaef912d"
+  },
+  {
+   "authority": "penrose-dafx",
+   "canonical_path": "Penrose-Wallpaper/.local/audio/DAFX/catalog.sqlite",
+   "schema_path": "Penrose-Wallpaper/.local/audio/DAFX/penrose-dafx.schema.sql",
+   "builder_path": null,
+   "db_class": "persistent",
+   "rulings": 119,
+   "relations": 3,
+   "dispositions": {
+    "4nf": 3
+   },
+   "sha256": "13f87bd6eae431f5af395e27861e7887c34822fc4fb663b203238f086865bfac"
+  },
+  {
+   "authority": "penrose-jgsavard",
+   "canonical_path": "Penrose-Wallpaper/.local/tiling/JGSavard/catalog.sqlite",
+   "schema_path": "Penrose-Wallpaper/.local/tiling/JGSavard/penrose-jgsavard.schema.sql",
+   "builder_path": null,
+   "db_class": "persistent",
+   "rulings": 14,
+   "relations": 1,
+   "dispositions": {
+    "4nf": 1
+   },
+   "sha256": "c24a3d1fa52665d23323b70a9ed12e0c7ff43ade3ff32ffacc5b2d7b045a6ec0"
+  },
+  {
+   "authority": "penrose-minimal-surfaces",
+   "canonical_path": "Penrose-Wallpaper/.local/geometry/minimal-surfaces-and-nets/catalog.sqlite",
+   "schema_path": "Penrose-Wallpaper/.local/geometry/minimal-surfaces-and-nets/penrose-minimal-surfaces.schema.sql",
+   "builder_path": null,
+   "db_class": "persistent",
+   "rulings": 71,
+   "relations": 5,
+   "dispositions": {
+    "4nf": 5
+   },
+   "sha256": "46dd9685a7ba92de298bfb46efbf3c679605b1107822b00bce28a5b4115eae18"
+  },
+  {
+   "authority": "penrose-non-euclidean",
+   "canonical_path": "Penrose-Wallpaper/.local/render/non-euclidean/catalog.sqlite",
+   "schema_path": "Penrose-Wallpaper/.local/render/non-euclidean/penrose-non-euclidean.schema.sql",
+   "builder_path": null,
+   "db_class": "persistent",
+   "rulings": 55,
+   "relations": 5,
+   "dispositions": {
+    "4nf": 5
+   },
+   "sha256": "1f43afbfb28a47ecfd90ec2946ee7e429978433324a5cecec77495cd661fb6a3"
+  },
+  {
+   "authority": "penrose-notebooks",
+   "canonical_path": "Penrose-Wallpaper/.local/notebooks/notebook-sources/catalog.sqlite",
+   "schema_path": "Penrose-Wallpaper/.local/notebooks/notebook-sources/penrose-notebooks.schema.sql",
+   "builder_path": null,
+   "db_class": "persistent",
+   "rulings": 18,
+   "relations": 1,
+   "dispositions": {
+    "4nf": 1
+   },
+   "sha256": "20467fd9a9ec4109e701adc9d3a6cf7258a69f5d2ad960e0b45997ab173c4ab4"
+  },
+  {
+   "authority": "penrose-reference-index",
+   "canonical_path": "Penrose-Wallpaper/.local/meta/reference-index/reference-index.sqlite",
+   "schema_path": "Penrose-Wallpaper/.local/meta/reference-index/penrose-reference-index.schema.sql",
+   "builder_path": null,
+   "db_class": "persistent",
+   "rulings": 90,
+   "relations": 10,
+   "dispositions": {
+    "4nf": 10
+   },
+   "sha256": "6513eda16c120abbe24abb461b382eaa3054ee5c3a245ca0b4d931bcdcb8ab04"
+  },
+  {
+   "authority": "penrose-research-pdfs",
+   "canonical_path": "Penrose-Wallpaper/.local/references/research-pdfs/catalog.sqlite",
+   "schema_path": "Penrose-Wallpaper/.local/references/research-pdfs/penrose-research-pdfs.schema.sql",
+   "builder_path": null,
+   "db_class": "persistent",
+   "rulings": 39,
+   "relations": 3,
+   "dispositions": {
+    "4nf": 3
+   },
+   "sha256": "b4d52e11368c3a41fdf399ea22719f765ecf71f58acd44b6776048cebdeb34a5"
+  },
+  {
+   "authority": "penrose-surflab",
+   "canonical_path": "Penrose-Wallpaper/.local/geometry/SurfLab/catalog.sqlite",
+   "schema_path": "Penrose-Wallpaper/.local/geometry/SurfLab/penrose-surflab.schema.sql",
+   "builder_path": null,
+   "db_class": "persistent",
+   "rulings": 80,
+   "relations": 5,
+   "dispositions": {
+    "4nf": 5
+   },
+   "sha256": "ab56952b945fde6bd1a7a653f1156790ffa5d9a54627b1e09c09a4c0985cc183"
+  }
+ ],
+ "total_rulings": 787
+}

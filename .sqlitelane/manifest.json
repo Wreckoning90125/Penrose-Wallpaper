@@ -12,7 +12,7 @@
    "dispositions": {
     "4nf": 4
    },
-   "sha256": "b34004319b9b0fd3ad3040bd7c3b17386f1d6c9f3c28347ad57eaaa882f45da8"
+   "sha256": "94c205aeb066971d2b62625c2ba7885d67387b96efd136a6ddfdafb4f227ffc2"
   },
   {
    "authority": "penrose-bielefeld",
@@ -26,7 +26,7 @@
     "4nf": 3,
     "proposed-exception": 4
    },
-   "sha256": "047cf03cfa8433a1566ad2a96f7b023021dbb6f0c46c658e818048f236718e86"
+   "sha256": "da6163779c54721a0c91e6974ec664f09dd79a4a3c32fa7cb6d56af9a160dd80"
   },
   {
    "authority": "penrose-dafx",
@@ -39,7 +39,7 @@
    "dispositions": {
     "4nf": 3
    },
-   "sha256": "344aa810e1fe225f40a74dc7aea2bfbac989edde2d968ee62654952ee3ffdb03"
+   "sha256": "67e182c5c5c677f930af54cb566906b000f36fb8df6e969513db210bd2a9df8f"
   },
   {
    "authority": "penrose-jgsavard",
@@ -52,7 +52,7 @@
    "dispositions": {
     "4nf": 1
    },
-   "sha256": "c43457ff8e935dcd622f857a1fd5c76852474d305390801e062a86561d1c37b5"
+   "sha256": "8e66b3e6227d8fb6fdb0f65c5a2f40be8bc0f005bf8111a1bc42b114137e7e0d"
   },
   {
    "authority": "penrose-minimal-surfaces",
@@ -65,7 +65,7 @@
    "dispositions": {
     "4nf": 5
    },
-   "sha256": "1e5191d3a53a014aa84f7c8d25af168e252e0487fe40855fce262774c7f8820e"
+   "sha256": "1ee1cb784cb2f29cfc66c1549607177a2b5a161fbb345af965b5b56a24ba17ed"
   },
   {
    "authority": "penrose-non-euclidean",
@@ -78,7 +78,7 @@
    "dispositions": {
     "4nf": 5
    },
-   "sha256": "40a90127b981a4ac8a96e1deae4deda1d8267ab8abc05d3d5d6e24ec107bd8cb"
+   "sha256": "3ba83eb896df80d0cfae81e8a60550b654c522a2387c93899b6b9b609d3425f8"
   },
   {
    "authority": "penrose-notebooks",
@@ -91,7 +91,7 @@
    "dispositions": {
     "4nf": 1
    },
-   "sha256": "49f7c25be37cfa7385c2d294884d16eda83a218a05253e0de6a9c21cfc8ca158"
+   "sha256": "514bf0b73460e48424090be4719007fc3c50f4884a2fc4d38ab509964cc28142"
   },
   {
    "authority": "penrose-reference-index",
@@ -104,7 +104,7 @@
    "dispositions": {
     "4nf": 10
    },
-   "sha256": "242e949e8a80dd02ac212c9514ea28566081cb9df306235974a7fee6446cba03"
+   "sha256": "651eb4cee365fe0981fb52c597f89fad067370dab27332724a79681c7195b876"
   },
   {
    "authority": "penrose-research-pdfs",
@@ -118,7 +118,7 @@
     "4nf": 2,
     "proposed-exception": 1
    },
-   "sha256": "2ab9b310245529b2f84f8875b89f277a4bb6fde6c39bb3230304514a1c9fac84"
+   "sha256": "1412792dff0466db2e5e32cf8e7e142d9cfb6495e05aa80f1c965fe49d2f2fb1"
   },
   {
    "authority": "penrose-surflab",
@@ -131,7 +131,7 @@
    "dispositions": {
     "4nf": 5
    },
-   "sha256": "b95719d6e6f2df5b8256e4f2d1a05e99203541f0cad8f24ff52244de6c384f4b"
+   "sha256": "e0a419fdd42946f291c47e280d1834b5b3f38e4e5ac44a38c7cd1b055914c448"
   }
  ],
  "total_rulings": 755

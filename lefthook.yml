@@ -7,6 +7,8 @@
 pre-commit:
   parallel: true
   jobs:
+    - name: rebuild-sqlitelane-authorities
+      run: cd /home/wreckoning90125/av-native && python3 -m tools.sqlitelane.rebuild --repo Penrose-Wallpaper
     - name: native-build
       glob: "android/app/src/main/cpp/**"
       run: npm run cpp:build:tidy

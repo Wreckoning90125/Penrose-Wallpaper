@@ -1,0 +1,5 @@
+{
+  "setup-worktree": [
+    "FLEET=\"$(cd \"$(dirname \"${ROOT_WORKTREE_PATH:-$PWD}\")\" && pwd -P)\"; FLEET_HOME=\"$FLEET\" bash \"$FLEET/mcp-servers/scripts/cursor-worktree-setup.sh\" \"$PWD\""
+  ]
+}

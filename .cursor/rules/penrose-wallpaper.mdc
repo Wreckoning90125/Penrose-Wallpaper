@@ -1,0 +1,26 @@
+---
+description: Cursor-specific CLI, permissions and verifier wiring for this repository. AGENTS.md is the working agreement.
+alwaysApply: true
+---
+
+# Penrose Wallpaper in Cursor
+
+`AGENTS.md` at the repository root is authority, including its Commands section
+and its type-policy and evidence rules. Do not duplicate them here.
+
+## Cursor surfaces in this repo
+
+- MCP: this repository declares no project server of its own, so there is no
+  `.cursor/mcp.json`. Global servers come from `~/.cursor/mcp.json`.
+- CLI: `.cursor/cli.json` — allow npm / node, the `tools/` verify and native
+  build scripts, `scripts/verify-apk.sh`, and python3 / bash / git / gh. Deny
+  writes under `.cursor/`, `.claude/`, and `.local/`.
+- Auto-run: `.cursor/permissions.json`.
+- Verifier subagent: `.cursor/agents/verifier.md` — the fast
+  typecheck/policy/build loop plus the touched verify targets.
+  `npm run quality:local` is the full gate and runs only on request.
+
+## Skills
+
+Project skills load from `.agents/skills/` (`.claude/skills` is a symlink to
+the same directory), wired by `../mcp-servers/scripts/wire-repo-skills.sh`.

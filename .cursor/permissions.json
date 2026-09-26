@@ -8,7 +8,7 @@
     "block_instructions": [
       "Never commit with --no-verify, and never bypass a hook or gate.",
       "Never push to main directly, merge a PR, or request a Codex GitHub review; the user does those.",
-      "Never delete or prune worktrees under /home/wreckoning90125 or /tmp without the user's approval for that exact path.",
+      "Never delete or prune worktrees under the home directory or /tmp without the user's approval for that exact path.",
       "Never edit files under .local/ or commit them.",
       "No `as`, `any` or `unknown` in TypeScript.",
       "The agent shell is a console oracle, not a pixel oracle: never claim a visual result from it."

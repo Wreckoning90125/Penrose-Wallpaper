@@ -1,0 +1,12 @@
+.local/
+.cache/
+output/
+tmp/
+dist/
+node_modules/
+**/node_modules/
+android/**/build/
+.gradle/
+.sqlitelane/
+**/*.log
+**/__pycache__/

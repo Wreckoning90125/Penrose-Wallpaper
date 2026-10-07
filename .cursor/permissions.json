@@ -1,0 +1,17 @@
+{
+  "autoRun": {
+    "allow_instructions": [
+      "npm run typecheck, ts:policy, js:policy, web:build and graph:contract as the fast loop.",
+      "The verify targets: atlas:verify, border:verify, tilings:verify and shaders:validate.",
+      "Read-only git and gh inspection, including PR checks and CI run logs."
+    ],
+    "block_instructions": [
+      "Never commit with --no-verify, and never bypass a hook or gate.",
+      "Never push to main directly, merge a PR, or request a Codex GitHub review; the user does those.",
+      "Never delete or prune worktrees under the home directory or /tmp without the user's approval for that exact path.",
+      "Never edit files under .local/ or commit them.",
+      "No `as`, `any` or `unknown` in TypeScript.",
+      "The agent shell is a console oracle, not a pixel oracle: never claim a visual result from it."
+    ]
+  }
+}

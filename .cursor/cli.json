@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(npm)",
+      "Shell(node)",
+      "Shell(tools/check_native_build.sh)",
+      "Shell(tools/run_clang_tidy.sh)",
+      "Shell(tools/validate_shaders.sh)",
+      "Shell(tools/verify_atlas.py)",
+      "Shell(tools/static_analysis_ratchet.py)",
+      "Shell(scripts/verify-apk.sh)",
+      "Shell(bash)",
+      "Shell(python3)",
+      "Shell(git)",
+      "Shell(gh)"
+    ],
+    "deny": [
+      "Write(.cursor/**)",
+      "Write(.claude/**)",
+      "Write(.local/**)"
+    ]
+  }
+}

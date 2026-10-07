@@ -133,10 +133,9 @@ android {
         sarifReport = true
         htmlReport = true
         ignoreTestSources = true
-        // Suppress the bogus OldTargetApi warning — targetSdk=36 (the
-        // current installable target API in CI) is being flagged because Lint's
-        // bundled API metadata in AGP 9.2 does not recognise it as current.
-        // Re-enable when platforms;android-37 is available to sdkmanager.
+        // The app compiles against API 37 and targets API 36, the level its
+        // Android 16 behavior notes cover (docs/platform/android-vulkan.md).
+        // OldTargetApi stays off until the target moves with those notes.
         disable.add("OldTargetApi")
         // Resource shrinking needs R8 keep-rule work for JNI names first;
         // keep the explicit release-build choice out of code-scanning noise.

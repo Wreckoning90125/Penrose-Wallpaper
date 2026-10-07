@@ -1,7 +1,7 @@
 [versions]
 agp = "9.4.1"
 ndk = "29.0.14206865"
-compileSdk = "36"
+compileSdk = "37"
 minSdk = "36"
 targetSdk = "36"
 appcompat = "1.8.0"

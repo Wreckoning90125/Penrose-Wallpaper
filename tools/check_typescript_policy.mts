@@ -1,11 +1,22 @@
-// AST-based TypeScript policy. Parses each file with the TypeScript compiler and
-// flags only REAL casts and `any` / `unknown` type keywords — never the words
-// appearing in comments or string literals (the old line-based text scan did,
-// which is why innocent prose like "treat X as Y" failed the gate). The repo
-// rule is unchanged — no `as` casts, no `any`, no `unknown` — except `as const`,
-// which is a const assertion, not a type cast. Run via: npm run ts:policy
-import * as ts from 'typescript';
-import { readdirSync, readFileSync } from 'node:fs';
+// AST-based TypeScript policy. Reads each file's syntax tree from the TypeScript
+// compiler and flags only REAL casts and `any` / `unknown` type keywords — never
+// the words appearing in comments or string literals (the old line-based text
+// scan did, which is why innocent prose like "treat X as Y" failed the gate).
+// The repo rule is unchanged — no `as` casts, no `any`, no `unknown` — except
+// `as const`, which is a const assertion, not a type cast. Every TypeScript file
+// in the repo must belong to tsconfig.json, so the files this gate reads are the
+// files `tsc` checks. Run via: npm run ts:policy
+import { API } from 'typescript/unstable/sync';
+import {
+  SyntaxKind,
+  isAsExpression,
+  isIdentifier,
+  isTypeReferenceNode,
+  type AsExpression,
+  type Node,
+  type SourceFile,
+} from 'typescript/unstable/ast';
+import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative } from 'node:path';
 
@@ -26,39 +37,48 @@ function walk(dir: string, out: string[]): string[] {
 }
 
 // `x as const` is a const assertion (narrowing to a literal type), not a cast.
-function isConstAssertion(node: ts.AsExpression): boolean {
+function isConstAssertion(node: AsExpression): boolean {
   const target = node.type;
-  return ts.isTypeReferenceNode(target) && ts.isIdentifier(target.typeName) && target.typeName.text === 'const';
+  return isTypeReferenceNode(target) && isIdentifier(target.typeName) && target.typeName.text === 'const';
 }
 
 type Violation = { rel: string; line: number; rule: string };
 
-function scanFile(filePath: string, violations: Violation[]): void {
-  const scriptKind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const source = ts.createSourceFile(filePath, readFileSync(filePath, 'utf8'), ts.ScriptTarget.Latest, true, scriptKind);
-  const rel = relative(ROOT, filePath).split('\\').join('/');
-  const record = (node: ts.Node, rule: string): void => {
+function scanFile(source: SourceFile, rel: string, violations: Violation[]): void {
+  const record = (node: Node, rule: string): void => {
     const at = source.getLineAndCharacterOfPosition(node.getStart(source));
     violations.push({ rel, line: at.line + 1, rule });
   };
-  const visit = (node: ts.Node): void => {
-    if (ts.isAsExpression(node)) {
+  const visit = (node: Node): void => {
+    if (isAsExpression(node)) {
       if (!isConstAssertion(node)) record(node, 'no-as-cast');
-    } else if (node.kind === ts.SyntaxKind.TypeAssertionExpression) {
+    } else if (node.kind === SyntaxKind.TypeAssertionExpression) {
       record(node, 'no-as-cast');
-    } else if (node.kind === ts.SyntaxKind.AnyKeyword) {
+    } else if (node.kind === SyntaxKind.AnyKeyword) {
       record(node, 'no-any');
-    } else if (node.kind === ts.SyntaxKind.UnknownKeyword) {
+    } else if (node.kind === SyntaxKind.UnknownKeyword) {
       record(node, 'no-unknown');
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(source);
 }
 
 const files = walk(ROOT, []).sort();
 const violations: Violation[] = [];
-for (const file of files) scanFile(file, violations);
+const api = new API({ cwd: ROOT });
+try {
+  const snapshot = api.updateSnapshot({ openProjects: [join(ROOT, 'tsconfig.json')] });
+  const project = snapshot.getProject(join(ROOT, 'tsconfig.json'));
+  for (const file of files) {
+    const rel = relative(ROOT, file).split('\\').join('/');
+    const source = project?.program.getSourceFile(file);
+    if (source) scanFile(source, rel, violations);
+    else violations.push({ rel, line: 1, rule: 'not-in-tsconfig' });
+  }
+} finally {
+  api.close();
+}
 
 if (violations.length > 0) {
   process.stderr.write('[typescript-policy] violations:\n');

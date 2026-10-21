@@ -22,7 +22,9 @@ import {
 } from 'three/tsl';
 
 const _size = new Vector2();
-const _quadMesh = new QuadMesh();
+// r186 types require the material up front; each render replaces it with this
+// pass own material, so the constructor only needs a placeholder.
+const _quadMesh = new QuadMesh(new NodeMaterial());
 
 let _rendererState: RendererState;
 

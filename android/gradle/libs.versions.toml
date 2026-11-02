@@ -1,5 +1,5 @@
 [versions]
-agp = "9.4.1"
+agp = "9.5.0"
 ndk = "29.0.14206865"
 compileSdk = "37"
 minSdk = "36"
@@ -23,7 +23,7 @@ lifecycle = "2.10.0"
 # @Volatile + runWithBarrier dance that was the root cause of
 # multi-thread native-pointer races.
 coroutines = "1.11.0"
-datastore = "1.2.1"
+datastore = "1.3.0"
 
 [libraries]
 androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
